@@ -54,9 +54,7 @@ def tokenize_function(examples):
 tokenized = split_dataset.map(tokenize_function, remove_columns=["text"], num_proc=8)
 
 # %%
-model = transformers.GPT2LMHeadModel.from_pretrained("gpt2_saved")
-if not os.path.exists("gpt2_saved"):
-    model.save_pretrained("gpt2_saved")
+model = transformers.GPT2LMHeadModel.from_pretrained("gpt2", cache_dir="gpt2_cache")
 
 # %% movwe the model and the data to the device
 model.to(device)
@@ -64,7 +62,7 @@ tokenized.set_format(type="torch", columns=["input_ids", "attention_mask", "labe
 # %%
 training_args = TrainingArguments(
     output_dir="./results",
-    num_train_epochs=1,
+    max_steps=10,
     per_device_train_batch_size=48,
     per_device_eval_batch_size=4,
     warmup_steps=500,
@@ -74,12 +72,98 @@ training_args = TrainingArguments(
     learning_rate=2e-5,
 )
 
+from transformers import TrainerCallback
+
+class BeginStepCallback(TrainerCallback):
+    def on_step_begin(self, args, state, control, **kwargs):
+        # Callback logic at the beginning of each step
+        print(f"Starting step {state.global_step}")
+
 trainer = Trainer(
     model=model,
     args=training_args,
     train_dataset=tokenized["train"],
     eval_dataset=tokenized["test"],
+    callbacks=[BeginStepCallback()]
 )
+
+# %%
+trainer.train()
+# %%
+
+training_args = TrainingArguments(
+    output_dir="./results",
+    max_steps=10,
+    per_device_train_batch_size=48,
+    per_device_eval_batch_size=4,
+    warmup_steps=500,
+    weight_decay=0.01,
+    logging_dir="./logs",
+    prediction_loss_only=True,
+    learning_rate=2e-5,
+)
+
+from transformers import TrainerCallback
+
+class FakeLayerNorm(torch.nn.Module):
+    def __init__(self, std):
+        super().__init__()
+        self.std = std
+
+    def forward(self, x):
+        return x * self.std
+
+def replace_layernorm_with_fake_layernorm(model, std):
+    for name, module in model.named_modules():
+        if isinstance(module, torch.nn.LayerNorm):
+            # Split the module name to navigate to the parent module
+            components = name.split('.')
+            parent = model
+            for comp in components[:-1]:
+                parent = getattr(parent, comp)
+            # Replace the LayerNorm with FakeLayerNorm
+            setattr(parent, components[-1], FakeLayerNorm(std))
+            
+# Replace all LayerNorm instances with FakeLayerNorm
+replace_layernorm_with_fake_layernorm(model, std=1.0)
+
+class LNRemover():
+    """
+    Schedules the "removal" of LayerNorms by replacing the standard deviation with
+    a constant value. The constructor takes the std, the desired training step,
+    and the a callback that will be called when the training step is reached.
+    """
+    def __init__(self, std, step, callback):
+        self.std = std
+        self.step = step
+        self.callback = callback
+
+    def on_step_begin(self, args, state, control, **kwargs):
+        if state.global_step == self.step:
+            self.callback()
+        return control
+
+
+def disable_ln1(model):
+    model.ln_f.weight.data = torch.ones_like(model.ln_f.weight.data) * 0.0
+    model.ln_f.bias.data = torch.zeros_like(model.ln_f.bias.data)
+
+# Instantiate an array of LNRemover instances
+ln_removers = [LNRemover(1.0, 10, disable_ln1)]
+    
+class LNRemoverCallback(TrainerCallback):
+    def on_step_begin(self, args, state, control, **kwargs):
+        print("Removing LN")
+        return control
+
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=tokenized["train"],
+    eval_dataset=tokenized["test"],
+    # callbacks=[BeginStepCallback()]
+)
+
 # %%
 trainer.train()
 # %%
