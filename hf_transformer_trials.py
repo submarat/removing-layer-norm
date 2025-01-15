@@ -1,11 +1,14 @@
 # %%
 import torch
-
-# %%
+import os
+from transformers import Trainer, TrainingArguments
 import transformers
 import datasets
 from transformers import AutoTokenizer
 import tqdm
+
+# get the device
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # %%
 # Check whether the dataset is saved to disk
 try: 
@@ -23,41 +26,60 @@ split_dataset["train"] = split_dataset["train"].select(range(50000))
 
 # %%
 tokenizer = AutoTokenizer.from_pretrained("gpt2")
+tokenizer.pad_token = tokenizer.eos_token
 
 def tokenize_function(examples):
-    ids = tokenizer(examples["text"], truncation=True)["input_ids"]
-    ids.append(tokenizer.eos_token_id)
-    out = {"ids": ids, "len": len(ids)}
-    return out
-
-# %%
-
+    output = tokenizer(
+        examples["text"],
+        truncation=True,
+        padding="max_length",
+        max_length=418,
+        return_tensors="pt"
+    )
+    # Create labels (same as input_ids for language modeling)
+    # input_ids = output["input_ids"]
+    # labels = input_ids.copy()
+    # # Add EOS token
+    # input_ids.append(tokenizer.eos_token_id)
+    # labels.append(tokenizer.eos_token_id)
+    return {
+        "input_ids": output["input_ids"],
+        "labels": output["input_ids"],
+        "attention_mask": output["attention_mask"],
+    }
+    # ids = tokenizer(examples["text"], truncation=True, padding="max_length", max_length=418)["input_ids"]
+    # ids.append(tokenizer.eos_token_id)
+    # out = {"input_ids": ids, "len": len(ids)}
+    # return out
 tokenized = split_dataset.map(tokenize_function, remove_columns=["text"], num_proc=8)
 
 # %%
-from transformers import Trainer, TrainingArguments
+model = transformers.GPT2LMHeadModel.from_pretrained("gpt2_saved")
+if not os.path.exists("gpt2_saved"):
+    model.save_pretrained("gpt2_saved")
 
-# %%
-model = transformers.GPT2LMHeadModel.from_pretrained("gpt2")
-# %% save the model to disk 
-import os
-if not os.path.exists("gpt2"):
-    model.save_pretrained("gpt2")
+# %% movwe the model and the data to the device
+model.to(device)
+tokenized.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
 # %%
 training_args = TrainingArguments(
     output_dir="./results",
-    num_train_epochs=10,
-    per_device_train_batch_size=4,
+    num_train_epochs=1,
+    per_device_train_batch_size=48,
     per_device_eval_batch_size=4,
     warmup_steps=500,
     weight_decay=0.01,
     logging_dir="./logs",
+    prediction_loss_only=True,
+    learning_rate=2e-5,
 )
 
 trainer = Trainer(
     model=model,
-    args=None,
+    args=training_args,
     train_dataset=tokenized["train"],
     eval_dataset=tokenized["test"],
 )
+# %%
+trainer.train()
 # %%
