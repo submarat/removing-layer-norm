@@ -22,7 +22,7 @@ except FileNotFoundError:
 # %%
 split_dataset = dataset["train"].train_test_split(test_size=0.0005, seed=2357, shuffle=True)
 # reduce the size of the training set
-split_dataset["train"] = split_dataset["train"].select(range(50000))
+# split_dataset["train"] = split_dataset["train"].select(range(50000))
 
 # %%
 tokenizer = AutoTokenizer.from_pretrained("gpt2")
@@ -33,7 +33,7 @@ def tokenize_function(examples):
         examples["text"],
         truncation=True,
         padding="max_length",
-        max_length=1024,
+        max_length=512,
         return_tensors="pt"
     )
     # Create labels (same as input_ids for language modeling)
@@ -62,7 +62,7 @@ tokenized.set_format(type="torch", columns=["input_ids", "attention_mask", "labe
 # %%
 training_args = TrainingArguments(
     output_dir="./results",
-    max_steps=10,
+    max_steps=1000,
     per_device_train_batch_size=48,
     per_device_eval_batch_size=4,
     warmup_steps=500,
@@ -71,10 +71,10 @@ training_args = TrainingArguments(
     prediction_loss_only=True,
     learning_rate=2e-5,
     report_to="wandb",
-    run_name="gpt2-openwebtext-1024"
+    run_name="gpt2-openwebtext-512",
+    logging_steps=1,
+    logging_first_step=True,
 )
-
-from transformers import TrainerCallback
 
 trainer = Trainer(
     model=model,
@@ -84,7 +84,10 @@ trainer = Trainer(
 )
 
 # %%
+import wandb
+wandb.init(project="hf-transformer-trials")
 trainer.train()
+wandb.finish()
 # %%
 
 training_args = TrainingArguments(
