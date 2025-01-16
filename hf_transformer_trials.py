@@ -51,7 +51,16 @@ def tokenize_function(examples):
     # ids.append(tokenizer.eos_token_id)
     # out = {"input_ids": ids, "len": len(ids)}
     # return out
-tokenized = split_dataset.map(tokenize_function, remove_columns=["text"], num_proc=8)
+try:
+    tokenized = datasets.load_from_disk("tokenized_openwebtext")
+    print("Tokenized dataset loaded from disk")
+except FileNotFoundError:
+    print("Tokenized dataset not found on disk")
+    tokenized = split_dataset.map(tokenize_function, remove_columns=["text"], num_proc=8)
+    tokenized.save_to_disk("tokenized_openwebtext")
+
+# %%
+tokenized.save_to_disk("tokenized_openwebtext")
 
 # %%
 model = transformers.GPT2LMHeadModel.from_pretrained("gpt2", cache_dir="gpt2_cache")
@@ -88,94 +97,4 @@ import wandb
 wandb.init(project="hf-transformer-trials")
 trainer.train()
 wandb.finish()
-# %%
-
-training_args = TrainingArguments(
-    output_dir="./results",
-    max_steps=10,
-    per_device_train_batch_size=48,
-    per_device_eval_batch_size=4,
-    warmup_steps=500,
-    weight_decay=0.01,
-    logging_dir="./logs",
-    prediction_loss_only=True,
-    learning_rate=2e-5,
-)
-
-from transformers import TrainerCallback
-
-class FakeLayerNorm(torch.nn.Module):
-    def __init__(self, std):
-        super().__init__()
-        self.std = std
-    
-    def set_mode(self, mode):
-        self.mode = mode
-
-    def forward(self, x):
-        return x * self.std
-
-fake_lns = {}
-def replace_layernorm_with_fake_layernorm(model, std):
-    for name, module in model.named_modules():
-        if isinstance(module, torch.nn.LayerNorm):
-            # Split the module name to navigate to the parent module
-            components = name.split('.')
-            parent = model
-            for comp in components[:-1]:
-                parent = getattr(parent, comp)
-            # Replace the LayerNorm with FakeLayerNorm
-            fake_ln = FakeLayerNorm(std)
-            setattr(parent, components[-1], FakeLayerNorm(std))
-
-            # Construct the module path - a fully qualified path to the module
-            module_path = '.'.join(components)
-            # Add to fake_lns dict 
-            fake_lns[module_path] = fake_ln
-            
-# Replace all LayerNorm instances with FakeLayerNorm
-replace_layernorm_with_fake_layernorm(model, std=1.0)
-
-# %%
-class LNRemover():
-    """
-    Schedules the "removal" of LayerNorms by replacing the standard deviation with
-    a constant value. The constructor takes the std, the desired training step,
-    and the a callback that will be called when the training step is reached.
-    """
-    def __init__(self, std, step, callback):
-        self.std = std
-        self.step = step
-        self.callback = callback
-
-    def on_step_begin(self, args, state, control, **kwargs):
-        if state.global_step == self.step:
-            self.callback()
-        return control
-
-
-def disable_ln1(model):
-    model.ln_f.weight.data = torch.ones_like(model.ln_f.weight.data) * 0.0
-    model.ln_f.bias.data = torch.zeros_like(model.ln_f.bias.data)
-
-    
-class LNRemoverCallback(TrainerCallback):
-    def __init__(self, ln_removers):
-        self.ln_removers = ln_removers
-
-    def on_step_begin(self, args, state, control, **kwargs):
-        print("Removing LN")
-        # 
-        return control
-
-trainer = Trainer(
-    model=model,
-    args=training_args,
-    train_dataset=tokenized["train"],
-    eval_dataset=tokenized["test"],
-    # callbacks=[BeginStepCallback()]
-)
-
-# %%
-trainer.train()
 # %%
