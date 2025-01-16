@@ -33,7 +33,7 @@ def tokenize_function(examples):
         examples["text"],
         truncation=True,
         padding="max_length",
-        max_length=418,
+        max_length=1024,
         return_tensors="pt"
     )
     # Create labels (same as input_ids for language modeling)
@@ -70,21 +70,17 @@ training_args = TrainingArguments(
     logging_dir="./logs",
     prediction_loss_only=True,
     learning_rate=2e-5,
+    report_to="wandb",
+    run_name="gpt2-openwebtext-1024"
 )
 
 from transformers import TrainerCallback
-
-class BeginStepCallback(TrainerCallback):
-    def on_step_begin(self, args, state, control, **kwargs):
-        # Callback logic at the beginning of each step
-        print(f"Starting step {state.global_step}")
 
 trainer = Trainer(
     model=model,
     args=training_args,
     train_dataset=tokenized["train"],
     eval_dataset=tokenized["test"],
-    callbacks=[BeginStepCallback()]
 )
 
 # %%
@@ -109,10 +105,14 @@ class FakeLayerNorm(torch.nn.Module):
     def __init__(self, std):
         super().__init__()
         self.std = std
+    
+    def set_mode(self, mode):
+        self.mode = mode
 
     def forward(self, x):
         return x * self.std
 
+fake_lns = {}
 def replace_layernorm_with_fake_layernorm(model, std):
     for name, module in model.named_modules():
         if isinstance(module, torch.nn.LayerNorm):
@@ -122,11 +122,18 @@ def replace_layernorm_with_fake_layernorm(model, std):
             for comp in components[:-1]:
                 parent = getattr(parent, comp)
             # Replace the LayerNorm with FakeLayerNorm
+            fake_ln = FakeLayerNorm(std)
             setattr(parent, components[-1], FakeLayerNorm(std))
+
+            # Construct the module path - a fully qualified path to the module
+            module_path = '.'.join(components)
+            # Add to fake_lns dict 
+            fake_lns[module_path] = fake_ln
             
 # Replace all LayerNorm instances with FakeLayerNorm
 replace_layernorm_with_fake_layernorm(model, std=1.0)
 
+# %%
 class LNRemover():
     """
     Schedules the "removal" of LayerNorms by replacing the standard deviation with
@@ -148,12 +155,14 @@ def disable_ln1(model):
     model.ln_f.weight.data = torch.ones_like(model.ln_f.weight.data) * 0.0
     model.ln_f.bias.data = torch.zeros_like(model.ln_f.bias.data)
 
-# Instantiate an array of LNRemover instances
-ln_removers = [LNRemover(1.0, 10, disable_ln1)]
     
 class LNRemoverCallback(TrainerCallback):
+    def __init__(self, ln_removers):
+        self.ln_removers = ln_removers
+
     def on_step_begin(self, args, state, control, **kwargs):
         print("Removing LN")
+        # 
         return control
 
 trainer = Trainer(
