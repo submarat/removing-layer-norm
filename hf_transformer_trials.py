@@ -36,7 +36,7 @@ def tokenize_function(examples):
         examples["text"],
         truncation=True,
         padding="max_length",
-        max_length=512,
+        max_length=1024,
         return_tensors="pt"
     )
     # Create labels (same as input_ids for language modeling)
@@ -93,7 +93,7 @@ from transformers import TrainerCallback
 training_args = TrainingArguments(
     output_dir="./results",
     max_steps=1200,
-    per_device_train_batch_size=48,
+    per_device_train_batch_size=40,
     per_device_eval_batch_size=4,
     warmup_steps=100,
     weight_decay=0.01,
