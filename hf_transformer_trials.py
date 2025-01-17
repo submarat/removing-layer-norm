@@ -4,9 +4,10 @@ import os
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import Trainer, TrainingArguments
+
 import transformers
 import datasets
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, DataCollatorForLanguageModeling
 import tqdm
 from std_dicts import std_dict, std_bos_dict
 
@@ -25,45 +26,76 @@ if not os.path.exists("tokenized_openwebtext"):
 
     split_dataset = dataset["train"].train_test_split(test_size=0.0005, seed=2357, shuffle=True)
     # reduce the size of the training set
-    # split_dataset["train"] = split_dataset["train"].select(range(50000))
+    split_dataset["train"] = split_dataset["train"].select(range(50000))
 
 # %%
 tokenizer = AutoTokenizer.from_pretrained("gpt2")
 tokenizer.pad_token = tokenizer.eos_token
 
+# %%
 def tokenize_function(examples):
-    output = tokenizer(
+    # Tokenize each text individually since they're strings, not lists
+    result = tokenizer(
         examples["text"],
-        truncation=True,
-        padding="max_length",
-        max_length=1024,
-        return_tensors="pt"
+        truncation=False,  # Don't truncate here since we'll chunk later
+        padding=False,
+        return_tensors=None,
     )
-    # Create labels (same as input_ids for language modeling)
-    return {
-        "input_ids": output["input_ids"],
-        "labels": output["input_ids"],
-        "attention_mask": output["attention_mask"],
-    }
-try:
-    tokenized = datasets.load_from_disk("tokenized_openwebtext")
-    print("Tokenized dataset loaded from disk")
-except FileNotFoundError:
-    print("Tokenized dataset not found on disk")
-    tokenized = split_dataset.map(tokenize_function, remove_columns=["text"], num_proc=8)
-    tokenized.save_to_disk("tokenized_openwebtext")
+    
+    return result
 
-tokenized.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
+# First tokenize the dataset
+tokenized = split_dataset.map(
+    tokenize_function,
+    batched=True,
+    num_proc=8,
+    remove_columns=split_dataset["train"].column_names
+)
+
+# Function to chunk the dataset into blocks of 1024 tokens
+def group_texts(examples):
+    # Concatenate all texts
+    concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
+    total_length = len(concatenated_examples[list(examples.keys())[0]])
+    
+    # We drop the small remainder, and if the total_length < block_size we throw an error
+    total_length = (total_length // 1024) * 1024
+    
+    # Split by chunks of max_len
+    result = {
+        k: [t[i : i + 1024] for i in range(0, total_length, 1024)]
+        for k, t in concatenated_examples.items()
+    }
+    
+    # Create labels
+    # result["labels"] = result["input_ids"].copy()
+    
+    return result
+
+# Group the tokenized dataset into chunks
+tokenized = tokenized.map(
+    group_texts,
+    batched=True,
+    num_proc=8
+)
+
+# Use DataCollatorForLanguageModeling with mlm=False for causal language modeling (GPT-2)
+data_collator = DataCollatorForLanguageModeling(
+    tokenizer=tokenizer,
+    mlm=False,  # Set to False for autoregressive/causal language modeling
+    return_tensors="pt"  # Explicitly set return tensors to PyTorch
+)
+
 # %%
 model = transformers.GPT2LMHeadModel.from_pretrained("gpt2", cache_dir="gpt2_cache", config=transformers.GPT2Config.from_pretrained("gpt2", dropout=0.0, attn_pdrop=0.0, embd_pdrop=0.0, resid_pdrop=0.0))
 
 # %%
-FINETUNE_WITH_LN = False
+FINETUNE_WITH_LN = True
 if FINETUNE_WITH_LN:
     training_args = TrainingArguments(
         output_dir="./results",
         max_steps=1000,
-        per_device_train_batch_size=48,
+        per_device_train_batch_size=24,
         per_device_eval_batch_size=4,
         warmup_steps=500,
         weight_decay=0.01,
@@ -81,6 +113,7 @@ if FINETUNE_WITH_LN:
         args=training_args,
         train_dataset=tokenized["train"],
         eval_dataset=tokenized["test"],
+        data_collator=data_collator,
     )
 
     import wandb
@@ -280,6 +313,7 @@ trainer = Trainer(
     args=training_args,
     train_dataset=tokenized["train"],
     eval_dataset=tokenized["test"],
+    data_collator=data_collator,
     callbacks=[LNRemoverCallback(ln_removers)]
 )
 
