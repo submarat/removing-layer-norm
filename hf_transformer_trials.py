@@ -14,78 +14,143 @@ from std_dicts import std_dict, std_bos_dict
 # get the device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # %%
-# Check whether the dataset is saved to disk
-if not os.path.exists("tokenized_openwebtext"):
-    try: 
-        dataset = datasets.load_from_disk("openwebtext")
-        print("Dataset loaded from disk")
-    except FileNotFoundError:
-        print("Dataset not found on disk")
-        dataset = datasets.load_dataset("openwebtext", num_proc=8)
-        dataset.save_to_disk("openwebtext")
+HF_TOKENIZER = True
+if HF_TOKENIZER:
+    # Check whether the dataset is saved to disk
+    if not os.path.exists("tokenized_openwebtext"):
+        try: 
+            dataset = datasets.load_from_disk("openwebtext")
+            print("Dataset loaded from disk")
+        except FileNotFoundError:
+            print("Dataset not found on disk")
+            dataset = datasets.load_dataset("openwebtext", num_proc=8)
+            dataset.save_to_disk("openwebtext")
 
-    split_dataset = dataset["train"].train_test_split(test_size=0.0005, seed=2357, shuffle=True)
-    # reduce the size of the training set
-    split_dataset["train"] = split_dataset["train"].select(range(50000))
+        split_dataset = dataset["train"].train_test_split(test_size=0.0005, seed=2357, shuffle=True)
 
-# %%
-tokenizer = AutoTokenizer.from_pretrained("gpt2")
-tokenizer.pad_token = tokenizer.eos_token
+    # %%
+    tokenizer = AutoTokenizer.from_pretrained("gpt2")
+    tokenizer.pad_token = tokenizer.eos_token
 
-# %%
-def tokenize_function(examples):
-    # Tokenize each text individually since they're strings, not lists
-    result = tokenizer(
-        examples["text"],
-        truncation=False,  # Don't truncate here since we'll chunk later
-        padding=False,
-        return_tensors=None,
+    # %%
+    def tokenize_function(examples):
+
+        # Add EOS token to the end of each example
+        examples["text"] = [text + tokenizer.eos_token for text in examples["text"]]
+
+        # Tokenize the examples
+        tokenized_examples = tokenizer(examples["text"], truncation=False, padding=False, return_tensors=None)
+
+        # Concatenate the tokenized examples
+        concatenated = []
+        for seq in tokenized_examples["input_ids"]:
+            concatenated.extend(seq)
+        
+        # Chunk into 1024 token chunks, dropping any remainder
+        n_chunks = len(concatenated) // 1024  # Integer division to get complete chunks only
+        chunks = [concatenated[i*1024:(i+1)*1024] for i in range(n_chunks)]
+        
+        return {'input_ids': chunks}
+
+    # Group the tokenized dataset into chunks
+    tokenized = split_dataset.map(
+        tokenize_function,
+        batched=True,
+        batch_size=512,
+        num_proc=32,
+        remove_columns=split_dataset["train"].column_names  # Remove original columns
     )
-    
-    return result
 
-# First tokenize the dataset
-tokenized = split_dataset.map(
-    tokenize_function,
-    batched=True,
-    num_proc=8,
-    remove_columns=split_dataset["train"].column_names
-)
+    # Use DataCollatorForLanguageModeling with mlm=False for causal language modeling (GPT-2)
+    data_collator = DataCollatorForLanguageModeling(
+        tokenizer=tokenizer,
+        mlm=False,  # Set to False for autoregressive/causal language modeling
+        return_tensors="pt"  # Explicitly set return tensors to PyTorch
+    )
 
-# Function to chunk the dataset into blocks of 1024 tokens
-def group_texts(examples):
-    # Concatenate all texts
-    concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
-    total_length = len(concatenated_examples[list(examples.keys())[0]])
-    
-    # We drop the small remainder, and if the total_length < block_size we throw an error
-    total_length = (total_length // 1024) * 1024
-    
-    # Split by chunks of max_len
-    result = {
-        k: [t[i : i + 1024] for i in range(0, total_length, 1024)]
-        for k, t in concatenated_examples.items()
-    }
-    
-    # Create labels
-    # result["labels"] = result["input_ids"].copy()
-    
-    return result
+    # Create a training batch using the data collator
+    training_batch = data_collator([tokenized["train"][i] for i in range(4)])
 
-# Group the tokenized dataset into chunks
-tokenized = tokenized.map(
-    group_texts,
-    batched=True,
-    num_proc=8
-)
+    # Print batch information
+    print("Training batch shape:", training_batch["input_ids"].shape)
+    print("Labels shape:", training_batch["labels"].shape)
+    print("\nSample input_ids (first sequence):\n", training_batch["input_ids"][0][:-50])
+    print("\nSample labels (first sequence):\n", training_batch["labels"][0][:-50])
 
-# Use DataCollatorForLanguageModeling with mlm=False for causal language modeling (GPT-2)
-data_collator = DataCollatorForLanguageModeling(
-    tokenizer=tokenizer,
-    mlm=False,  # Set to False for autoregressive/causal language modeling
-    return_tensors="pt"  # Explicitly set return tensors to PyTorch
-)
+# %%
+CUSTOM_DATASET = False
+if CUSTOM_DATASET:
+    import numpy as np
+    import torch
+    from torch.utils.data import Dataset
 
+    class BinaryTokenDataset(Dataset):
+        """Dataset for reading from binary token files created by prepare.py"""
+        
+        def __init__(self, split='train', block_size=1024):
+            import pdb; pdb.set_trace()
+            self.block_size = block_size
+            self.data_dir = os.path.join('data', 'openwebtext')
+            filename = os.path.join(self.data_dir, f'{split}.bin')
+            
+            # Just get the file size, don't keep the memmap open
+            self.data_size = os.path.getsize(filename) // np.dtype('uint16').itemsize
+            self.n_positions = self.data_size - block_size + 1
+            self.split = split
+            self.filename = filename  # Store filename for later use
+        
+        def __len__(self):
+            return self.n_positions
+        
+        def __getitem__(self, idx):
+            # Open memmap with offset and count to read only the needed portion
+            import pdb; pdb.set_trace()
+            offset = idx
+            count = self.block_size
+            data = np.memmap(
+                self.filename,
+                dtype=np.uint16,
+                mode='r',
+                offset=offset * np.dtype('uint16').itemsize,
+                shape=(count,)
+            )
+            
+            # Copy the data and close the memmap
+            block = np.array(data, dtype=np.int64)
+            del data  # Close the memmap
+            
+            x = torch.from_numpy(block)
+            return {
+                'input_ids': x,
+                'labels': x,
+            }
+
+    # Create datasets
+    train_dataset = BinaryTokenDataset('train', block_size=1024)
+    # val_dataset = BinaryTokenDataset('val', block_size=1024)
+
+    # Sample and print one batch from train dataset
+    # Create a DataLoader for the training dataset
+    import pdb; pdb.set_trace()
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset,
+        batch_size=4,
+        shuffle=True,
+        num_workers=0
+    )
+
+    # Get one batch
+    tl_it = iter(train_loader)
+    sample_batch = next(tl_it)
+
+    # Print batch information
+    print("Sample batch info:")
+    print(f"Input shape: {sample_batch['input_ids'].shape}")
+    print(f"Labels shape: {sample_batch['labels'].shape}")
+    print(f"Input dtype: {sample_batch['input_ids'].dtype}")
+    print(f"First few tokens of first sequence: {sample_batch['input_ids'][0][:10]}")
+
+    quit()
 # %%
 model = transformers.GPT2LMHeadModel.from_pretrained("gpt2", cache_dir="gpt2_cache", config=transformers.GPT2Config.from_pretrained("gpt2", dropout=0.0, attn_pdrop=0.0, embd_pdrop=0.0, resid_pdrop=0.0))
 
@@ -95,13 +160,14 @@ if FINETUNE_WITH_LN:
     training_args = TrainingArguments(
         output_dir="./results",
         max_steps=1000,
-        per_device_train_batch_size=24,
+        per_device_train_batch_size=4,
         per_device_eval_batch_size=4,
-        warmup_steps=500,
+        warmup_steps=100,
         weight_decay=0.01,
         logging_dir="./logs",
         prediction_loss_only=True,
-        learning_rate=2e-5,
+        learning_rate=6e-4,
+        lr_scheduler_type="cosine",
         report_to="wandb",
         run_name="gpt2-openwebtext-512",
         logging_steps=1,
@@ -121,6 +187,7 @@ if FINETUNE_WITH_LN:
     trainer.train()
     wandb.finish()
 # %%
+quit()
 from transformers import TrainerCallback
 
 training_args = TrainingArguments(
