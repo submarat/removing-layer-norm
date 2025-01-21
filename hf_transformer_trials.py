@@ -262,7 +262,7 @@ if FINETUNE_WITHOUT_LN:
             block.ln_1.bias = nn.Parameter(ln_1_bias)
 
             ln_2_weight = block.ln_2.weight.detach()
-            ln_2_bias = block.ln_2.weight.detach()
+            ln_2_bias = block.ln_2.bias.detach()
 
             block.ln_2 = FakeLayerNorm(ndim=n_embd, layer=f'blocks.{i}.hook_resid_mid', bias=block.ln_2.bias is not None)
             block.ln_2.weight = nn.Parameter(ln_2_weight)
@@ -301,7 +301,7 @@ if FINETUNE_WITHOUT_LN:
         model.transformer.h[block_index].ln_1.bos_std = model.transformer.h[block_index].ln_1.average_std
         print(f"disabled eot std for block {block_index}")
 
-    def disable_bos_std(model, block_index):
+    def disable_bos_std(block_index):
         model.transformer.h[block_index].ln_1.average_std[0] = model.transformer.h[block_index].ln_1.average_std[1]
         model.transformer.h[block_index].ln_1.bos_std[0] = model.transformer.h[block_index].ln_1.bos_std[1]
         print(f"disabled bos std for block {block_index}")
