@@ -1,21 +1,24 @@
-# %%
+
 import torch
 import os
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import Trainer, TrainingArguments
+from torch.utils.data import Dataset
+from transformers import Trainer, TrainingArguments, TrainerCallback
 
+import wandb
 import transformers
 import datasets
 from transformers import AutoTokenizer, DataCollatorForLanguageModeling
 import tqdm
 from std_dicts import std_dict, std_bos_dict
 
+import numpy as np
+
 # get the device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# %%
-HF_TOKENIZER = True
-if HF_TOKENIZER:
+
+def prepare_dataset()
     # Check whether the dataset is saved to disk
     if not os.path.exists("tokenized_openwebtext"):
         try: 
@@ -28,11 +31,11 @@ if HF_TOKENIZER:
 
         split_dataset = dataset["train"].train_test_split(test_size=0.0005, seed=2357, shuffle=True)
 
-    # %%
+    
     tokenizer = AutoTokenizer.from_pretrained("gpt2")
     tokenizer.pad_token = tokenizer.eos_token
 
-    # %%
+    
     def tokenize_function(examples):
 
         # Add EOS token to the end of each example
@@ -77,86 +80,10 @@ if HF_TOKENIZER:
     print("\nSample input_ids (first sequence):\n", training_batch["input_ids"][0][:-50])
     print("\nSample labels (first sequence):\n", training_batch["labels"][0][:-50])
 
-# %%
-CUSTOM_DATASET = False
-if CUSTOM_DATASET:
-    import numpy as np
-    import torch
-    from torch.utils.data import Dataset
+def load_model():
+    return transformers.GPT2LMHeadModel.from_pretrained("gpt2", cache_dir="gpt2_cache", config=transformers.GPT2Config.from_pretrained("gpt2", dropout=0.0, attn_pdrop=0.0, embd_pdrop=0.0, resid_pdrop=0.0))
 
-    class BinaryTokenDataset(Dataset):
-        """Dataset for reading from binary token files created by prepare.py"""
-        
-        def __init__(self, split='train', block_size=1024):
-            import pdb; pdb.set_trace()
-            self.block_size = block_size
-            self.data_dir = os.path.join('data', 'openwebtext')
-            filename = os.path.join(self.data_dir, f'{split}.bin')
-            
-            # Just get the file size, don't keep the memmap open
-            self.data_size = os.path.getsize(filename) // np.dtype('uint16').itemsize
-            self.n_positions = self.data_size - block_size + 1
-            self.split = split
-            self.filename = filename  # Store filename for later use
-        
-        def __len__(self):
-            return self.n_positions
-        
-        def __getitem__(self, idx):
-            # Open memmap with offset and count to read only the needed portion
-            import pdb; pdb.set_trace()
-            offset = idx
-            count = self.block_size
-            data = np.memmap(
-                self.filename,
-                dtype=np.uint16,
-                mode='r',
-                offset=offset * np.dtype('uint16').itemsize,
-                shape=(count,)
-            )
-            
-            # Copy the data and close the memmap
-            block = np.array(data, dtype=np.int64)
-            del data  # Close the memmap
-            
-            x = torch.from_numpy(block)
-            return {
-                'input_ids': x,
-                'labels': x,
-            }
-
-    # Create datasets
-    train_dataset = BinaryTokenDataset('train', block_size=1024)
-    # val_dataset = BinaryTokenDataset('val', block_size=1024)
-
-    # Sample and print one batch from train dataset
-    # Create a DataLoader for the training dataset
-    import pdb; pdb.set_trace()
-    train_loader = torch.utils.data.DataLoader(
-        train_dataset,
-        batch_size=4,
-        shuffle=True,
-        num_workers=0
-    )
-
-    # Get one batch
-    tl_it = iter(train_loader)
-    sample_batch = next(tl_it)
-
-    # Print batch information
-    print("Sample batch info:")
-    print(f"Input shape: {sample_batch['input_ids'].shape}")
-    print(f"Labels shape: {sample_batch['labels'].shape}")
-    print(f"Input dtype: {sample_batch['input_ids'].dtype}")
-    print(f"First few tokens of first sequence: {sample_batch['input_ids'][0][:10]}")
-
-    quit()
-# %%
-model = transformers.GPT2LMHeadModel.from_pretrained("gpt2", cache_dir="gpt2_cache", config=transformers.GPT2Config.from_pretrained("gpt2", dropout=0.0, attn_pdrop=0.0, embd_pdrop=0.0, resid_pdrop=0.0))
-
-# %%
-FINETUNE_WITH_LN = False
-if FINETUNE_WITH_LN:
+def finetune_with_ln(model, tokenized):
     training_args = TrainingArguments(
         output_dir="./results",
         max_steps=1200,
@@ -182,14 +109,11 @@ if FINETUNE_WITH_LN:
         data_collator=data_collator,
     )
 
-    import wandb
     wandb.init(project="hf-remove-ln")
     trainer.train()
     wandb.finish()
-# %%
-FINETUNE_WITHOUT_LN = True
-if FINETUNE_WITHOUT_LN:
-    from transformers import TrainerCallback
+
+def finetune_without_ln(model, tokenized):
 
     training_args = TrainingArguments(
         output_dir="./results",
@@ -278,8 +202,7 @@ if FINETUNE_WITHOUT_LN:
                 
     # Replace all LayerNorm instances with FakeLayerNorm
     replace_layernorm_with_fake_layernorm(model, std=1.0)
-
-    # %%
+    
 
     def disable_ln_2(block_index):
         model.transformer.h[block_index].ln_2.mode = 'fake'
@@ -386,9 +309,27 @@ if FINETUNE_WITHOUT_LN:
         callbacks=[LNRemoverCallback(ln_removers)]
     )
 
-    # %%
-    import wandb
+    
     wandb.init(project="hf-remove-ln")
     trainer.train()
     wandb.finish()
-    # %%
+    
+if __name__ == "__main__":
+    model = load_model()
+    tokenized = prepare_dataset(model)
+
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Finetune model with or without layer normalization")
+    parser.add_argument('--mode', choices=['with_ln', 'without_ln', 'both'], required=True, help="Finetuning mode")
+    args = parser.parse_args()
+
+    if args.mode == 'with_ln':
+        finetune_with_ln(model, tokenized)
+    elif args.mode == 'without_ln':
+        finetune_without_ln(model, tokenized)
+    elif args.mode == 'both':
+        finetune_with_ln(model, tokenized)
+        finetune_without_ln(model, tokenized)
+    finetune_with_ln(model, tokenized)
+    finetune_without_ln(model, tokenized)
