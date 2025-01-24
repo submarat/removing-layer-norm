@@ -33,6 +33,8 @@ def prepare_dataset():
             test_size=0.0005, seed=2357, shuffle=True
         )
 
+    # split_dataset["train"] = split_dataset["train"].select(range(100))
+
     tokenizer = AutoTokenizer.from_pretrained("gpt2")
     tokenizer.pad_token = tokenizer.eos_token
 
@@ -81,10 +83,8 @@ def prepare_dataset():
     # Print batch information
     print("Training batch shape:", training_batch["input_ids"].shape)
     print("Labels shape:", training_batch["labels"].shape)
-    print(
-        "\nSample input_ids (first sequence):\n", training_batch["input_ids"][0][:-50]
-    )
-    print("\nSample labels (first sequence):\n", training_batch["labels"][0][:-50])
+
+    return tokenized, data_collator
 
 
 def load_model():
@@ -97,11 +97,11 @@ def load_model():
     )
 
 
-def finetune_with_ln(model, tokenized):
+def finetune_with_ln(model, tokenized, data_collator):
     training_args = TrainingArguments(
         output_dir="./results",
         max_steps=1200,
-        per_device_train_batch_size=40,
+        per_device_train_batch_size=1,
         per_device_eval_batch_size=4,
         warmup_steps=100,
         weight_decay=0.01,
@@ -128,13 +128,13 @@ def finetune_with_ln(model, tokenized):
     wandb.finish()
 
 
-def finetune_without_ln(model, tokenized):
+def finetune_without_ln(model, tokenized, data_collator):
 
     training_args = TrainingArguments(
         output_dir="./results",
         save_safetensors=False,
         max_steps=1200,
-        per_device_train_batch_size=40,
+        per_device_train_batch_size=1,
         per_device_eval_batch_size=4,
         warmup_steps=100,
         weight_decay=0.01,
@@ -328,6 +328,7 @@ def finetune_without_ln(model, tokenized):
             # Iterate over the ln_removers
             for ln_remover in self.ln_removers:
                 ln_remover(state.global_step)
+                ln_remover.log(wandb)
             return control
 
     ln_removers = [
@@ -354,7 +355,7 @@ def finetune_without_ln(model, tokenized):
 
 
 if __name__ == "__main__":
-    tokenized = prepare_dataset()
+    tokenized, data_collator = prepare_dataset()
     model = load_model()
 
     import argparse
@@ -371,11 +372,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.mode == "with_ln":
-        finetune_with_ln(model, tokenized)
+        finetune_with_ln(model, tokenized, data_collator)
     elif args.mode == "without_ln":
-        finetune_without_ln(model, tokenized)
+        finetune_without_ln(model, tokenized, data_collator)
     elif args.mode == "both":
         finetune_with_ln(model, tokenized)
         finetune_without_ln(model, tokenized)
-    finetune_with_ln(model, tokenized)
-    finetune_without_ln(model, tokenized)
