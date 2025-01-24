@@ -1,18 +1,23 @@
-import torch
 import os
+
+import datasets
+import numpy as np
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset
-from transformers import Trainer, TrainingArguments, TrainerCallback
-
-import wandb
-import transformers
-import datasets
-from transformers import AutoTokenizer, DataCollatorForLanguageModeling
 import tqdm
-from std_dicts import std_dict, std_bos_dict
+import transformers
+import wandb
+from torch.utils.data import Dataset
+from transformers import (
+    AutoTokenizer,
+    DataCollatorForLanguageModeling,
+    Trainer,
+    TrainerCallback,
+    TrainingArguments,
+)
 
-import numpy as np
+from std_dicts import std_bos_dict, std_dict
 
 # get the device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
