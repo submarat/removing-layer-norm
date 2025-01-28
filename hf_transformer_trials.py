@@ -1,5 +1,6 @@
 import os
 
+import argparse
 import datasets
 import numpy as np
 import torch
@@ -19,24 +20,18 @@ from transformers import (
 
 from std_dicts import std_bos_dict, std_dict
 
-# get the device
+# TODO: support multi-GPU. If multiple GPUs are available, this will select the first one.
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def prepare_dataset():
     # Check whether the dataset is saved to disk
-    if not os.path.exists("tokenized_openwebtext"):
-        try:
-            dataset = datasets.load_from_disk("openwebtext")
-            print("Dataset loaded from disk")
-        except FileNotFoundError:
-            print("Dataset not found on disk")
-            dataset = datasets.load_dataset("openwebtext", num_proc=8)
-            dataset.save_to_disk("openwebtext")
+    dataset = datasets.load_dataset("openwebtext", num_proc=8)
+    dataset.save_to_disk("openwebtext")
 
-        split_dataset = dataset["train"].train_test_split(
-            test_size=0.0005, seed=2357, shuffle=True
-        )
+    split_dataset = dataset["train"].train_test_split(
+        test_size=0.0005, seed=2357, shuffle=True
+    )
 
     # split_dataset["train"] = split_dataset["train"].select(range(100))
 
@@ -202,8 +197,8 @@ def finetune_without_ln(model, tokenized, data_collator):
         # Replace ln_1 and ln_2 with FakeLayerNorm
         for i in range(n_layers):
             block = model.transformer.h[i]
-            ln_1_weight = block.ln_1.weight.detach()
-            ln_1_bias = block.ln_1.bias.detach()
+            ln_1_weight = block.ln_1.weight.clone().detach()
+            ln_1_bias = block.ln_1.bias.clone().detach()
 
             block.ln_1 = FakeLayerNorm(
                 ndim=n_embd,
@@ -213,8 +208,8 @@ def finetune_without_ln(model, tokenized, data_collator):
             block.ln_1.weight = nn.Parameter(ln_1_weight)
             block.ln_1.bias = nn.Parameter(ln_1_bias)
 
-            ln_2_weight = block.ln_2.weight.detach()
-            ln_2_bias = block.ln_2.bias.detach()
+            ln_2_weight = block.ln_2.weight.clone().detach()
+            ln_2_bias = block.ln_2.bias.clone().detach()
 
             block.ln_2 = FakeLayerNorm(
                 ndim=n_embd,
@@ -226,8 +221,8 @@ def finetune_without_ln(model, tokenized, data_collator):
 
         # Replace ln_f with FakeLayerNorm
         ln_f = model.transformer.ln_f
-        ln_f_weight = ln_f.weight.detach()
-        ln_f_bias = ln_f.bias.detach()
+        ln_f_weight = ln_f.weight.clone().detach()
+        ln_f_bias = ln_f.bias.clone().detach()
         model.transformer.ln_f = FakeLayerNorm(
             ndim=n_embd,
             layer=f"blocks.11.hook_resid_post",
@@ -358,12 +353,9 @@ def finetune_without_ln(model, tokenized, data_collator):
     trainer.train()
     wandb.finish()
 
-
-if __name__ == "__main__":
+def main():
     tokenized, data_collator = prepare_dataset()
     model = load_model()
-
-    import argparse
 
     parser = argparse.ArgumentParser(
         description="Finetune model with or without layer normalization"
@@ -383,3 +375,6 @@ if __name__ == "__main__":
     elif args.mode == "both":
         finetune_with_ln(model, tokenized)
         finetune_without_ln(model, tokenized)
+
+if __name__ == "__main__":
+    main()
