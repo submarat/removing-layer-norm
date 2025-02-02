@@ -1,9 +1,11 @@
+import os
+
 import torch
 from datasets import load_dataset
 from tqdm import tqdm
-from transformers import AutoTokenizer, GPT2LMHeadModel, AutoModelForCausalLM
+from transformers import AutoTokenizer, GPT2LMHeadModel, AutoModelForCausalLM, GPT2Config
 from transformer_lens import HookedTransformer
-
+from std_dicts import std_dict
 
 def load_saved_model(model_path=None):
     if model_path is not None: 
@@ -13,8 +15,64 @@ def load_saved_model(model_path=None):
         model = AutoModelForCausalLM.from_pretrained("gpt2")  # or other OpenAI model version    
     return model
 
-def load_nln_hf_model(name=None):
-    model = GPT2LMHeadModel.from_pretrained(name).to("cpu")
+def load_pt_file(filepath, slay_ln=False):
+    # Check if file exists
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"Model file not found at {filepath}")
+    
+    # Load model with appropriate device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    checkpoint = torch.load(filepath, map_location=device)
+    sd = checkpoint["model"]
+    transposed = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
+
+    # Load the HF GPT2 model
+    # init a huggingface/transformers model
+    model_hf = GPT2LMHeadModel.from_pretrained("gpt2")
+    sd_hf = model_hf.state_dict()
+    # Now, use the state dict from the checkpoint to overwrite the weights in the model
+    sd_keys_hf = list(sd_hf.keys())
+    sd_keys = list(sd.keys())
+    sd_keys = [k for k in sd_keys if not k.endswith('.attn.bias')]
+    assert len(sd_keys_hf) == len(sd_keys), f"mismatched keys: {len(sd_keys_hf)} != {len(sd_keys)}"
+    for k in sd_keys_hf:
+        if any(k.endswith(w) for w in transposed):
+            # special treatment for the Conv1D weights we need to transpose
+            assert sd_hf[k].shape[::-1] == sd[k].shape
+            with torch.no_grad():
+                sd_hf[k].copy_(sd[k].t())
+        else:
+            # vanilla copy over the other parameters
+            assert sd_hf[k].shape == sd[k].shape
+            with torch.no_grad():
+                sd_hf[k].copy_(sd[k])
+
+    model_hf.load_state_dict(sd_hf)
+
+    # Now kill the layer norm by setting layer_norm_epsilon to 1e12, and multiplied the ln scaling parameters by 1e6
+    if slay_ln:
+        for id, block in enumerate(model_hf.transformer.h):
+            with torch.no_grad():
+                # Get the standard deviations from the std_dict
+                ln1_std = std_dict[f'blocks.{id}.hook_resid_pre']
+                ln2_std = std_dict[f'blocks.{id}.hook_resid_mid']
+                block.ln_1.weight.data *= 1e6 / ln1_std
+                block.ln_2.weight.data *= 1e6 / ln2_std
+                block.ln_1.eps = 1e12
+                block.ln_2.eps = 1e12
+        with torch.no_grad():
+            lnf_std = std_dict[f'blocks.11.hook_resid_post']
+            model_hf.transformer.ln_f.weight.data *= 1e6 / lnf_std
+            model_hf.transformer.ln_f.eps = 1e12
+    return model_hf
+
+def load_nln_hf_model(name=None, model=None):
+    if model is None and name is None or model is not None and name is not None:
+        raise ValueError("Either name or model must be provided, but not both")
+    if model is not None:
+        model = model
+    else:
+        model = GPT2LMHeadModel.from_pretrained(name).to("cpu")
     
     for block in model.transformer.h:
         block.ln_1.weight.data = block.ln_1.weight.data / 1e6
@@ -153,7 +211,9 @@ def evaluate_on_pile_ce(model, dataset_name, num_samples=5000, device=None):
 def main():
     # model_path = "./model_checkpoints"  # Path to your saved model
     # model = load_saved_model(model_path)
-    model = load_saved_model()
+    # model = load_saved_model()
+    model = load_nln_hf_model(model=load_pt_file("ckpt1200.pt", slay_ln=True))
+    # model=load_pt_file("ckpt50.pt")
     # model = load_nln_hf_model("apollo-research/gpt2_noLN")
     dataset_name = "pile-10k"
     num_samples = 20000
