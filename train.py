@@ -25,7 +25,7 @@ device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if 
 
 torch.manual_seed(1337)
 
-_MAX_STEPS = 1
+_MAX_STEPS = 4
 _USE_WANDB = False
 
 def prepare_dataset():
