@@ -4,7 +4,7 @@ from huggingface_hub import HfApi, login
 # 1. First, login to Hugging Face
 login()  # You'll need your API token from huggingface.co/settings/tokens
 
-# 2. Save your model and tokenizer locally
+# 2. Set the model namespace
 model_name = "submarat/model-without-ln"
 
 # 3. Create repository and upload
