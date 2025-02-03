@@ -26,8 +26,12 @@ device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if 
 torch.manual_seed(1337)
 
 _MAX_STEPS = 1200
-_BATCH_SIZE = 48
-_USE_WANDB = False
+_BATCH_SIZE = 40
+_BLOCK_SIZE = 1024
+_DESIRED_BATCH_SIZE= 2**19 / _BLOCK_SIZE
+_GRADIENT_ACCUMULATION_STEPS=_DESIRED_BATCH_SIZE = int(_DESIRED_BATCH_SIZE // _BATCH_SIZE)
+_GRADIENT_ACCUMULATION_STEPS=1
+_USE_WANDB = True
 
 def prepare_dataset():
     # First check if the tokenized dataset exists on disk
@@ -36,14 +40,9 @@ def prepare_dataset():
         tokenized = datasets.load_from_disk("tokenized_dataset")
     else:
         print("Tokenized dataset not found. Processing from scratch...")
-        # Check whether the dataset is saved to disk
-        if os.path.exists("openwebtext"):
-            print("Loading openwebtext from disk...")
-            dataset = datasets.load_from_disk("openwebtext")
-        else:
-            print("Downloading openwebtext dataset...")
-            dataset = datasets.load_dataset("openwebtext", num_proc=8)
-            dataset.save_to_disk("openwebtext")
+
+        print("Downloading openwebtext dataset...")
+        dataset = datasets.load_dataset("openwebtext", num_proc=8)
 
         split_dataset = dataset["train"].train_test_split(
             test_size=0.0005, seed=2357, shuffle=True
@@ -125,7 +124,7 @@ def finetune_with_ln(model, tokenized, data_collator):
         max_steps=_MAX_STEPS,
         per_device_train_batch_size=_BATCH_SIZE,
         per_device_eval_batch_size=4,
-        gradient_accumulation_steps=4,
+        gradient_accumulation_steps=_GRADIENT_ACCUMULATION_STEPS,
         warmup_steps=100,
         weight_decay=0.01,
         logging_dir="./logs",
@@ -157,7 +156,7 @@ def finetune_without_ln(model, tokenized, data_collator):
         max_steps=_MAX_STEPS,
         per_device_train_batch_size=_BATCH_SIZE,
         per_device_eval_batch_size=4,
-        gradient_accumulation_steps=4,
+        gradient_accumulation_steps=_GRADIENT_ACCUMULATION_STEPS,
         warmup_steps=100,
         weight_decay=0.01,
         logging_dir="./logs",
