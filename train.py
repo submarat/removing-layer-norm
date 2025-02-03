@@ -25,7 +25,8 @@ device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if 
 
 torch.manual_seed(1337)
 
-_MAX_STEPS = 4
+_MAX_STEPS = 1200
+_BATCH_SIZE = 48
 _USE_WANDB = False
 
 def prepare_dataset():
@@ -122,7 +123,7 @@ def finetune_with_ln(model, tokenized, data_collator):
     training_args = TrainingArguments(
         output_dir="./results",
         max_steps=_MAX_STEPS,
-        per_device_train_batch_size=1,
+        per_device_train_batch_size=_BATCH_SIZE,
         per_device_eval_batch_size=4,
         gradient_accumulation_steps=4,
         warmup_steps=100,
@@ -154,7 +155,7 @@ def finetune_without_ln(model, tokenized, data_collator):
         output_dir="./results",
         save_safetensors=False,
         max_steps=_MAX_STEPS,
-        per_device_train_batch_size=1,
+        per_device_train_batch_size=_BATCH_SIZE,
         per_device_eval_batch_size=4,
         gradient_accumulation_steps=4,
         warmup_steps=100,
@@ -417,7 +418,6 @@ def main():
 
             model.save_pretrained("model-without-ln")
             tokenizer.save_pretrained("model-without-ln")
-            print("Save no-ln model", model)
     else:
         raise ValueError(f"Unknown mode {args.mode}")
     
