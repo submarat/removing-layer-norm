@@ -19,6 +19,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+.ipynb_checkpoints
 
 # Environments
 .env
@@ -37,3 +38,8 @@ venv.bak/
 
 # Misc
 .DS_Store
+
+gpt2_cache
+openwebtext
+results
+wandb
