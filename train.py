@@ -23,15 +23,16 @@ from std_dicts import std_bos_dict, std_dict
 # TODO: support multi-GPU. If multiple GPUs are available, this will select the first one.
 device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
 
-torch.manual_seed(1337)
-torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
-torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
+# torch.manual_seed(1337)
+# torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
+# torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 
 _MAX_STEPS = 1200
 _BATCH_SIZE = 40
 _BLOCK_SIZE = 1024
 _DESIRED_BATCH_SIZE= 2**19 / _BLOCK_SIZE
 _GRADIENT_ACCUMULATION_STEPS=_DESIRED_BATCH_SIZE = int(_DESIRED_BATCH_SIZE // _BATCH_SIZE)
+_GRADIENT_ACCUMULATION_STEPS=1
 _USE_WANDB = True
 
 def prepare_dataset():
@@ -153,7 +154,7 @@ def finetune_without_ln(model, tokenized, data_collator):
 
     training_args = TrainingArguments(
         output_dir="./results",
-        fp16=True,
+        # fp16=True,
         save_safetensors=False,
         max_steps=_MAX_STEPS,
         per_device_train_batch_size=_BATCH_SIZE,
