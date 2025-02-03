@@ -24,6 +24,8 @@ from std_dicts import std_bos_dict, std_dict
 device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
 
 torch.manual_seed(1337)
+torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
+torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 
 _MAX_STEPS = 1200
 _BATCH_SIZE = 40
@@ -108,13 +110,14 @@ def prepare_dataset():
 
 
 def load_model():
-    return transformers.GPT2LMHeadModel.from_pretrained(
+    model = transformers.GPT2LMHeadModel.from_pretrained(
         "gpt2",
         cache_dir="gpt2_cache",
         config=transformers.GPT2Config.from_pretrained(
             "gpt2", dropout=0.0, attn_pdrop=0.0, embd_pdrop=0.0, resid_pdrop=0.0
         ),
     )
+    return model
 
 
 def finetune_with_ln(model, tokenized, data_collator):
@@ -146,11 +149,11 @@ def finetune_with_ln(model, tokenized, data_collator):
 
     trainer.train()
 
-
 def finetune_without_ln(model, tokenized, data_collator):
 
     training_args = TrainingArguments(
         output_dir="./results",
+        fp16=True,
         save_safetensors=False,
         max_steps=_MAX_STEPS,
         per_device_train_batch_size=_BATCH_SIZE,
@@ -158,6 +161,7 @@ def finetune_without_ln(model, tokenized, data_collator):
         gradient_accumulation_steps=_GRADIENT_ACCUMULATION_STEPS,
         warmup_steps=100,
         weight_decay=0.01,
+        max_grad_norm=1.0,
         logging_dir="./logs",
         prediction_loss_only=True,
         learning_rate=6e-4,
@@ -166,6 +170,11 @@ def finetune_without_ln(model, tokenized, data_collator):
         run_name="gpt2-openwebtext-512",
         logging_steps=1,
         logging_first_step=True,
+        remove_unused_columns=False,
+        dataloader_num_workers=4,
+        dataloader_pin_memory=True,
+        dataloader_prefetch_factor=2,
+        dataloader_persistent_workers=True
     )
 
     class FakeLayerNorm(nn.Module):
@@ -404,16 +413,6 @@ def main():
     elif args.mode == "without_ln":
         finetune_without_ln(model, tokenized, data_collator)
         if args.save:
-            # Disable layer norm
-            with torch.no_grad():
-                for head in model.transformer.h:
-                    head.ln_1.weight *= 1e6
-                    head.ln_1.eps = 1e12
-                    head.ln_2.weight *= 1e6
-                    head.ln_2.eps = 1e12
-                model.transformer.ln_f.weight *= 1e6
-                model.transformer.ln_f.eps = 1e12
-
             model.save_pretrained("model-without-ln")
             tokenizer.save_pretrained("model-without-ln")
     else:
