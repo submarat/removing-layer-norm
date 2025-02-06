@@ -16,7 +16,7 @@ Options:
     -f FORMAT --format FORMAT       Model format: nanogpt/transformers/hooked [default: transformers]
     -d DATASET --dataset DATASET    Dataset variant: pile-10k/pile-apollo/pile-uncopyrighted [default: pile-10k]
     -n NUM --num-samples NUM        Number of samples to evaluate [default: 20000]
-    --slay-ln                       Remove LayerNorm from model [default: True]
+    --slay-ln                       Remove LayerNorm from model [default: False]
 """
 
 import os
@@ -265,7 +265,7 @@ def main():
     elif format_type == 'hooked':
         if slay_ln:
             # First load as HF model with layernorm removed
-            hf_model = load_hf_model(model_path, slay_ln=True)
+            hf_model = load_hf_model(model_path, slay_ln=slay_ln)
             model = load_nln_hf_model(model=hf_model)
         else:
             model = load_nln_hf_model(name=model_path)
