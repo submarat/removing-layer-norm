@@ -23,7 +23,7 @@ from std_dicts import std_bos_dict, std_dict
 # TODO: support multi-GPU. If multiple GPUs are available, this will select the first one.
 device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
 
-# torch.manual_seed(1337)
+torch.manual_seed(1337)
 # torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
 # torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 
@@ -121,25 +121,7 @@ def load_model():
     return model
 
 
-def finetune_with_ln(model, tokenized, data_collator):
-    training_args = TrainingArguments(
-        output_dir="./results",
-        max_steps=_MAX_STEPS,
-        per_device_train_batch_size=_BATCH_SIZE,
-        per_device_eval_batch_size=4,
-        gradient_accumulation_steps=_GRADIENT_ACCUMULATION_STEPS,
-        warmup_steps=100,
-        weight_decay=0.01,
-        logging_dir="./logs",
-        prediction_loss_only=True,
-        learning_rate=6e-4,
-        lr_scheduler_type="cosine",
-        report_to="wandb" if _USE_WANDB else "none",
-        run_name="gpt2-openwebtext-512",
-        logging_steps=1,
-        logging_first_step=True,
-    )
-
+def finetune_with_ln(model, tokenized, training_args, data_collator):
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -150,33 +132,7 @@ def finetune_with_ln(model, tokenized, data_collator):
 
     trainer.train()
 
-def finetune_without_ln(model, tokenized, data_collator):
-
-    training_args = TrainingArguments(
-        output_dir="./results",
-        # fp16=True,
-        save_safetensors=False,
-        max_steps=_MAX_STEPS,
-        per_device_train_batch_size=_BATCH_SIZE,
-        per_device_eval_batch_size=4,
-        gradient_accumulation_steps=_GRADIENT_ACCUMULATION_STEPS,
-        warmup_steps=100,
-        weight_decay=0.01,
-        max_grad_norm=1.0,
-        logging_dir="./logs",
-        prediction_loss_only=True,
-        learning_rate=6e-4,
-        lr_scheduler_type="cosine",
-        report_to="wandb" if _USE_WANDB else "none",
-        run_name="gpt2-openwebtext-512",
-        logging_steps=1,
-        logging_first_step=True,
-        remove_unused_columns=False,
-        dataloader_num_workers=4,
-        dataloader_pin_memory=True,
-        dataloader_prefetch_factor=2,
-        dataloader_persistent_workers=True
-    )
+def finetune_without_ln(model, training_args, tokenized, data_collator):
 
     class FakeLayerNorm(nn.Module):
         """LayerNorm using a fixed std instead of the actual standard deviation."""
@@ -406,13 +362,39 @@ def main():
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
         tokenizer.pad_token = tokenizer.eos_token
 
+    training_args = TrainingArguments(
+        output_dir="./results",
+        # fp16=True, # Use for mixed precision training
+        save_safetensors=False,
+        max_steps=_MAX_STEPS,
+        per_device_train_batch_size=_BATCH_SIZE,
+        per_device_eval_batch_size=4,
+        gradient_accumulation_steps=_GRADIENT_ACCUMULATION_STEPS,
+        warmup_steps=100,
+        weight_decay=0.01,
+        max_grad_norm=1.0,
+        logging_dir="./logs",
+        prediction_loss_only=True,
+        learning_rate=6e-4,
+        lr_scheduler_type="cosine",
+        report_to="wandb" if _USE_WANDB else "none",
+        run_name="gpt2-openwebtext",
+        logging_steps=1,
+        logging_first_step=True,
+        remove_unused_columns=False,
+        dataloader_num_workers=4,
+        dataloader_pin_memory=True,
+        dataloader_prefetch_factor=2,
+        dataloader_persistent_workers=True
+    )
+
     if args.mode == "with_ln":
-        finetune_with_ln(model, tokenized, data_collator)
+        finetune_with_ln(model, training_args, tokenized, data_collator)
         if args.save:
             model.save_pretrained("model-with-ln")
             tokenizer.save_pretrained("model-with-ln")
     elif args.mode == "without_ln":
-        finetune_without_ln(model, tokenized, data_collator)
+        finetune_without_ln(model, training_args, tokenized, data_collator)
         if args.save:
             model.save_pretrained("model-without-ln")
             tokenizer.save_pretrained("model-without-ln")
