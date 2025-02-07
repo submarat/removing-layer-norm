@@ -13,7 +13,7 @@ Usage:
 Options:
     -h --help                       Show this help message
     -m MODEL --model MODEL          Model checkpoint path or model id [REQUIRED]
-    -f FORMAT --format FORMAT       Model format: nanogpt/transformers/hooked [default: transformers]
+    -f FORMAT --format FORMAT       Model format: nanogpt/transformers [default: transformers]
     -d DATASET --dataset DATASET    Dataset variant: pile-10k/pile-apollo/pile-uncopyrighted [default: pile-10k]
     -n NUM --num-samples NUM        Number of samples to evaluate [default: 20000]
     --slay-ln                       Remove LayerNorm from model [default: False]
@@ -108,7 +108,7 @@ def load_nln_hf_model(name=None, model=None):
     if model is None and name is None or model is not None and name is not None:
         raise ValueError("Either name or model must be provided, but not both")
     if model is not None:
-        model = model
+        model = model.to("cpu")
     else:
         model = GPT2LMHeadModel.from_pretrained(name).to("cpu")
     
@@ -262,15 +262,10 @@ def main():
         model = load_pt_file(model_path, slay_ln=slay_ln)
     elif format_type == 'transformers':
         model = load_hf_model(model_path, slay_ln=slay_ln)
-    elif format_type == 'hooked':
-        if slay_ln:
-            # First load as HF model with layernorm removed
-            hf_model = load_hf_model(model_path, slay_ln=slay_ln)
-            model = load_nln_hf_model(model=hf_model)
-        else:
-            model = load_nln_hf_model(name=model_path)
     else:
         raise ValueError(f"Unknown format type: {format_type}")
+
+    model = load_nln_hf_model(model=hf_model)
 
     # Evaluate model
     ce_loss = evaluate_on_pile_ce(model, dataset_name, num_samples)
