@@ -21,54 +21,77 @@ from transformers import (
 from std_dicts import std_bos_dict, std_dict
 
 # TODO: support multi-GPU. If multiple GPUs are available, this will select the first one.
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
 
+torch.manual_seed(1337)
+# torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
+# torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
+
+_MAX_STEPS = 1200
+_BATCH_SIZE = 40
+_BLOCK_SIZE = 1024
+_DESIRED_BATCH_SIZE= 2**19 / _BLOCK_SIZE
+_GRADIENT_ACCUMULATION_STEPS=_DESIRED_BATCH_SIZE = int(_DESIRED_BATCH_SIZE // _BATCH_SIZE)
+_GRADIENT_ACCUMULATION_STEPS=1
+_USE_WANDB = True
 
 def prepare_dataset():
-    # Check whether the dataset is saved to disk
-    dataset = datasets.load_dataset("openwebtext", num_proc=8)
-    dataset.save_to_disk("openwebtext")
+    # First check if the tokenized dataset exists on disk
+    if os.path.exists("tokenized_dataset/train") and os.path.exists("tokenized_dataset/test"):
+        print("Loading tokenized dataset from disk...")
+        tokenized = datasets.load_from_disk("tokenized_dataset")
+    else:
+        print("Tokenized dataset not found. Processing from scratch...")
 
-    split_dataset = dataset["train"].train_test_split(
-        test_size=0.0005, seed=2357, shuffle=True
-    )
+        print("Downloading openwebtext dataset...")
+        dataset = datasets.load_dataset("openwebtext", num_proc=8)
 
-    # split_dataset["train"] = split_dataset["train"].select(range(100))
+        split_dataset = dataset["train"].train_test_split(
+            test_size=0.0005, seed=2357, shuffle=True
+        )
+
+        # split_dataset["train"] = split_dataset["train"].select(range(100))
+
+        tokenizer = AutoTokenizer.from_pretrained("gpt2")
+        tokenizer.pad_token = tokenizer.eos_token
+
+        def tokenize_function(examples):
+
+            # Add EOS token to the end of each example
+            examples["text"] = [text + tokenizer.eos_token for text in examples["text"]]
+
+            # Tokenize the examples
+            tokenized_examples = tokenizer(
+                examples["text"], truncation=False, padding=False, return_tensors=None
+            )
+
+            # Concatenate the tokenized examples
+            concatenated = []
+            for seq in tokenized_examples["input_ids"]:
+                concatenated.extend(seq)
+
+            # Chunk into 1024 token chunks, dropping any remainder
+            n_chunks = (
+                len(concatenated) // 1024
+            )  # Integer division to get complete chunks only
+            chunks = [concatenated[i * 1024 : (i + 1) * 1024] for i in range(n_chunks)]
+
+            return {"input_ids": chunks}
+
+        print("Tokenizing dataset...")
+        tokenized = split_dataset.map(
+            tokenize_function,
+            batched=True,
+            batch_size=512,
+            num_proc=32,
+            remove_columns=split_dataset["train"].column_names,  # Remove original columns
+        )
+        
+        print("Saving tokenized dataset to disk...")
+        tokenized.save_to_disk("tokenized_dataset")
 
     tokenizer = AutoTokenizer.from_pretrained("gpt2")
     tokenizer.pad_token = tokenizer.eos_token
-
-    def tokenize_function(examples):
-
-        # Add EOS token to the end of each example
-        examples["text"] = [text + tokenizer.eos_token for text in examples["text"]]
-
-        # Tokenize the examples
-        tokenized_examples = tokenizer(
-            examples["text"], truncation=False, padding=False, return_tensors=None
-        )
-
-        # Concatenate the tokenized examples
-        concatenated = []
-        for seq in tokenized_examples["input_ids"]:
-            concatenated.extend(seq)
-
-        # Chunk into 1024 token chunks, dropping any remainder
-        n_chunks = (
-            len(concatenated) // 1024
-        )  # Integer division to get complete chunks only
-        chunks = [concatenated[i * 1024 : (i + 1) * 1024] for i in range(n_chunks)]
-
-        return {"input_ids": chunks}
-
-    # Group the tokenized dataset into chunks
-    tokenized = split_dataset.map(
-        tokenize_function,
-        batched=True,
-        batch_size=512,
-        num_proc=32,
-        remove_columns=split_dataset["train"].column_names,  # Remove original columns
-    )
 
     # Use DataCollatorForLanguageModeling with mlm=False for causal language modeling (GPT-2)
     data_collator = DataCollatorForLanguageModeling(
@@ -88,33 +111,17 @@ def prepare_dataset():
 
 
 def load_model():
-    return transformers.GPT2LMHeadModel.from_pretrained(
+    model = transformers.GPT2LMHeadModel.from_pretrained(
         "gpt2",
         cache_dir="gpt2_cache",
         config=transformers.GPT2Config.from_pretrained(
             "gpt2", dropout=0.0, attn_pdrop=0.0, embd_pdrop=0.0, resid_pdrop=0.0
         ),
     )
+    return model
 
 
-def finetune_with_ln(model, tokenized, data_collator):
-    training_args = TrainingArguments(
-        output_dir="./results",
-        max_steps=1200,
-        per_device_train_batch_size=1,
-        per_device_eval_batch_size=4,
-        warmup_steps=100,
-        weight_decay=0.01,
-        logging_dir="./logs",
-        prediction_loss_only=True,
-        learning_rate=6e-4,
-        lr_scheduler_type="cosine",
-        report_to="wandb",
-        run_name="gpt2-openwebtext-512",
-        logging_steps=1,
-        logging_first_step=True,
-    )
-
+def finetune_with_ln(model, tokenized, training_args, data_collator):
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -123,30 +130,9 @@ def finetune_with_ln(model, tokenized, data_collator):
         data_collator=data_collator,
     )
 
-    wandb.init(project="hf-remove-ln")
     trainer.train()
-    wandb.finish()
 
-
-def finetune_without_ln(model, tokenized, data_collator):
-
-    training_args = TrainingArguments(
-        output_dir="./results",
-        save_safetensors=False,
-        max_steps=1200,
-        per_device_train_batch_size=1,
-        per_device_eval_batch_size=4,
-        warmup_steps=100,
-        weight_decay=0.01,
-        logging_dir="./logs",
-        prediction_loss_only=True,
-        learning_rate=6e-4,
-        lr_scheduler_type="cosine",
-        report_to="wandb",
-        run_name="gpt2-openwebtext-512",
-        logging_steps=1,
-        logging_first_step=True,
-    )
+def finetune_without_ln(model, training_args, tokenized, data_collator):
 
     class FakeLayerNorm(nn.Module):
         """LayerNorm using a fixed std instead of the actual standard deviation."""
@@ -158,9 +144,9 @@ def finetune_without_ln(model, tokenized, data_collator):
             # Flag whether the LayerNorm is enabled ("real") or disabled ("fake")
             self.mode = "real"
             self.attn_v_mode = "real"
-            self.average_std = torch.ones(ndim, device="cuda") * std_dict[layer]
+            self.average_std = torch.ones(ndim, device=device) * std_dict[layer]
             self.average_std[0] = std_bos_dict[layer]
-            self.bos_std = torch.ones(ndim, device="cuda") * std_bos_dict[layer]
+            self.bos_std = torch.ones(ndim, device=device) * std_bos_dict[layer]
 
         def forward(self, input, std_type="avg", attn_v=False):
             # We want all the enable / disable information to be in this class, but the class is re-used
@@ -313,12 +299,13 @@ def finetune_without_ln(model, tokenized, data_collator):
 
         def log(self, wandb):
             name = self.function.__name__
-            wandb.log(
-                {
-                    f"{name}.start_step": self.start_step,
-                    f"{name}.layer_gap_steps": self.layer_gap_steps,
-                }
-            )
+            if _USE_WANDB:
+                wandb.log(
+                    {
+                        f"{name}.start_step": self.start_step,
+                        f"{name}.layer_gap_steps": self.layer_gap_steps,
+                    }
+                )
 
     class LNRemoverCallback(TrainerCallback):
         def __init__(self, ln_removers):
@@ -349,9 +336,7 @@ def finetune_without_ln(model, tokenized, data_collator):
         callbacks=[LNRemoverCallback(ln_removers)],
     )
 
-    wandb.init(project="hf-remove-ln")
     trainer.train()
-    wandb.finish()
 
 def main():
     tokenized, data_collator = prepare_dataset()
@@ -366,15 +351,56 @@ def main():
         required=True,
         help="Finetuning mode",
     )
+    parser.add_argument(
+        "--save",
+        action="store_true",
+        help="Save the model to disk",
+    )
     args = parser.parse_args()
 
+    if args.save:
+        tokenizer = AutoTokenizer.from_pretrained("gpt2")
+        tokenizer.pad_token = tokenizer.eos_token
+
+    training_args = TrainingArguments(
+        output_dir="./results",
+        # fp16=True, # Use for mixed precision training
+        save_safetensors=False,
+        max_steps=_MAX_STEPS,
+        per_device_train_batch_size=_BATCH_SIZE,
+        per_device_eval_batch_size=4,
+        gradient_accumulation_steps=_GRADIENT_ACCUMULATION_STEPS,
+        warmup_steps=100,
+        weight_decay=0.01,
+        max_grad_norm=1.0,
+        logging_dir="./logs",
+        prediction_loss_only=True,
+        learning_rate=6e-4,
+        lr_scheduler_type="cosine",
+        report_to="wandb" if _USE_WANDB else "none",
+        run_name="gpt2-openwebtext",
+        logging_steps=1,
+        logging_first_step=True,
+        remove_unused_columns=False,
+        dataloader_num_workers=4,
+        dataloader_pin_memory=True,
+        dataloader_prefetch_factor=2,
+        dataloader_persistent_workers=True
+    )
+
     if args.mode == "with_ln":
-        finetune_with_ln(model, tokenized, data_collator)
+        finetune_with_ln(model, training_args, tokenized, data_collator)
+        if args.save:
+            model.save_pretrained("model-with-ln")
+            tokenizer.save_pretrained("model-with-ln")
     elif args.mode == "without_ln":
-        finetune_without_ln(model, tokenized, data_collator)
-    elif args.mode == "both":
-        finetune_with_ln(model, tokenized)
-        finetune_without_ln(model, tokenized)
+        finetune_without_ln(model, training_args, tokenized, data_collator)
+        if args.save:
+            model.save_pretrained("model-without-ln")
+            tokenizer.save_pretrained("model-without-ln")
+    else:
+        raise ValueError(f"Unknown mode {args.mode}")
+    
 
 if __name__ == "__main__":
     main()
