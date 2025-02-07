@@ -28,6 +28,7 @@ from transformers import AutoTokenizer, GPT2LMHeadModel, AutoModelForCausalLM, G
 from transformer_lens import HookedTransformer
 from std_dicts import std_dict
 
+
 def load_saved_model(model_path=None):
     if model_path is not None: 
         model = GPT2LMHeadModel.from_pretrained(model_path)
@@ -53,6 +54,7 @@ def remove_layernorm(model_hf):
         model_hf.transformer.ln_f.weight.data *= 1e6 / lnf_std
         model_hf.transformer.ln_f.eps = 1e12
     return model_hf
+
 
 def load_hf_model(model_id_or_ckpt_path, slay_ln=False):
     """ Loads huggingface transformers model and removes layernorm """
@@ -104,6 +106,7 @@ def load_pt_file(filepath, slay_ln=False):
         remove_layernorm(model_hf)
     return model_hf
 
+
 def load_nln_hf_model(name=None, model=None):
     if model is None and name is None or model is not None and name is not None:
         raise ValueError("Either name or model must be provided, but not both")
@@ -134,6 +137,7 @@ def load_nln_hf_model(name=None, model=None):
     hooked_model.cfg.normalization_type = None
     print(f"loaded {name} and removed LN hack, returning transformerlens hooked model")
     return hooked_model
+
 
 def custom_tokenizer(examples):
     tokenizer = AutoTokenizer.from_pretrained("gpt2")
@@ -265,7 +269,8 @@ def main():
     else:
         raise ValueError(f"Unknown format type: {format_type}")
 
-    model = load_nln_hf_model(model=model)
+    if slay_ln:
+        model = load_nln_hf_model(model=model)
 
     # Evaluate model
     ce_loss = evaluate_on_pile_ce(model, dataset_name, num_samples)
