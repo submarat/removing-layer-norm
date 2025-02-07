@@ -2,6 +2,7 @@
 model-with-ln/
 model-without-ln/
 tokenizer/
+tokenized_dataset/
 
 # Python
 __pycache__/
