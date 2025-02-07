@@ -265,7 +265,7 @@ def main():
     else:
         raise ValueError(f"Unknown format type: {format_type}")
 
-    model = load_nln_hf_model(model=hf_model)
+    model = load_nln_hf_model(model=model)
 
     # Evaluate model
     ce_loss = evaluate_on_pile_ce(model, dataset_name, num_samples)
