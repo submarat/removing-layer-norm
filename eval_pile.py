@@ -1,3 +1,24 @@
+"""
+Evaluate language model performance on The Pile dataset variants.
+
+Example:
+    python eval_pile.py -m ckpt1200.pt -f nanogpt -d pile-10k -n 20000
+    python eval_pile.py -m gpt2 -f transformers -d pile-apollo
+    python eval_pile.py -m results/checkpoint-1200 -f transformers --slay-ln
+
+Usage:
+    eval_pile.py -m MODEL [-f FORMAT] [-d DATASET] [-n NUM_SAMPLES] [--slay-ln]
+    eval_pile.py -h | --help
+
+Options:
+    -h --help                       Show this help message
+    -m MODEL --model MODEL          Model checkpoint path or model id [REQUIRED]
+    -f FORMAT --format FORMAT       Model format: nanogpt/transformers [default: transformers]
+    -d DATASET --dataset DATASET    Dataset variant: pile-10k/pile-apollo/pile-uncopyrighted [default: pile-10k]
+    -n NUM --num-samples NUM        Number of samples to evaluate [default: 20000]
+    --slay-ln                       Remove LayerNorm from model [default: False]
+"""
+
 import os
 
 import torch
@@ -15,7 +36,36 @@ def load_saved_model(model_path=None):
         model = AutoModelForCausalLM.from_pretrained("gpt2")  # or other OpenAI model version    
     return model
 
+
+def remove_layernorm(model_hf):
+    # Now kill the layer norm by setting layer_norm_epsilon to 1e12, and multiplied the ln scaling parameters by 1e6
+    for id, block in enumerate(model_hf.transformer.h):
+        with torch.no_grad():
+            # Get the standard deviations from the std_dict
+            ln1_std = std_dict[f'blocks.{id}.hook_resid_pre']
+            ln2_std = std_dict[f'blocks.{id}.hook_resid_mid']
+            block.ln_1.weight.data *= 1e6 / ln1_std
+            block.ln_2.weight.data *= 1e6 / ln2_std
+            block.ln_1.eps = 1e12
+            block.ln_2.eps = 1e12
+    with torch.no_grad():
+        lnf_std = std_dict[f'blocks.11.hook_resid_post']
+        model_hf.transformer.ln_f.weight.data *= 1e6 / lnf_std
+        model_hf.transformer.ln_f.eps = 1e12
+    return model_hf
+
+def load_hf_model(model_id_or_ckpt_path, slay_ln=False):
+    """ Loads huggingface transformers model and removes layernorm """
+    model_hf = GPT2LMHeadModel.from_pretrained(model_id_or_ckpt_path)
+
+    if slay_ln:
+        remove_layernorm(model_hf)
+
+    return model_hf
+
+
 def load_pt_file(filepath, slay_ln=False):
+    """ Loads nanoGPT checkpoint and removes layernorm """
     # Check if file exists
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"Model file not found at {filepath}")
@@ -51,26 +101,14 @@ def load_pt_file(filepath, slay_ln=False):
 
     # Now kill the layer norm by setting layer_norm_epsilon to 1e12, and multiplied the ln scaling parameters by 1e6
     if slay_ln:
-        for id, block in enumerate(model_hf.transformer.h):
-            with torch.no_grad():
-                # Get the standard deviations from the std_dict
-                ln1_std = std_dict[f'blocks.{id}.hook_resid_pre']
-                ln2_std = std_dict[f'blocks.{id}.hook_resid_mid']
-                block.ln_1.weight.data *= 1e6 / ln1_std
-                block.ln_2.weight.data *= 1e6 / ln2_std
-                block.ln_1.eps = 1e12
-                block.ln_2.eps = 1e12
-        with torch.no_grad():
-            lnf_std = std_dict[f'blocks.11.hook_resid_post']
-            model_hf.transformer.ln_f.weight.data *= 1e6 / lnf_std
-            model_hf.transformer.ln_f.eps = 1e12
+        remove_layernorm(model_hf)
     return model_hf
 
 def load_nln_hf_model(name=None, model=None):
     if model is None and name is None or model is not None and name is not None:
         raise ValueError("Either name or model must be provided, but not both")
     if model is not None:
-        model = model
+        model = model.to("cpu")
     else:
         model = GPT2LMHeadModel.from_pretrained(name).to("cpu")
     
@@ -209,16 +247,29 @@ def evaluate_on_pile_ce(model, dataset_name, num_samples=5000, device=None):
 
 
 def main():
-    # model_path = "./model_checkpoints"  # Path to your saved model
-    # model = load_saved_model(model_path)
-    # model = load_saved_model()
-    model = load_nln_hf_model(model=load_pt_file("ckpt1200.pt", slay_ln=True))
-    # model=load_pt_file("ckpt50.pt")
-    # model = load_nln_hf_model("apollo-research/gpt2_noLN")
-    dataset_name = "pile-10k"
-    num_samples = 20000
+    from docopt import docopt
+    args = docopt(__doc__)
+    
+    # Parse arguments
+    model_path = args['--model']
+    format_type = args['--format']
+    dataset_name = args['--dataset']
+    num_samples = int(args['--num-samples'])
+    slay_ln = args['--slay-ln']
+    
+    # Load model based on format
+    if format_type == 'nanogpt':
+        model = load_pt_file(model_path, slay_ln=slay_ln)
+    elif format_type == 'transformers':
+        model = load_hf_model(model_path, slay_ln=slay_ln)
+    else:
+        raise ValueError(f"Unknown format type: {format_type}")
+
+    model = load_nln_hf_model(model=model)
+
+    # Evaluate model
     ce_loss = evaluate_on_pile_ce(model, dataset_name, num_samples)
-    print(f"Final Cross-Entropy Loss on PILE: {ce_loss:.4f}")
+    print(f"Final Cross-Entropy Loss on {dataset_name}: {ce_loss:.4f}")
 
 if __name__ == "__main__":
     main()
