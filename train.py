@@ -33,7 +33,52 @@ torch.manual_seed(1337)
 
 _USE_WANDB = True
 
-def load_model(model_name="gpt2"):
+
+class FakeLayerNorm(nn.Module):
+    """LayerNorm using a fixed std instead of the actual standard deviation."""
+
+    def __init__(self, ndim, layer, bias):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(ndim))
+        self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None
+        # Flag whether the LayerNorm is enabled ("real") or disabled ("fake")
+        self.mode = "real"
+        self.attn_v_mode = "real"
+        self.average_std = torch.ones(ndim, device=device) * std_dict[layer]
+        self.average_std[0] = std_bos_dict[layer]
+        self.bos_std = torch.ones(ndim, device=device) * std_bos_dict[layer]
+
+    def forward(self, input, std_type="avg", attn_v=False):
+        # We want all the enable / disable information to be in this class, but the class is re-used
+        # for both the QK and V paths. Thus we add the attn_v flag to the call that is True only for
+        # the V path. Thus we get to have flags `mode` and `attn_v_mode` to enable / disable the
+        # LN for the QK and V paths separately.
+        mode = self.attn_v_mode if attn_v else self.mode
+        if mode == "fake":
+            # Which std values to use: We use (1) average std (which is actually a vector of length
+            # n_ctx for most of the time*) [a, b, b, ...] where a is the average std for position 1,
+            # and b is the average std for all other positions. We also have the option to use (2)
+            # the bos std [a, a, a, ...] for all positions, which we do if the input token is EOT.
+            # Note that we could differentiate between EOT and BOS, but I didn't need it here.
+            # *at the end (with disable_eot_std) we make the latter be like the former, and with
+            # disable_bos_std we make both vectors to be [b, b, b, ...], equivalent to scalars.
+            assert std_type in ["avg", "bos"]
+            std = self.average_std if std_type == "avg" else self.bos_std
+            return (
+                (input - input.mean(-1, keepdim=True)) / std * self.weight
+                + self.bias
+                if self.bias is not None
+                else input * self.weight
+            )
+        elif mode == "real":
+            return F.layer_norm(
+                input, self.weight.shape, self.weight, self.bias, 1e-5
+            )
+        else:
+            raise ValueError(f"Unknown mode {mode}")
+
+
+def load_model(model_name="gpt2", remove_ln=False):
     model = transformers.GPT2LMHeadModel.from_pretrained(
         model_name,
         cache_dir=f"{model_name}_cache",
@@ -41,6 +86,88 @@ def load_model(model_name="gpt2"):
             model_name, dropout=0.0, attn_pdrop=0.0, embd_pdrop=0.0, resid_pdrop=0.0
         ),
     )
+
+    def replace_layernorm_with_fake_layernorm(model):
+        n_layers = model.config.n_layer
+        n_embd = model.transformer.h[0].ln_1.weight.shape[0]
+        
+        # Replace ln_1 and ln_2 with FakeLayerNorm
+        for i in range(n_layers):
+            block = model.transformer.h[i]
+            
+            # Store original weights
+            ln_1_weight = block.ln_1.weight.clone().detach()
+            ln_1_bias = block.ln_1.bias.clone().detach() if block.ln_1.bias is not None else None
+            ln_2_weight = block.ln_2.weight.clone().detach()
+            ln_2_bias = block.ln_2.bias.clone().detach() if block.ln_2.bias is not None else None
+            
+            # Replace with FakeLayerNorm
+            block.ln_1 = FakeLayerNorm(ndim=n_embd, layer=f"blocks.{i}.hook_resid_pre", bias=block.ln_1.bias is not None)
+            block.ln_2 = FakeLayerNorm(ndim=n_embd, layer=f"blocks.{i}.hook_resid_mid", bias=block.ln_2.bias is not None)
+            
+            # Restore weights
+            block.ln_1.weight = nn.Parameter(ln_1_weight)
+            if ln_1_bias is not None:
+                block.ln_1.bias = nn.Parameter(ln_1_bias)
+            block.ln_2.weight = nn.Parameter(ln_2_weight)
+            if ln_2_bias is not None:
+                block.ln_2.bias = nn.Parameter(ln_2_bias)
+            
+            # Monkey patch the forward method of the block
+            def make_forward(old_forward):
+                def new_forward(self, x, *args, **kwargs):
+                    # Get EOT mask from the input
+                    eot_mask = kwargs.pop('eot_mask', None)
+                    
+                    # Calculate LN'd x for Q and K
+                    x_qk = self.ln_1(x)
+                    # Calculate LN'd x for V
+                    x_v = self.ln_1(x, attn_v=True)
+                    
+                    if eot_mask is not None:
+                        x_v_eot = self.ln_1(x, std_type='bos', attn_v=True)
+                        x_v[eot_mask] = x_v_eot[eot_mask]
+                        del x_v_eot
+                    
+                    # Modify attention call to use both x_qk and x_v
+                    attn_output = self.attn(x_qk, x_v)
+                    x = x + attn_output
+                    x = x + self.mlp(self.ln_2(x))
+                    return x
+                return new_forward
+            
+            block.forward = make_forward(block.forward)
+
+        # Replace ln_f with FakeLayerNorm
+        ln_f = model.transformer.ln_f
+        ln_f_weight = ln_f.weight.clone().detach()
+        ln_f_bias = ln_f.bias.clone().detach() if ln_f.bias is not None else None
+        
+        model.transformer.ln_f = FakeLayerNorm(
+            ndim=n_embd,
+            layer="blocks.11.hook_resid_post",
+            bias=ln_f.bias is not None
+        )
+        model.transformer.ln_f.weight = nn.Parameter(ln_f_weight)
+        if ln_f_bias is not None:
+            model.transformer.ln_f.bias = nn.Parameter(ln_f_bias)
+
+        # Monkey patch the transformer's forward to include eot_mask
+        def make_transformer_forward(old_forward):
+            def new_forward(self, *args, **kwargs):
+                input_ids = kwargs.get('input_ids', args[0] if args else None)
+                if input_ids is not None:
+                    kwargs['eot_mask'] = input_ids == 50256
+                return old_forward(self, *args, **kwargs)
+            return new_forward
+        
+        model.transformer.forward = make_transformer_forward(model.transformer.forward)
+
+    if remove_ln:
+        # Replace all LayerNorm instances with FakeLayerNorm
+        replace_layernorm_with_fake_layernorm(model)
+    import pdb; pdb.set_trace()
+    
     return model
 
 def finetune_with_ln(model, training_args, tokenized, data_collator, config):
@@ -55,97 +182,6 @@ def finetune_with_ln(model, training_args, tokenized, data_collator, config):
     trainer.train()
 
 def finetune_without_ln(model, training_args, tokenized, data_collator, config):
-
-    class FakeLayerNorm(nn.Module):
-        """LayerNorm using a fixed std instead of the actual standard deviation."""
-
-        def __init__(self, ndim, layer, bias):
-            super().__init__()
-            self.weight = nn.Parameter(torch.ones(ndim))
-            self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None
-            # Flag whether the LayerNorm is enabled ("real") or disabled ("fake")
-            self.mode = "real"
-            self.attn_v_mode = "real"
-            # Get the correct std dictionaries for the current model
-            model_name = model.config._name_or_path
-            model_dicts = std_dicts[model_name]
-            self.average_std = torch.ones(ndim, device=device) * model_dicts["std_dict"][layer]
-            self.average_std[0] = model_dicts["std_bos_dict"][layer]
-            self.bos_std = torch.ones(ndim, device=device) * model_dicts["std_bos_dict"][layer]
-
-        def forward(self, input, std_type="avg", attn_v=False):
-            # We want all the enable / disable information to be in this class, but the class is re-used
-            # for both the QK and V paths. Thus we add the attn_v flag to the call that is True only for
-            # the V path. Thus we get to have flags `mode` and `attn_v_mode` to enable / disable the
-            # LN for the QK and V paths separately.
-            mode = self.attn_v_mode if attn_v else self.mode
-            if mode == "fake":
-                # Which std values to use: We use (1) average std (which is actually a vector of length
-                # n_ctx for most of the time*) [a, b, b, ...] where a is the average std for position 1,
-                # and b is the average std for all other positions. We also have the option to use (2)
-                # the bos std [a, a, a, ...] for all positions, which we do if the input token is EOT.
-                # Note that we could differentiate between EOT and BOS, but I didn't need it here.
-                # *at the end (with disable_eot_std) we make the latter be like the former, and with
-                # disable_bos_std we make both vectors to be [b, b, b, ...], equivalent to scalars.
-                assert std_type in ["avg", "bos"]
-                std = self.average_std if std_type == "avg" else self.bos_std
-                return (
-                    (input - input.mean(-1, keepdim=True)) / std * self.weight
-                    + self.bias
-                    if self.bias is not None
-                    else input * self.weight
-                )
-            elif mode == "real":
-                return F.layer_norm(
-                    input, self.weight.shape, self.weight, self.bias, 1e-5
-                )
-            else:
-                raise ValueError(f"Unknown mode {mode}")
-
-    def replace_layernorm_with_fake_layernorm(model, std):
-        # Get number of layers dynamically
-        n_layers = len(model.transformer.h)
-        n_embd = model.transformer.h[0].ln_1.weight.shape[0]
-        
-        # Replace ln_1 and ln_2 with FakeLayerNorm
-        for i in range(n_layers):
-            block = model.transformer.h[i]
-            ln_1_weight = block.ln_1.weight.clone().detach()
-            ln_1_bias = block.ln_1.bias.clone().detach()
-
-            block.ln_1 = FakeLayerNorm(
-                ndim=n_embd,
-                layer=f"blocks.{i}.hook_resid_pre",
-                bias=block.ln_1.bias is not None,
-            )
-            block.ln_1.weight = nn.Parameter(ln_1_weight)
-            block.ln_1.bias = nn.Parameter(ln_1_bias)
-
-            ln_2_weight = block.ln_2.weight.clone().detach()
-            ln_2_bias = block.ln_2.bias.clone().detach()
-
-            block.ln_2 = FakeLayerNorm(
-                ndim=n_embd,
-                layer=f"blocks.{i}.hook_resid_mid",
-                bias=block.ln_2.bias is not None,
-            )
-            block.ln_2.weight = nn.Parameter(ln_2_weight)
-            block.ln_2.bias = nn.Parameter(ln_2_bias)
-
-        # Replace ln_f with FakeLayerNorm
-        ln_f = model.transformer.ln_f
-        ln_f_weight = ln_f.weight.clone().detach()
-        ln_f_bias = ln_f.bias.clone().detach()
-        model.transformer.ln_f = FakeLayerNorm(
-            ndim=n_embd,
-            layer=f"blocks.11.hook_resid_post",
-            bias=model.transformer.ln_f.bias is not None,
-        )
-        model.transformer.ln_f.weight = nn.Parameter(ln_f_weight)
-        model.transformer.ln_f.bias = nn.Parameter(ln_f_bias)
-
-    # Replace all LayerNorm instances with FakeLayerNorm
-    replace_layernorm_with_fake_layernorm(model, std=1.0)
 
     def disable_ln_2(block_index):
         model.transformer.h[block_index].ln_2.mode = "fake"
@@ -283,12 +319,8 @@ def main():
     model_name = config.model_name
     
     tokenized, data_collator = prepare_dataset(model_name)
-    model = load_model(model_name)
+    model = load_model(model_name, remove_ln=args.mode == "without_ln")
 
-    if args.save:
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        tokenizer.pad_token = tokenizer.eos_token
-    
     training_args = TrainingArguments(
         output_dir="./results",
         bf16=True,
