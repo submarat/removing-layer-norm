@@ -19,6 +19,7 @@ from transformers import (
     TrainerCallback,
     TrainingArguments,
 )
+import types
 
 from std_dicts import std_dicts
 from pydantic import BaseModel, Field
@@ -113,6 +114,47 @@ def load_model(model_name="gpt2", remove_ln=False):
             if ln_2_bias is not None:
                 block.ln_2.bias = nn.Parameter(ln_2_bias)
             
+            # Monkey patch the attention forward to handle separate ln1_qk and ln1_v
+            def make_attn_forward(old_forward):
+                def new_forward(self, x_qk, x_v):
+                    B, T, C = x_qk.size()
+
+                    # Calculate q,k from x_qk and v from x_v
+                    # Correct matrix multiplication order and reshape
+                    qkv_qk = x_qk.reshape(B*T, C) @ self.c_attn.weight[:, :2*C]  # For Q and K
+                    v = x_v.reshape(B*T, C) @ self.c_attn.weight[:, 2*C:]  # For V
+                    
+                    # Split qkv into q and k
+                    q, k = qkv_qk.split(C, dim=1)
+                    
+                    if self.c_attn.bias is not None:
+                        q = q + self.c_attn.bias[:C]
+                        k = k + self.c_attn.bias[C:2*C]
+                        v = v + self.c_attn.bias[2*C:]
+
+                    # Reshape
+                    q = q.view(B, T, self.num_heads, C//self.num_heads).transpose(1, 2)
+                    k = k.view(B, T, self.num_heads, C//self.num_heads).transpose(1, 2)
+                    v = v.view(B, T, self.num_heads, C//self.num_heads).transpose(1, 2)
+
+                    # Causal self-attention
+                    import math
+                    att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+                    att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+                    att = F.softmax(att, dim=-1)
+                    att = self.attn_dropout(att)
+                    y = att @ v
+                    y = y.transpose(1, 2).contiguous().view(B, T, C)
+
+                    # Output projection
+                    y = self.c_proj(y)
+                    y = self.resid_dropout(y)
+                    return y
+
+                return types.MethodType(new_forward, block.attn)
+
+            block.attn.forward = make_attn_forward(block.attn.forward)
+            
             # Monkey patch the forward method of the block
             def make_forward(old_forward):
                 def new_forward(self, x, *args, **kwargs):
@@ -134,7 +176,7 @@ def load_model(model_name="gpt2", remove_ln=False):
                     x = x + attn_output
                     x = x + self.mlp(self.ln_2(x))
                     return x
-                return new_forward
+                return types.MethodType(new_forward, block)
             
             block.forward = make_forward(block.forward)
 
@@ -155,18 +197,47 @@ def load_model(model_name="gpt2", remove_ln=False):
         # Monkey patch the transformer's forward to include eot_mask
         def make_transformer_forward(old_forward):
             def new_forward(self, *args, **kwargs):
+                # Extract input_ids from either kwargs or first positional arg
                 input_ids = kwargs.get('input_ids', args[0] if args else None)
+                
+                # Create eot_mask if we have input_ids
+                eot_mask = None
                 if input_ids is not None:
-                    kwargs['eot_mask'] = input_ids == 50256
-                return old_forward(self, *args, **kwargs)
-            return new_forward
+                    eot_mask = input_ids == 50256
+                
+                # If args contains positional arguments that match kwargs, we should use kwargs only
+                if args and isinstance(args[0], torch.Tensor):  # First arg is likely input_ids
+                    kwargs['input_ids'] = args[0]
+                    args = args[1:]  # Remove the first argument
+                
+                # Get embeddings
+                hidden_states = self.wte(kwargs['input_ids'])
+                position_ids = torch.arange(0, hidden_states.size(1), dtype=torch.long, device=hidden_states.device)
+                hidden_states = hidden_states + self.wpe(position_ids)
+                hidden_states = self.drop(hidden_states)
+
+                # Forward through blocks with eot_mask
+                for block in self.h:
+                    hidden_states = block(hidden_states, eot_mask=eot_mask)
+                
+                hidden_states = self.ln_f(hidden_states)
+
+                # Create BaseModelOutputWithPastAndCrossAttentions object
+                return transformers.modeling_outputs.BaseModelOutputWithPastAndCrossAttentions(
+                    last_hidden_state=hidden_states,
+                    past_key_values=None,
+                    hidden_states=None,
+                    attentions=None,
+                    cross_attentions=None,
+                )
+
+            return types.MethodType(new_forward, model.transformer)
         
         model.transformer.forward = make_transformer_forward(model.transformer.forward)
 
     if remove_ln:
         # Replace all LayerNorm instances with FakeLayerNorm
         replace_layernorm_with_fake_layernorm(model)
-    import pdb; pdb.set_trace()
     
     return model
 
