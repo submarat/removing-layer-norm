@@ -3,10 +3,13 @@ import torch
 from transformers import GPT2LMHeadModel, AutoTokenizer
 
 # Load the model and tokenizer using your Hugging Face Hub model ID
-model_id = "model-without-ln"
+model_id = "gpt2-medium"
+
+device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
 
 # Load the model
 model = GPT2LMHeadModel.from_pretrained(model_id)
+model = model.to(device)
 
 print(model)
 
@@ -28,6 +31,7 @@ tokenizer.eos_token = tokenizer.eos_token
 # Example usage
 text = "Penguin is a mamal, crocodile is a"
 inputs = tokenizer(text, return_tensors="pt")
+inputs.to(device)
 
 # Generate text using sampling
 outputs = model.generate(

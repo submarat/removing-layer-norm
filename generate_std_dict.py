@@ -17,10 +17,12 @@ from docopt import docopt
 from transformer_lens import HookedTransformer
 from prepare_dataset import prepare_dataset
 
+device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
 
 def generate_std_values(model_name, output_file):
     # Load the model using HookedTransformer
     model = HookedTransformer.from_pretrained(model_name)
+    model = model.to(device)
     model.eval()
 
     # Initialize a dictionary to store the std values
@@ -33,7 +35,7 @@ def generate_std_values(model_name, output_file):
     train_size = len(tokenized["train"])
     random_idx = random.randint(0, train_size-1)
     sample = tokenized["train"][random_idx]
-    input_ids = torch.tensor(sample["input_ids"]).unsqueeze(0) # Add batch dimension
+    input_ids = torch.tensor(sample["input_ids"], device=device).unsqueeze(0) # Add batch dimension
     
     # Run model with hooks to get intermediate activations
     def save_hook(tensor, hook):
@@ -49,7 +51,7 @@ def generate_std_values(model_name, output_file):
 
     # Create list of hooks for all residual stream points
     hooks = []
-    for block_id in range(12):  # GPT-2 has 12 layers
+    for block_id in range(24):  # GPT-2 has 12 layers
         hooks.extend([
             (f'blocks.{block_id}.hook_resid_pre', save_hook),
             (f'blocks.{block_id}.hook_resid_mid', save_hook),
