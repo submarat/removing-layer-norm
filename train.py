@@ -29,10 +29,11 @@ torch.manual_seed(1337)
 # torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 
 _MAX_STEPS = 1200
-_BATCH_SIZE = 40
+_BATCH_SIZE = 22
 _BLOCK_SIZE = 1024
 _DESIRED_BATCH_SIZE= 2**19 / _BLOCK_SIZE
 _GRADIENT_ACCUMULATION_STEPS=_DESIRED_BATCH_SIZE = int(_DESIRED_BATCH_SIZE // _BATCH_SIZE)
+_GRADIENT_ACCUMULATION_STEPS=1
 _USE_WANDB = True
 
 
@@ -104,7 +105,7 @@ def finetune_without_ln(model, training_args, tokenized, data_collator):
                 raise ValueError(f"Unknown mode {mode}")
 
     def replace_layernorm_with_fake_layernorm(model, std):
-        n_layers = 12
+        n_layers = 24
         n_embd = model.transformer.h[0].ln_1.weight.shape[0]
         # Replace ln_1 and ln_2 with FakeLayerNorm
         for i in range(n_layers):
@@ -177,19 +178,19 @@ def finetune_without_ln(model, training_args, tokenized, data_collator):
         ].ln_1.bos_std[1]
         print(f"disabled bos std for block {block_index}")
 
-    gap_ln2 = 20
-    gap_ln1qk = 20
-    gap_ln1v = 30
+    gap_ln2 = 2
+    gap_ln1qk = 2
+    gap_ln1v = 3
     gap_lnf = None
     gap_eot = 0
     gap_bos = 0
 
-    n_ln2 = 200
-    n_ln1qk = n_ln2 + 12 * gap_ln2
-    n_ln1v = n_ln1qk + 12 * gap_ln1qk
-    n_lnf = n_ln1v + 12 * gap_ln1v
-    n_eot = n_lnf + 20
-    n_bos = n_eot + 100
+    n_ln2 = 20
+    n_ln1qk = n_ln2 + 24 * gap_ln2
+    n_ln1v = n_ln1qk + 24 * gap_ln1qk
+    n_lnf = n_ln1v + 24 * gap_ln1v
+    n_eot = n_lnf + 2
+    n_bos = n_eot + 10
 
     class LNRemover:
         """
@@ -197,7 +198,7 @@ def finetune_without_ln(model, training_args, tokenized, data_collator):
         """
 
         def __init__(self, start_step, layer_gap_steps, function):
-            self.n_layers = 12
+            self.n_layers = 24
             self.start_step = start_step
             self.layer_gap_steps = layer_gap_steps
             self.function = function
@@ -265,7 +266,7 @@ def finetune_without_ln(model, training_args, tokenized, data_collator):
     trainer.train()
 
 def main():
-    model_name = "gpt2"
+    model_name = "gpt2-medium"
     tokenized, data_collator = prepare_dataset(model_name)
     model = load_model(model_name)
 
@@ -286,18 +287,18 @@ def main():
     args = parser.parse_args()
 
     if args.save:
-        tokenizer = AutoTokenizer.from_pretrained("gpt2")
+        tokenizer = AutoTokenizer.from_pretrained("gpt2-medium")
         tokenizer.pad_token = tokenizer.eos_token
 
     training_args = TrainingArguments(
         output_dir="./results",
-        # fp16=True, # Use for mixed precision training
+        bf16=True, # Use for mixed precision training
         save_safetensors=False,
         max_steps=_MAX_STEPS,
         per_device_train_batch_size=_BATCH_SIZE,
         per_device_eval_batch_size=4,
         gradient_accumulation_steps=_GRADIENT_ACCUMULATION_STEPS,
-        warmup_steps=100,
+        warmup_steps=10,
         weight_decay=0.01,
         max_grad_norm=1.0,
         logging_dir="./logs",
