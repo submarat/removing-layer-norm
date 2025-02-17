@@ -1,8 +1,13 @@
 import json
 
-with open('std_dicts.json', 'r') as f:
-    dicts = json.load(f)
-    std_dict = dicts['std_dict']
-    std_bos_dict = dicts['std_bos_dict']
+# Load standard deviations for each model
+std_dicts = {}
+for model_name in ['gpt2', 'gpt2-medium']:  # Add other model names as needed
+    try:
+        with open(f'{model_name}_std_dicts.json', 'r') as f:
+            std_dicts[model_name] = json.load(f)
+    except FileNotFoundError:
+        print(f"Warning: Could not find std_dicts file for {model_name}")
 
-__all__ = ['std_dict', 'std_bos_dict']
+
+__all__ = ['std_dicts']
