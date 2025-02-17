@@ -19,7 +19,9 @@ from transformers import (
     TrainingArguments,
 )
 
-from std_dicts import std_bos_dict, std_dict
+from std_dicts import std_dicts
+from pydantic import BaseModel, Field
+from typing import Dict, Optional, Callable, Any
 
 # TODO: support multi-GPU. If multiple GPUs are available, this will select the first one.
 device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
@@ -28,14 +30,251 @@ torch.manual_seed(1337)
 # torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
 # torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 
-_MAX_STEPS = 1200
-_BATCH_SIZE = 22
-_BLOCK_SIZE = 1024
-_DESIRED_BATCH_SIZE= 2**19 / _BLOCK_SIZE
-_GRADIENT_ACCUMULATION_STEPS=_DESIRED_BATCH_SIZE = int(_DESIRED_BATCH_SIZE // _BATCH_SIZE)
-_GRADIENT_ACCUMULATION_STEPS=1
 _USE_WANDB = True
 
+class ArchitectureConfig(BaseModel):
+    model_name: str
+    n_layers: int
+
+class TrainingConfig(BaseModel):
+    base_batch_size: int
+    max_steps: int
+    block_size: int = 1024
+    target_batch_tokens: int = Field(default=2**19, description="Desired total tokens per batch")
+    warmup_steps: int = 100
+    weight_decay: float = 0.01
+    learning_rate: float = 6e-4
+
+class LayerNormSchedule(BaseModel):
+    gaps: Dict[str, Optional[int]]
+    start_steps: Dict[str, Any]  # Mix of ints and lambdas
+
+class FinetuneConfig(BaseModel):
+    architecture: ArchitectureConfig
+    training: TrainingConfig
+    layernorm_schedule: LayerNormSchedule
+
+# Define configurations
+_FINETUNE_CONFIGS: Dict[str, FinetuneConfig] = {
+    "gpt2_standard": FinetuneConfig(
+        architecture=ArchitectureConfig(
+            model_name="gpt2",
+            n_layers=12,
+        ),
+        training=TrainingConfig(
+            base_batch_size=32,
+            max_steps=1200,
+        ),
+        layernorm_schedule=LayerNormSchedule(
+            gaps={
+                "ln2": 2,
+                "ln1qk": 2,
+                "ln1v": 3,
+                "lnf": None,
+                "eot": 0,
+                "bos": 0,
+            },
+            start_steps={
+                "ln2": 20,
+                "ln1qk": lambda n_ln2, gap_ln2: n_ln2 + 24 * gap_ln2,
+                "ln1v": lambda n_ln1qk, gap_ln1qk: n_ln1qk + 24 * gap_ln1qk,
+                "lnf": lambda n_ln1v, gap_ln1v: n_ln1v + 24 * gap_ln1v,
+                "eot": lambda n_lnf: n_lnf + 2,
+                "bos": lambda n_eot: n_eot + 10,
+            }
+        )
+    ),
+    "gpt2_medium_standard": FinetuneConfig(
+        architecture=ArchitectureConfig(
+            model_name="gpt2-medium",
+            n_layers=24,
+        ),
+        training=TrainingConfig(
+            base_batch_size=22,
+            max_steps=1200,
+            warmup_steps=10,
+        ),
+        layernorm_schedule=LayerNormSchedule(
+            gaps={
+                "ln2": 2,
+                "ln1qk": 2,
+                "ln1v": 3,
+                "lnf": None,
+                "eot": 0,
+                "bos": 0,
+            },
+            start_steps={
+                "ln2": 20,
+                "ln1qk": lambda n_ln2, gap_ln2: n_ln2 + 24 * gap_ln2,
+                "ln1v": lambda n_ln1qk, gap_ln1qk: n_ln1qk + 24 * gap_ln1qk,
+                "lnf": lambda n_ln1v, gap_ln1v: n_ln1v + 24 * gap_ln1v,
+                "eot": lambda n_lnf: n_lnf + 2,
+                "bos": lambda n_eot: n_eot + 10,
+            }
+        )
+    ),
+    "gpt2_medium_extended": FinetuneConfig(
+        architecture=ArchitectureConfig(
+            model_name="gpt2-medium",
+            n_layers=24,
+        ),
+        training=TrainingConfig(
+            base_batch_size=16,
+            max_steps=2400,
+        ),
+        layernorm_schedule=LayerNormSchedule(
+            gaps={
+                "ln2": 4,
+                "ln1qk": 4,
+                "ln1v": 6,
+                "lnf": None,
+                "eot": 0,
+                "bos": 0,
+            },
+            start_steps={
+                "ln2": 20,
+                "ln1qk": lambda n_ln2, gap_ln2: n_ln2 + 24 * gap_ln2,
+                "ln1v": lambda n_ln1qk, gap_ln1qk: n_ln1qk + 24 * gap_ln1qk,
+                "lnf": lambda n_ln1v, gap_ln1v: n_ln1v + 24 * gap_ln1v,
+                "eot": lambda n_lnf: n_lnf + 2,
+                "bos": lambda n_eot: n_eot + 10,
+            }
+        )
+    ),
+    "gpt2-large": FinetuneConfig(
+        architecture=ArchitectureConfig(
+            model_name="gpt2-large",
+            n_layers=36,
+        ),
+        training=TrainingConfig(
+            base_batch_size=16,
+            max_steps=1200,
+        ),
+        layernorm_schedule=LayerNormSchedule(
+            gaps={
+                "ln2": 2,
+                "ln1qk": 2,
+                "ln1v": 3,
+                "lnf": None,
+                "eot": 0,
+                "bos": 0,
+            },
+            start_steps={
+                "ln2": 20,
+                "ln1qk": lambda n_ln2, gap_ln2: n_ln2 + 24 * gap_ln2,
+                "ln1v": lambda n_ln1qk, gap_ln1qk: n_ln1qk + 24 * gap_ln1qk,
+                "lnf": lambda n_ln1v, gap_ln1v: n_ln1v + 24 * gap_ln1v,
+                "eot": lambda n_lnf: n_lnf + 2,
+                "bos": lambda n_eot: n_eot + 10,
+            }
+        )
+    ),
+    "gpt2-xl": FinetuneConfig(
+        architecture=ArchitectureConfig(
+            model_name="gpt2-xl",
+            n_layers=48,
+        ),
+        training=TrainingConfig(
+            base_batch_size=8,
+            max_steps=1200,
+        ),
+        layernorm_schedule=LayerNormSchedule(
+            gaps={
+                "ln2": 2,
+                "ln1qk": 2,
+                "ln1v": 3,
+                "lnf": None,
+                "eot": 0,
+                "bos": 0,
+            },
+            start_steps={
+                "ln2": 20,
+                "ln1qk": lambda n_ln2, gap_ln2: n_ln2 + 24 * gap_ln2,
+                "ln1v": lambda n_ln1qk, gap_ln1qk: n_ln1qk + 24 * gap_ln1qk,
+                "lnf": lambda n_ln1v, gap_ln1v: n_ln1v + 24 * gap_ln1v,
+                "eot": lambda n_lnf: n_lnf + 2,
+                "bos": lambda n_eot: n_eot + 10,
+            }
+        )
+    ),
+    "gpt2_test": FinetuneConfig(
+        architecture=ArchitectureConfig(
+            model_name="gpt2",  # Smallest GPT-2 model
+            n_layers=12,
+        ),
+        training=TrainingConfig(
+            base_batch_size=1,     # Minimal batch size
+            max_steps=10,          # Very few steps for testing
+            block_size=512,        # Reduced context length
+            target_batch_tokens=2**12,  # Much smaller effective batch
+            warmup_steps=2,        # Minimal warmup
+            weight_decay=0.01,
+            learning_rate=6e-4,
+        ),
+        layernorm_schedule=LayerNormSchedule(
+            gaps={
+                "ln2": 1,          # Faster schedule for testing
+                "ln1qk": 1,
+                "ln1v": 1,
+                "lnf": None,
+                "eot": 0,
+                "bos": 0,
+            },
+            start_steps={
+                "ln2": 2,          # Start changes earlier
+                "ln1qk": lambda n_ln2, gap_ln2: n_ln2 + 2 * gap_ln2,
+                "ln1v": lambda n_ln1qk, gap_ln1qk: n_ln1qk + 2 * gap_ln1qk,
+                "lnf": lambda n_ln1v, gap_ln1v: n_ln1v + 2 * gap_ln1v,
+                "eot": lambda n_lnf: n_lnf + 1,
+                "bos": lambda n_eot: n_eot + 1,
+            }
+        )
+    ),
+}
+
+def construct_training_config(config: FinetuneConfig) -> dict:
+    """Calculate derived training parameters from base config."""
+    training = config.training
+    
+    # Calculate derived parameters
+    batch_size = training.base_batch_size
+    block_size = training.block_size
+    desired_batch_size = training.target_batch_tokens / block_size
+    grad_accum_steps = int(desired_batch_size // batch_size)
+    
+    # Calculate layernorm schedule steps
+    ln_schedule = config.layernorm_schedule
+    gaps = ln_schedule.gaps
+    start_steps = ln_schedule.start_steps
+    
+    # Calculate dependent start steps in order
+    n_ln2 = start_steps["ln2"]
+    n_ln1qk = start_steps["ln1qk"](n_ln2, gaps["ln2"])
+    n_ln1v = start_steps["ln1v"](n_ln1qk, gaps["ln1qk"])
+    n_lnf = start_steps["lnf"](n_ln1v, gaps["ln1v"])
+    n_eot = start_steps["eot"](n_lnf)
+    n_bos = start_steps["bos"](n_eot)
+    
+    return {
+        "max_steps": training.max_steps,
+        "batch_size": batch_size,
+        "block_size": block_size,
+        "gradient_accumulation_steps": grad_accum_steps,
+        "warmup_steps": training.warmup_steps,
+        "weight_decay": training.weight_decay,
+        "learning_rate": training.learning_rate,
+        "ln_schedule": {
+            "gaps": gaps,
+            "start_steps": {
+                "ln2": n_ln2,
+                "ln1qk": n_ln1qk,
+                "ln1v": n_ln1v,
+                "lnf": n_lnf,
+                "eot": n_eot,
+                "bos": n_bos,
+            }
+        }
+    }
 
 def load_model(model_name="gpt2"):
     model = transformers.GPT2LMHeadModel.from_pretrained(
@@ -48,7 +287,7 @@ def load_model(model_name="gpt2"):
     return model
 
 
-def finetune_with_ln(model, training_args, tokenized, data_collator):
+def finetune_with_ln(model, training_args, tokenized, data_collator, config):
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -59,7 +298,7 @@ def finetune_with_ln(model, training_args, tokenized, data_collator):
 
     trainer.train()
 
-def finetune_without_ln(model, training_args, tokenized, data_collator):
+def finetune_without_ln(model, training_args, tokenized, data_collator, config):
 
     class FakeLayerNorm(nn.Module):
         """LayerNorm using a fixed std instead of the actual standard deviation."""
@@ -71,9 +310,12 @@ def finetune_without_ln(model, training_args, tokenized, data_collator):
             # Flag whether the LayerNorm is enabled ("real") or disabled ("fake")
             self.mode = "real"
             self.attn_v_mode = "real"
-            self.average_std = torch.ones(ndim, device=device) * std_dict[layer]
-            self.average_std[0] = std_bos_dict[layer]
-            self.bos_std = torch.ones(ndim, device=device) * std_bos_dict[layer]
+            # Get the correct std dictionaries for the current model
+            model_name = model.config._name_or_path
+            model_dicts = std_dicts[model_name]
+            self.average_std = torch.ones(ndim, device=device) * model_dicts["std_dict"][layer]
+            self.average_std[0] = model_dicts["std_bos_dict"][layer]
+            self.bos_std = torch.ones(ndim, device=device) * model_dicts["std_bos_dict"][layer]
 
         def forward(self, input, std_type="avg", attn_v=False):
             # We want all the enable / disable information to be in this class, but the class is re-used
@@ -105,8 +347,10 @@ def finetune_without_ln(model, training_args, tokenized, data_collator):
                 raise ValueError(f"Unknown mode {mode}")
 
     def replace_layernorm_with_fake_layernorm(model, std):
-        n_layers = 24
+        # Get number of layers dynamically
+        n_layers = len(model.transformer.h)
         n_embd = model.transformer.h[0].ln_1.weight.shape[0]
+        
         # Replace ln_1 and ln_2 with FakeLayerNorm
         for i in range(n_layers):
             block = model.transformer.h[i]
@@ -178,27 +422,13 @@ def finetune_without_ln(model, training_args, tokenized, data_collator):
         ].ln_1.bos_std[1]
         print(f"disabled bos std for block {block_index}")
 
-    gap_ln2 = 2
-    gap_ln1qk = 2
-    gap_ln1v = 3
-    gap_lnf = None
-    gap_eot = 0
-    gap_bos = 0
-
-    n_ln2 = 20
-    n_ln1qk = n_ln2 + 24 * gap_ln2
-    n_ln1v = n_ln1qk + 24 * gap_ln1qk
-    n_lnf = n_ln1v + 24 * gap_ln1v
-    n_eot = n_lnf + 2
-    n_bos = n_eot + 10
-
     class LNRemover:
         """
         Schedules the "removal" of LayerNorms by calling the disable function.
         """
 
         def __init__(self, start_step, layer_gap_steps, function):
-            self.n_layers = 24
+            self.n_layers = len(model.transformer.h)  # Get layers dynamically
             self.start_step = start_step
             self.layer_gap_steps = layer_gap_steps
             self.function = function
@@ -245,13 +475,18 @@ def finetune_without_ln(model, training_args, tokenized, data_collator):
                 ln_remover.log(wandb)
             return control
 
+    # Get schedule from config
+    model_name = config.architecture.model_name
+    training_config = construct_training_config(config)
+    ln_schedule = training_config["ln_schedule"]
+    
     ln_removers = [
-        LNRemover(n_ln2, gap_ln2, disable_ln_2),
-        LNRemover(n_ln1qk, gap_ln1qk, disable_ln_1qk),
-        LNRemover(n_ln1v, gap_ln1v, disable_ln_1v),
-        LNRemover(n_lnf, gap_lnf, disable_ln_f),
-        LNRemover(n_eot, gap_eot, disable_eot_std),
-        LNRemover(n_bos, gap_bos, disable_bos_std),
+        LNRemover(ln_schedule["start_steps"]["ln2"], ln_schedule["gaps"]["ln2"], disable_ln_2),
+        LNRemover(ln_schedule["start_steps"]["ln1qk"], ln_schedule["gaps"]["ln1qk"], disable_ln_1qk),
+        LNRemover(ln_schedule["start_steps"]["ln1v"], ln_schedule["gaps"]["ln1v"], disable_ln_1v),
+        LNRemover(ln_schedule["start_steps"]["lnf"], ln_schedule["gaps"]["lnf"], disable_ln_f),
+        LNRemover(ln_schedule["start_steps"]["eot"], ln_schedule["gaps"]["eot"], disable_eot_std),
+        LNRemover(ln_schedule["start_steps"]["bos"], ln_schedule["gaps"]["bos"], disable_bos_std),
     ]
 
     trainer = Trainer(
@@ -266,18 +501,20 @@ def finetune_without_ln(model, training_args, tokenized, data_collator):
     trainer.train()
 
 def main():
-    model_name = "gpt2-medium"
-    tokenized, data_collator = prepare_dataset(model_name)
-    model = load_model(model_name)
-
     parser = argparse.ArgumentParser(
         description="Finetune model with or without layer normalization"
     )
     parser.add_argument(
         "--mode",
-        choices=["with_ln", "without_ln", "both"],
+        choices=["with_ln", "without_ln"],
         required=True,
         help="Finetuning mode",
+    )
+    parser.add_argument(
+        "--config",
+        choices=list(_FINETUNE_CONFIGS.keys()),
+        required=True,
+        help="Training configuration to use",
     )
     parser.add_argument(
         "--save",
@@ -286,27 +523,37 @@ def main():
     )
     args = parser.parse_args()
 
+    # Get model name from config
+    config = _FINETUNE_CONFIGS[args.config]
+    model_name = config.architecture.model_name
+
+    tokenized, data_collator = prepare_dataset(model_name)
+    model = load_model(model_name)
+
     if args.save:
-        tokenizer = AutoTokenizer.from_pretrained("gpt2-medium")
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokenizer.pad_token = tokenizer.eos_token
 
+    # Construct training config
+    training_config = construct_training_config(config)
+    
     training_args = TrainingArguments(
         output_dir="./results",
         bf16=True, # Use for mixed precision training
         save_safetensors=False,
-        max_steps=_MAX_STEPS,
-        per_device_train_batch_size=_BATCH_SIZE,
+        max_steps=training_config["max_steps"],
+        per_device_train_batch_size=training_config["batch_size"],
         per_device_eval_batch_size=4,
-        gradient_accumulation_steps=_GRADIENT_ACCUMULATION_STEPS,
-        warmup_steps=10,
-        weight_decay=0.01,
+        gradient_accumulation_steps=training_config["gradient_accumulation_steps"],
+        warmup_steps=training_config["warmup_steps"],
+        weight_decay=training_config["weight_decay"],
+        learning_rate=training_config["learning_rate"],
         max_grad_norm=1.0,
         logging_dir="./logs",
         prediction_loss_only=True,
-        learning_rate=6e-4,
         lr_scheduler_type="cosine",
         report_to="wandb" if _USE_WANDB else "none",
-        run_name="gpt2-openwebtext",
+        run_name=f"{args.config}-{args.mode}",
         logging_steps=1,
         logging_first_step=True,
         remove_unused_columns=False,
@@ -317,12 +564,12 @@ def main():
     )
 
     if args.mode == "with_ln":
-        finetune_with_ln(model, training_args, tokenized, data_collator)
+        finetune_with_ln(model, training_args, tokenized, data_collator, config)
         if args.save:
             model.save_pretrained("model-with-ln")
             tokenizer.save_pretrained("model-with-ln")
     elif args.mode == "without_ln":
-        finetune_without_ln(model, training_args, tokenized, data_collator)
+        finetune_without_ln(model, training_args, tokenized, data_collator, config)
         if args.save:
             model.save_pretrained("model-without-ln")
             tokenizer.save_pretrained("model-without-ln")
