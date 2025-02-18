@@ -6,7 +6,7 @@ Creates strided subsequences from the original text, suitable for quick inferenc
 import argparse
 import numpy as np
 import pandas as pd
-from transformers import GPT2Tokenizer
+from transformers import GPT2TokenizerFast
 from tqdm import tqdm
 from pathlib import Path
 
@@ -29,20 +29,24 @@ def main(input_path, min_length=128, max_length=512, stride=8):
 
     # Initialize tokenizer
     print("Tokenizing texts...")
-    tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+    tokenizer = GPT2TokenizerFast.from_pretrained('gpt2')
     token_indices = [
         tokenizer.encode(text, add_special_tokens=False)
         for text in tqdm(df_pile.text.tolist())
     ]
+    print(f"Example token sequence before BOS: {token_indices[0][:10]}...")
     # Add BOS and EOS tokens
-    token_indices = [[50256] + seq + [50256] for seq in token_indices]
+    token_indices = [[50256] + seq for seq in token_indices]
+    print(f"Example token sequence after BOS: {token_indices[0][:10]}...")
     num_tokens = [len(i) for i in token_indices]
     df_pile['token_indices'] = token_indices
     df_pile['num_tokens'] = num_tokens
+    print(f"Number of sequences before length filtering: {len(df_pile)}")
     print("Tokenization complete...")
 
     # Remove entries outside of compatible sequence length
     df_pile = df_pile[(df_pile.num_tokens >=min_length) & (df_pile.num_tokens <= max_length)]
+    print(f"Number of sequences after length filtering: {len(df_pile)}")
 
     # Generate subsequences
     print("Generating subsequences...")
@@ -52,21 +56,22 @@ def main(input_path, min_length=128, max_length=512, stride=8):
         tokens = row['token_indices']
         seq_length = len(tokens)
         
-        # Generate start positions using stride
-        start_positions = range(0, seq_length - 1, stride)  # -1 to ensure room for target token
+        # Generate end positions using stride
+        end_positions = range(1, len(tokens), stride)
+
         
-        for start_pos in start_positions:
-            # Get entire sequence from start position to end (excluding last token)
-            input_seq = tokens[start_pos:-1]
+        for end_pos in end_positions:
+            # Get entire sequence to end (excluding last token)
+            input_seq = tokens[:end_pos]
             # Get the next token after the sequence as target
-            target = tokens[start_pos + 1]
+            target = tokens[end_pos]
             
             subsequences.append({
                 'original_sequence_id': idx,
                 'input_sequence': input_seq,
                 'target_token': target,
                 'sequence_length': len(input_seq),
-                'start_position': start_pos
+                'end_position': end_pos
             })
 
     # Create and save output DataFrame
