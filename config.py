@@ -191,6 +191,7 @@ def make_gpt2_large():
     batch_size = base_batch_size
     desired_batch_size = target_batch_tokens / block_size
     gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    warmup_steps = 10
     
     # Calculate layernorm schedule
     gap_ln2 = 2
@@ -253,6 +254,7 @@ def make_gpt2_xl():
     max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
+    warmup_steps = 10
     
     # Calculate derived training params
     batch_size = base_batch_size
