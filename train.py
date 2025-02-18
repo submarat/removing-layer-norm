@@ -32,11 +32,12 @@ torch.manual_seed(1337)
 
 _USE_WANDB = True
 
-class ArchitectureConfig(BaseModel):
+class FinetuneConfig(BaseModel):
+    # Architecture params
     model_name: str
     n_layers: int
-
-class TrainingConfig(BaseModel):
+    
+    # Training params
     base_batch_size: int
     max_steps: int
     block_size: int = 1024
@@ -44,237 +45,310 @@ class TrainingConfig(BaseModel):
     warmup_steps: int = 100
     weight_decay: float = 0.01
     learning_rate: float = 6e-4
+    
+    # Derived training params
+    batch_size: int
+    gradient_accumulation_steps: int
+    
+    # Layernorm schedule params
+    gap_ln2: Optional[int]
+    gap_ln1qk: Optional[int]
+    gap_ln1v: Optional[int]
+    gap_lnf: Optional[int]
+    gap_eot: Optional[int]
+    gap_bos: Optional[int]
+    start_ln2: int
+    start_ln1qk: int
+    start_ln1v: int
+    start_lnf: int
+    start_eot: int
+    start_bos: int
 
-class LayerNormSchedule(BaseModel):
-    gaps: Dict[str, Optional[int]]
-    start_steps: Dict[str, Any]  # Mix of ints and lambdas
+def make_gpt2_standard():
+    # Architecture params
+    model_name = "gpt2"
+    n_layers = 12
+    
+    # Training params
+    base_batch_size = 32
+    max_steps = 1200
+    block_size = 1024
+    target_batch_tokens = 2**19
+    
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    
+    # Calculate layernorm schedule
+    gap_ln2 = 2
+    gap_ln1qk = 2
+    gap_ln1v = 3
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+    
+    start_ln2 = 20
+    start_ln1qk = start_ln2 + n_layers * gap_ln2
+    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
+    start_lnf = start_ln1v + n_layers * gap_ln1v
+    start_eot = start_lnf + 2
+    start_bos = start_eot + 10
+    
+    return FinetuneConfig(**locals())
 
-class FinetuneConfig(BaseModel):
-    architecture: ArchitectureConfig
-    training: TrainingConfig
-    layernorm_schedule: LayerNormSchedule
 
-# Define configurations
-_FINETUNE_CONFIGS: Dict[str, FinetuneConfig] = {
-    "gpt2_standard": FinetuneConfig(
-        architecture=ArchitectureConfig(
-            model_name="gpt2",
-            n_layers=12,
-        ),
-        training=TrainingConfig(
-            base_batch_size=32,
-            max_steps=1200,
-        ),
-        layernorm_schedule=LayerNormSchedule(
-            gaps={
-                "ln2": 2,
-                "ln1qk": 2,
-                "ln1v": 3,
-                "lnf": None,
-                "eot": 0,
-                "bos": 0,
-            },
-            start_steps={
-                "ln2": 20,
-                "ln1qk": lambda n_ln2, gap_ln2: n_ln2 + 24 * gap_ln2,
-                "ln1v": lambda n_ln1qk, gap_ln1qk: n_ln1qk + 24 * gap_ln1qk,
-                "lnf": lambda n_ln1v, gap_ln1v: n_ln1v + 24 * gap_ln1v,
-                "eot": lambda n_lnf: n_lnf + 2,
-                "bos": lambda n_eot: n_eot + 10,
-            }
-        )
-    ),
-    "gpt2_medium_standard": FinetuneConfig(
-        architecture=ArchitectureConfig(
-            model_name="gpt2-medium",
-            n_layers=24,
-        ),
-        training=TrainingConfig(
-            base_batch_size=22,
-            max_steps=1200,
-            warmup_steps=10,
-        ),
-        layernorm_schedule=LayerNormSchedule(
-            gaps={
-                "ln2": 2,
-                "ln1qk": 2,
-                "ln1v": 3,
-                "lnf": None,
-                "eot": 0,
-                "bos": 0,
-            },
-            start_steps={
-                "ln2": 20,
-                "ln1qk": lambda n_ln2, gap_ln2: n_ln2 + 24 * gap_ln2,
-                "ln1v": lambda n_ln1qk, gap_ln1qk: n_ln1qk + 24 * gap_ln1qk,
-                "lnf": lambda n_ln1v, gap_ln1v: n_ln1v + 24 * gap_ln1v,
-                "eot": lambda n_lnf: n_lnf + 2,
-                "bos": lambda n_eot: n_eot + 10,
-            }
-        )
-    ),
-    "gpt2_medium_extended": FinetuneConfig(
-        architecture=ArchitectureConfig(
-            model_name="gpt2-medium",
-            n_layers=24,
-        ),
-        training=TrainingConfig(
-            base_batch_size=16,
-            max_steps=2400,
-        ),
-        layernorm_schedule=LayerNormSchedule(
-            gaps={
-                "ln2": 4,
-                "ln1qk": 4,
-                "ln1v": 6,
-                "lnf": None,
-                "eot": 0,
-                "bos": 0,
-            },
-            start_steps={
-                "ln2": 20,
-                "ln1qk": lambda n_ln2, gap_ln2: n_ln2 + 24 * gap_ln2,
-                "ln1v": lambda n_ln1qk, gap_ln1qk: n_ln1qk + 24 * gap_ln1qk,
-                "lnf": lambda n_ln1v, gap_ln1v: n_ln1v + 24 * gap_ln1v,
-                "eot": lambda n_lnf: n_lnf + 2,
-                "bos": lambda n_eot: n_eot + 10,
-            }
-        )
-    ),
-    "gpt2-large": FinetuneConfig(
-        architecture=ArchitectureConfig(
-            model_name="gpt2-large",
-            n_layers=36,
-        ),
-        training=TrainingConfig(
-            base_batch_size=16,
-            max_steps=1200,
-        ),
-        layernorm_schedule=LayerNormSchedule(
-            gaps={
-                "ln2": 2,
-                "ln1qk": 2,
-                "ln1v": 3,
-                "lnf": None,
-                "eot": 0,
-                "bos": 0,
-            },
-            start_steps={
-                "ln2": 20,
-                "ln1qk": lambda n_ln2, gap_ln2: n_ln2 + 24 * gap_ln2,
-                "ln1v": lambda n_ln1qk, gap_ln1qk: n_ln1qk + 24 * gap_ln1qk,
-                "lnf": lambda n_ln1v, gap_ln1v: n_ln1v + 24 * gap_ln1v,
-                "eot": lambda n_lnf: n_lnf + 2,
-                "bos": lambda n_eot: n_eot + 10,
-            }
-        )
-    ),
-    "gpt2-xl": FinetuneConfig(
-        architecture=ArchitectureConfig(
-            model_name="gpt2-xl",
-            n_layers=48,
-        ),
-        training=TrainingConfig(
-            base_batch_size=8,
-            max_steps=1200,
-        ),
-        layernorm_schedule=LayerNormSchedule(
-            gaps={
-                "ln2": 2,
-                "ln1qk": 2,
-                "ln1v": 3,
-                "lnf": None,
-                "eot": 0,
-                "bos": 0,
-            },
-            start_steps={
-                "ln2": 20,
-                "ln1qk": lambda n_ln2, gap_ln2: n_ln2 + 24 * gap_ln2,
-                "ln1v": lambda n_ln1qk, gap_ln1qk: n_ln1qk + 24 * gap_ln1qk,
-                "lnf": lambda n_ln1v, gap_ln1v: n_ln1v + 24 * gap_ln1v,
-                "eot": lambda n_lnf: n_lnf + 2,
-                "bos": lambda n_eot: n_eot + 10,
-            }
-        )
-    ),
-    "gpt2_test": FinetuneConfig(
-        architecture=ArchitectureConfig(
-            model_name="gpt2",  # Smallest GPT-2 model
-            n_layers=12,
-        ),
-        training=TrainingConfig(
-            base_batch_size=1,     # Minimal batch size
-            max_steps=10,          # Very few steps for testing
-            block_size=512,        # Reduced context length
-            target_batch_tokens=2**12,  # Much smaller effective batch
-            warmup_steps=2,        # Minimal warmup
-            weight_decay=0.01,
-            learning_rate=6e-4,
-        ),
-        layernorm_schedule=LayerNormSchedule(
-            gaps={
-                "ln2": 1,          # Faster schedule for testing
-                "ln1qk": 1,
-                "ln1v": 1,
-                "lnf": None,
-                "eot": 0,
-                "bos": 0,
-            },
-            start_steps={
-                "ln2": 2,          # Start changes earlier
-                "ln1qk": lambda n_ln2, gap_ln2: n_ln2 + 2 * gap_ln2,
-                "ln1v": lambda n_ln1qk, gap_ln1qk: n_ln1qk + 2 * gap_ln1qk,
-                "lnf": lambda n_ln1v, gap_ln1v: n_ln1v + 2 * gap_ln1v,
-                "eot": lambda n_lnf: n_lnf + 1,
-                "bos": lambda n_eot: n_eot + 1,
-            }
-        )
-    ),
+def make_gpt2_test():
+    # Architecture params
+    model_name = "gpt2"
+    n_layers = 12
+    
+    # Training params
+    base_batch_size = 1
+    max_steps = 10
+    block_size = 512
+    target_batch_tokens = 2**12
+    warmup_steps = 2
+    
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    
+    # Calculate layernorm schedule
+    gap_ln2 = 1
+    gap_ln1qk = 1
+    gap_ln1v = 1
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+    
+    start_ln2 = 2  # Start earlier for testing
+    start_ln1qk = start_ln2 + n_layers * gap_ln2
+    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
+    start_lnf = start_ln1v + n_layers * gap_ln1v
+    start_eot = start_lnf + 2
+    start_bos = start_eot + 1  # Shorter gap for testing
+    
+    return FinetuneConfig(**locals())
+
+
+def make_gpt2_medium_fasttune():
+    # Architecture params
+    model_name = "gpt2-medium"
+    n_layers = 24
+    
+    # Training params
+    base_batch_size = 22
+    max_steps = 1200
+    block_size = 1024
+    target_batch_tokens = 2**19
+    warmup_steps = 10  # Shorter warmup due to accelerated schedule
+    
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    
+    # Calculate layernorm schedule
+    gap_ln2 = 2
+    gap_ln1qk = 2
+    gap_ln1v = 3
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+    
+    start_ln2 = 20
+    start_ln1qk = start_ln2 + n_layers * gap_ln2
+    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
+    start_lnf = start_ln1v + n_layers * gap_ln1v
+    start_eot = start_lnf + 2
+    start_bos = start_eot + 10
+    
+    return FinetuneConfig(**locals())
+
+
+def make_gpt2_medium_test():
+    # Architecture params
+    model_name = "gpt2-medium"
+    n_layers = 24
+    
+    # Training params
+    base_batch_size = 1
+    max_steps = 10
+    block_size = 512
+    target_batch_tokens = 2**12
+    warmup_steps = 2
+    
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    
+    # Calculate layernorm schedule
+    gap_ln2 = 2
+    gap_ln1qk = 2
+    gap_ln1v = 3
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+    
+    start_ln2 = 20
+    start_ln1qk = start_ln2 + n_layers * gap_ln2
+    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
+    start_lnf = start_ln1v + n_layers * gap_ln1v
+    start_eot = start_lnf + 2
+    start_bos = start_eot + 10
+    
+    return FinetuneConfig(**locals())
+
+
+def make_gpt2_large():
+    # Architecture params
+    model_name = "gpt2-large"
+    n_layers = 36
+    
+    # Training params
+    base_batch_size = 16
+    max_steps = 1200
+    block_size = 1024
+    target_batch_tokens = 2**19
+    
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    
+    # Calculate layernorm schedule
+    gap_ln2 = 2
+    gap_ln1qk = 2
+    gap_ln1v = 3
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+    
+    start_ln2 = 20
+    start_ln1qk = start_ln2 + n_layers * gap_ln2
+    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
+    start_lnf = start_ln1v + n_layers * gap_ln1v
+    start_eot = start_lnf + 2
+    start_bos = start_eot + 10
+    
+    return FinetuneConfig(**locals())
+
+
+def make_gpt2_large_test():
+    # Architecture params
+    model_name = "gpt2-large"
+    n_layers = 36
+    
+    # Training params
+    base_batch_size = 1
+    max_steps = 10
+    block_size = 512
+    target_batch_tokens = 2**12
+    warmup_steps = 2
+    
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    
+    # Calculate layernorm schedule
+    gap_ln2 = 2
+    gap_ln1qk = 2
+    gap_ln1v = 3
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+    
+    start_ln2 = 2  # Start earlier for testing
+    start_ln1qk = start_ln2 + n_layers * gap_ln2
+    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
+    start_lnf = start_ln1v + n_layers * gap_ln1v
+    start_eot = start_lnf + 2
+    start_bos = start_eot + 1  # Shorter gap for testing
+    
+    return FinetuneConfig(**locals())
+
+def make_gpt2_xl():
+    # Architecture params
+    model_name = "gpt2-xl"
+    n_layers = 48
+    
+    # Training params
+    base_batch_size = 8
+    max_steps = 1200
+    block_size = 1024
+    target_batch_tokens = 2**19
+    
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    
+    # Calculate layernorm schedule
+    gap_ln2 = 2
+    gap_ln1qk = 2
+    gap_ln1v = 3
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+    
+    start_ln2 = 20
+    start_ln1qk = start_ln2 + n_layers * gap_ln2
+    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
+    start_lnf = start_ln1v + n_layers * gap_ln1v
+    start_eot = start_lnf + 2
+    start_bos = start_eot + 10
+    
+    return FinetuneConfig(**locals())
+
+def make_gpt2_xl_test():
+    # Architecture params
+    model_name = "gpt2-xl"
+    n_layers = 48
+    
+    # Training params - minimal values for testing
+    base_batch_size = 2
+    max_steps = 10
+    block_size = 128
+    target_batch_tokens = 2**16
+    
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    
+    # Calculate layernorm schedule - minimal gaps
+    gap_ln2 = 1
+    gap_ln1qk = 1
+    gap_ln1v = 1
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+    
+    start_ln2 = 1
+    start_ln1qk = start_ln2 + n_layers * gap_ln2
+    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
+    start_lnf = start_ln1v + n_layers * gap_ln1v
+    start_eot = start_lnf + 1
+    start_bos = start_eot + 1
+    
+    return FinetuneConfig(**locals())
+
+
+
+_FINETUNE_CONFIGS = {
+    "gpt2_standard": make_gpt2_standard(),
+    "gpt2_test": make_gpt2_test(),
+    "gpt2-medium_fasttune": make_gpt2_medium_fasttune(),
+    "gpt2-medium_test": make_gpt2_medium_test(),
+    "gpt2-large": make_gpt2_large(),
+    "gpt2-large_test": make_gpt2_large_test(),
+    "gpt2-xl": make_gpt2_xl(),
+    "gpt2-xl_test": make_gpt2_xl_test(),
 }
-
-def construct_training_config(config: FinetuneConfig) -> dict:
-    """Calculate derived training parameters from base config."""
-    training = config.training
-    
-    # Calculate derived parameters
-    batch_size = training.base_batch_size
-    block_size = training.block_size
-    desired_batch_size = training.target_batch_tokens / block_size
-    grad_accum_steps = int(desired_batch_size // batch_size)
-    
-    # Calculate layernorm schedule steps
-    ln_schedule = config.layernorm_schedule
-    gaps = ln_schedule.gaps
-    start_steps = ln_schedule.start_steps
-    
-    # Calculate dependent start steps in order
-    n_ln2 = start_steps["ln2"]
-    n_ln1qk = start_steps["ln1qk"](n_ln2, gaps["ln2"])
-    n_ln1v = start_steps["ln1v"](n_ln1qk, gaps["ln1qk"])
-    n_lnf = start_steps["lnf"](n_ln1v, gaps["ln1v"])
-    n_eot = start_steps["eot"](n_lnf)
-    n_bos = start_steps["bos"](n_eot)
-    
-    return {
-        "max_steps": training.max_steps,
-        "batch_size": batch_size,
-        "block_size": block_size,
-        "gradient_accumulation_steps": grad_accum_steps,
-        "warmup_steps": training.warmup_steps,
-        "weight_decay": training.weight_decay,
-        "learning_rate": training.learning_rate,
-        "ln_schedule": {
-            "gaps": gaps,
-            "start_steps": {
-                "ln2": n_ln2,
-                "ln1qk": n_ln1qk,
-                "ln1v": n_ln1v,
-                "lnf": n_lnf,
-                "eot": n_eot,
-                "bos": n_bos,
-            }
-        }
-    }
 
 def load_model(model_name="gpt2"):
     model = transformers.GPT2LMHeadModel.from_pretrained(
@@ -476,17 +550,16 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config):
             return control
 
     # Get schedule from config
-    model_name = config.architecture.model_name
-    training_config = construct_training_config(config)
-    ln_schedule = training_config["ln_schedule"]
+    model_name = config.model_name
+    training_config = config
     
     ln_removers = [
-        LNRemover(ln_schedule["start_steps"]["ln2"], ln_schedule["gaps"]["ln2"], disable_ln_2),
-        LNRemover(ln_schedule["start_steps"]["ln1qk"], ln_schedule["gaps"]["ln1qk"], disable_ln_1qk),
-        LNRemover(ln_schedule["start_steps"]["ln1v"], ln_schedule["gaps"]["ln1v"], disable_ln_1v),
-        LNRemover(ln_schedule["start_steps"]["lnf"], ln_schedule["gaps"]["lnf"], disable_ln_f),
-        LNRemover(ln_schedule["start_steps"]["eot"], ln_schedule["gaps"]["eot"], disable_eot_std),
-        LNRemover(ln_schedule["start_steps"]["bos"], ln_schedule["gaps"]["bos"], disable_bos_std),
+        LNRemover(training_config.start_ln2, training_config.gap_ln2, disable_ln_2),
+        LNRemover(training_config.start_ln1qk, training_config.gap_ln1qk, disable_ln_1qk),
+        LNRemover(training_config.start_ln1v, training_config.gap_ln1v, disable_ln_1v),
+        LNRemover(training_config.start_lnf, training_config.gap_lnf, disable_ln_f),
+        LNRemover(training_config.start_eot, training_config.gap_eot, disable_eot_std),
+        LNRemover(training_config.start_bos, training_config.gap_bos, disable_bos_std),
     ]
 
     trainer = Trainer(
@@ -525,29 +598,26 @@ def main():
 
     # Get model name from config
     config = _FINETUNE_CONFIGS[args.config]
-    model_name = config.architecture.model_name
-
+    model_name = config.model_name
+    
     tokenized, data_collator = prepare_dataset(model_name)
     model = load_model(model_name)
 
     if args.save:
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokenizer.pad_token = tokenizer.eos_token
-
-    # Construct training config
-    training_config = construct_training_config(config)
     
     training_args = TrainingArguments(
         output_dir="./results",
-        bf16=True, # Use for mixed precision training
+        bf16=True,
         save_safetensors=False,
-        max_steps=training_config["max_steps"],
-        per_device_train_batch_size=training_config["batch_size"],
+        max_steps=config.max_steps,
+        per_device_train_batch_size=config.batch_size,
         per_device_eval_batch_size=4,
-        gradient_accumulation_steps=training_config["gradient_accumulation_steps"],
-        warmup_steps=training_config["warmup_steps"],
-        weight_decay=training_config["weight_decay"],
-        learning_rate=training_config["learning_rate"],
+        gradient_accumulation_steps=config.gradient_accumulation_steps,
+        warmup_steps=config.warmup_steps,
+        weight_decay=config.weight_decay,
+        learning_rate=config.learning_rate,
         max_grad_norm=1.0,
         logging_dir="./logs",
         prediction_loss_only=True,
