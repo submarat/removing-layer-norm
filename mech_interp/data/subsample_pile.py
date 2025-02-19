@@ -11,7 +11,7 @@ from tqdm import tqdm
 from pathlib import Path
 
 
-def main(input_path, min_length=128, max_length=512, stride=8):
+def main(input_path, min_length=256, max_length=512, stride=16):
     """Generate subsampled sequences from Pile dataset."""
     output_path = f'pile_sub_l{min_length}-{max_length}_s{stride}.parquet'
 
@@ -34,19 +34,15 @@ def main(input_path, min_length=128, max_length=512, stride=8):
         tokenizer.encode(text, add_special_tokens=False)
         for text in tqdm(df_pile.text.tolist())
     ]
-    print(f"Example token sequence before BOS: {token_indices[0][:10]}...")
     # Add BOS and EOS tokens
     token_indices = [[50256] + seq for seq in token_indices]
-    print(f"Example token sequence after BOS: {token_indices[0][:10]}...")
     num_tokens = [len(i) for i in token_indices]
     df_pile['token_indices'] = token_indices
     df_pile['num_tokens'] = num_tokens
-    print(f"Number of sequences before length filtering: {len(df_pile)}")
     print("Tokenization complete...")
 
     # Remove entries outside of compatible sequence length
     df_pile = df_pile[(df_pile.num_tokens >=min_length) & (df_pile.num_tokens <= max_length)]
-    print(f"Number of sequences after length filtering: {len(df_pile)}")
 
     # Generate subsequences
     print("Generating subsequences...")
@@ -90,11 +86,11 @@ def parse_arguments():
     
     parser.add_argument('--input_path', type=str, default='raw_pile10k.parquet',
                         help='Path to the input Parquet file containing the Pile dataset')
-    parser.add_argument('--min_length', type=int, default=128,
+    parser.add_argument('--min_length', type=int, default=256,
                         help='Minimum sequence length (default: 128)')
     parser.add_argument('--max_length', type=int, default=512,
                         help='Maximum sequence length (default: 512)')
-    parser.add_argument('--stride', type=int, default=8,
+    parser.add_argument('--stride', type=int, default=16,
                         help='Stride length for generating subsequences (default: 8)')
     
     return parser.parse_args()
