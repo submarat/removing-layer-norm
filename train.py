@@ -9,6 +9,7 @@ import torch.nn.functional as F
 import tqdm
 import transformers
 import wandb
+from config import FINETUNE_CONFIGS
 from prepare_dataset import prepare_dataset
 from torch.utils.data import Dataset
 from transformers import (
@@ -19,7 +20,9 @@ from transformers import (
     TrainingArguments,
 )
 
-from std_dicts import std_bos_dict, std_dict
+from std_dicts import std_dicts
+from pydantic import BaseModel, Field
+from typing import Dict, Optional, Callable, Any
 
 # TODO: support multi-GPU. If multiple GPUs are available, this will select the first one.
 device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
@@ -28,13 +31,7 @@ torch.manual_seed(1337)
 # torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
 # torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 
-_MAX_STEPS = 1200
-_BATCH_SIZE = 40
-_BLOCK_SIZE = 1024
-_DESIRED_BATCH_SIZE= 2**19 / _BLOCK_SIZE
-_GRADIENT_ACCUMULATION_STEPS=_DESIRED_BATCH_SIZE = int(_DESIRED_BATCH_SIZE // _BATCH_SIZE)
 _USE_WANDB = True
-
 
 def load_model(model_name="gpt2"):
     model = transformers.GPT2LMHeadModel.from_pretrained(
@@ -46,8 +43,7 @@ def load_model(model_name="gpt2"):
     )
     return model
 
-
-def finetune_with_ln(model, training_args, tokenized, data_collator):
+def finetune_with_ln(model, training_args, tokenized, data_collator, config):
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -58,7 +54,7 @@ def finetune_with_ln(model, training_args, tokenized, data_collator):
 
     trainer.train()
 
-def finetune_without_ln(model, training_args, tokenized, data_collator):
+def finetune_without_ln(model, training_args, tokenized, data_collator, config):
 
     class FakeLayerNorm(nn.Module):
         """LayerNorm using a fixed std instead of the actual standard deviation."""
@@ -70,9 +66,12 @@ def finetune_without_ln(model, training_args, tokenized, data_collator):
             # Flag whether the LayerNorm is enabled ("real") or disabled ("fake")
             self.mode = "real"
             self.attn_v_mode = "real"
-            self.average_std = torch.ones(ndim, device=device) * std_dict[layer]
-            self.average_std[0] = std_bos_dict[layer]
-            self.bos_std = torch.ones(ndim, device=device) * std_bos_dict[layer]
+            # Get the correct std dictionaries for the current model
+            model_name = model.config._name_or_path
+            model_dicts = std_dicts[model_name]
+            self.average_std = torch.ones(ndim, device=device) * model_dicts["std_dict"][layer]
+            self.average_std[0] = model_dicts["std_bos_dict"][layer]
+            self.bos_std = torch.ones(ndim, device=device) * model_dicts["std_bos_dict"][layer]
 
         def forward(self, input, std_type="avg", attn_v=False):
             # We want all the enable / disable information to be in this class, but the class is re-used
@@ -104,8 +103,10 @@ def finetune_without_ln(model, training_args, tokenized, data_collator):
                 raise ValueError(f"Unknown mode {mode}")
 
     def replace_layernorm_with_fake_layernorm(model, std):
-        n_layers = 12
+        # Get number of layers dynamically
+        n_layers = len(model.transformer.h)
         n_embd = model.transformer.h[0].ln_1.weight.shape[0]
+        
         # Replace ln_1 and ln_2 with FakeLayerNorm
         for i in range(n_layers):
             block = model.transformer.h[i]
@@ -177,27 +178,13 @@ def finetune_without_ln(model, training_args, tokenized, data_collator):
         ].ln_1.bos_std[1]
         print(f"disabled bos std for block {block_index}")
 
-    gap_ln2 = 20
-    gap_ln1qk = 20
-    gap_ln1v = 30
-    gap_lnf = None
-    gap_eot = 0
-    gap_bos = 0
-
-    n_ln2 = 200
-    n_ln1qk = n_ln2 + 12 * gap_ln2
-    n_ln1v = n_ln1qk + 12 * gap_ln1qk
-    n_lnf = n_ln1v + 12 * gap_ln1v
-    n_eot = n_lnf + 20
-    n_bos = n_eot + 100
-
     class LNRemover:
         """
         Schedules the "removal" of LayerNorms by calling the disable function.
         """
 
         def __init__(self, start_step, layer_gap_steps, function):
-            self.n_layers = 12
+            self.n_layers = len(model.transformer.h)  # Get layers dynamically
             self.start_step = start_step
             self.layer_gap_steps = layer_gap_steps
             self.function = function
@@ -244,13 +231,17 @@ def finetune_without_ln(model, training_args, tokenized, data_collator):
                 ln_remover.log(wandb)
             return control
 
+    # Get schedule from config
+    model_name = config.model_name
+    training_config = config
+    
     ln_removers = [
-        LNRemover(n_ln2, gap_ln2, disable_ln_2),
-        LNRemover(n_ln1qk, gap_ln1qk, disable_ln_1qk),
-        LNRemover(n_ln1v, gap_ln1v, disable_ln_1v),
-        LNRemover(n_lnf, gap_lnf, disable_ln_f),
-        LNRemover(n_eot, gap_eot, disable_eot_std),
-        LNRemover(n_bos, gap_bos, disable_bos_std),
+        LNRemover(training_config.start_ln2, training_config.gap_ln2, disable_ln_2),
+        LNRemover(training_config.start_ln1qk, training_config.gap_ln1qk, disable_ln_1qk),
+        LNRemover(training_config.start_ln1v, training_config.gap_ln1v, disable_ln_1v),
+        LNRemover(training_config.start_lnf, training_config.gap_lnf, disable_ln_f),
+        LNRemover(training_config.start_eot, training_config.gap_eot, disable_eot_std),
+        LNRemover(training_config.start_bos, training_config.gap_bos, disable_bos_std),
     ]
 
     trainer = Trainer(
@@ -265,18 +256,20 @@ def finetune_without_ln(model, training_args, tokenized, data_collator):
     trainer.train()
 
 def main():
-    model_name = "gpt2"
-    tokenized, data_collator = prepare_dataset(model_name)
-    model = load_model(model_name)
-
     parser = argparse.ArgumentParser(
         description="Finetune model with or without layer normalization"
     )
     parser.add_argument(
         "--mode",
-        choices=["with_ln", "without_ln", "both"],
+        choices=["with_ln", "without_ln"],
         required=True,
         help="Finetuning mode",
+    )
+    parser.add_argument(
+        "--config",
+        choices=list(FINETUNE_CONFIGS.keys()),
+        required=True,
+        help="Training configuration to use",
     )
     parser.add_argument(
         "--save",
@@ -285,43 +278,52 @@ def main():
     )
     args = parser.parse_args()
 
-    if args.save:
-        tokenizer = AutoTokenizer.from_pretrained("gpt2")
-        tokenizer.pad_token = tokenizer.eos_token
+    # Get model name from config
+    config = FINETUNE_CONFIGS[args.config]
+    model_name = config.model_name
+    
+    tokenized, data_collator = prepare_dataset(model_name)
+    model = load_model(model_name)
 
+    if args.save:
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokenizer.pad_token = tokenizer.eos_token
+    
     training_args = TrainingArguments(
         output_dir="./results",
-        # fp16=True, # Use for mixed precision training
+        bf16=True,
         save_safetensors=False,
-        max_steps=_MAX_STEPS,
-        per_device_train_batch_size=_BATCH_SIZE,
+        max_steps=config.max_steps,
+        per_device_train_batch_size=config.batch_size,
         per_device_eval_batch_size=4,
-        gradient_accumulation_steps=_GRADIENT_ACCUMULATION_STEPS,
-        warmup_steps=100,
-        weight_decay=0.01,
+        gradient_accumulation_steps=config.gradient_accumulation_steps,
+        warmup_steps=config.warmup_steps,
+        weight_decay=config.weight_decay,
+        learning_rate=config.learning_rate,
         max_grad_norm=1.0,
         logging_dir="./logs",
         prediction_loss_only=True,
-        learning_rate=6e-4,
         lr_scheduler_type="cosine",
         report_to="wandb" if _USE_WANDB else "none",
-        run_name="gpt2-openwebtext",
+        run_name=f"{args.config}-{args.mode}",
         logging_steps=1,
         logging_first_step=True,
         remove_unused_columns=False,
         dataloader_num_workers=4,
         dataloader_pin_memory=True,
         dataloader_prefetch_factor=2,
-        dataloader_persistent_workers=True
+        dataloader_persistent_workers=True,
+        save_steps=config.save_steps,
+        save_total_limit=5,
     )
 
     if args.mode == "with_ln":
-        finetune_with_ln(model, training_args, tokenized, data_collator)
+        finetune_with_ln(model, training_args, tokenized, data_collator, config)
         if args.save:
             model.save_pretrained("model-with-ln")
             tokenizer.save_pretrained("model-with-ln")
     elif args.mode == "without_ln":
-        finetune_without_ln(model, training_args, tokenized, data_collator)
+        finetune_without_ln(model, training_args, tokenized, data_collator, config)
         if args.save:
             model.save_pretrained("model-without-ln")
             tokenizer.save_pretrained("model-without-ln")
