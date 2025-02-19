@@ -3,7 +3,7 @@ import torch as t
 from transformers import GPT2LMHeadModel, GPT2Tokenizer
 from transformer_lens import HookedTransformer
 from transformers.models.gpt2.tokenization_gpt2_fast import GPT2TokenizerFast
-
+from huggingface_hub import snapshot_download
 
 device = t.device("mps" if t.backends.mps.is_available() else "cuda" if t.cuda.is_available() else "cpu")
 
