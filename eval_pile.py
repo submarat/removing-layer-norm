@@ -7,7 +7,7 @@ Example:
     python eval_pile.py -m results/checkpoint-1200 -f transformers --slay-ln
 
 Usage:
-    eval_pile.py -m MODEL [-f FORMAT] [-d DATASET] [-n NUM_SAMPLES] [--slay-ln]
+    eval_pile.py -m MODEL [-f FORMAT] [-d DATASET] [-n NUM_SAMPLES] [--slay-ln] [--cuda-id ID]
     eval_pile.py -h | --help
 
 Options:
@@ -17,6 +17,7 @@ Options:
     -d DATASET --dataset DATASET    Dataset variant: pile-10k/pile-apollo/pile-uncopyrighted [default: pile-10k]
     -n NUM --num-samples NUM        Number of samples to evaluate [default: 20000]
     --slay-ln                       Remove LayerNorm from model [default: False]
+    --cuda-id ID                    Cuda device id [default: 0]
 """
 
 import os
@@ -56,24 +57,22 @@ def remove_layernorm(model_hf):
     return model_hf
 
 
-def load_hf_model(model_id_or_ckpt_path, slay_ln=False):
+def load_hf_model(model_id_or_ckpt_path, slay_ln=False, device=None):
     """ Loads huggingface transformers model and removes layernorm """
     model_hf = GPT2LMHeadModel.from_pretrained(model_id_or_ckpt_path)
-
+    model_hf.to(device)
     if slay_ln:
         remove_layernorm(model_hf)
 
     return model_hf
 
 
-def load_pt_file(filepath, slay_ln=False):
+def load_pt_file(filepath, slay_ln=False, device=None):
     """ Loads nanoGPT checkpoint and removes layernorm """
     # Check if file exists
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"Model file not found at {filepath}")
     
-    # Load model with appropriate device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     checkpoint = torch.load(filepath, map_location=device)
     sd = checkpoint["model"]
     transposed = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
@@ -164,11 +163,8 @@ def custom_tokenizer(examples):
     return {"input_ids": chunks}
 
 
-def evaluate_on_pile_ce(model, dataset_name, num_samples=5000, device=None):
-    print(f"Evaluating on {dataset_name}, using {num_samples} samles")
-    if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
+def evaluate_on_pile_ce(model, dataset_name, num_samples=5000, device=None, exclude_owt=True):
+    print(f"Evaluating on {dataset_name}, using {num_samples} samles")    
     if dataset_name == "pile-apollo":
         dataset = load_dataset("apollo-research/monology-pile-uncopyrighted-tokenizer-gpt2", streaming=True, split="train")
         dataset = dataset.shuffle(seed=42)
@@ -200,12 +196,15 @@ def evaluate_on_pile_ce(model, dataset_name, num_samples=5000, device=None):
         while True:
             try:
                 batch = []
-                # for _ in range(batch_size):
-                #     batch.append(next(dataset_iterator)["text"])
                 while len(batch) < batch_size:
                     example = next(dataset_iterator)
-                    # Filter out OpenWebText2
-                    if 1: # example.get('meta', {}).get('pile_set_name') != "OpenWebText2":
+                    if exclude_owt:
+                        # Filter out OpenWebText2
+                        if example.get('meta', {}).get('pile_set_name') != "OpenWebText2":
+                            batch.append(example["text"])
+                        else:
+                            continue
+                    else:
                         batch.append(example["text"])
                 processed = custom_tokenizer({"text": batch})
                 print(len(processed["input_ids"][0]))
@@ -260,20 +259,28 @@ def main():
     dataset_name = args['--dataset']
     num_samples = int(args['--num-samples'])
     slay_ln = args['--slay-ln']
+    device_int = int(args['--cuda-id'])
+    exclude_owt = True
     
+    
+    # Load model with appropriate device
+    device = torch.device(f"cuda:{device_int}" if torch.cuda.is_available() else "cpu")
     # Load model based on format
     if format_type == 'nanogpt':
-        model = load_pt_file(model_path, slay_ln=slay_ln)
+        model = load_pt_file(model_path, slay_ln=slay_ln, device=device)
     elif format_type == 'transformers':
-        model = load_hf_model(model_path, slay_ln=slay_ln)
+        # Stefans nln hf model needs to be loaded without the trick and then removed.
+        # not sure how to address this best. 
+        # @Marat: I think there should be 3 cases: nanogpt, transformers, hf.
+        model = load_hf_model(model_path, slay_ln=False, device=device)
     else:
         raise ValueError(f"Unknown format type: {format_type}")
 
     if slay_ln:
         model = load_nln_hf_model(model=model)
-
+    model.to(device)
     # Evaluate model
-    ce_loss = evaluate_on_pile_ce(model, dataset_name, num_samples)
+    ce_loss = evaluate_on_pile_ce(model, dataset_name, num_samples, exclude_owt=exclude_owt, device=device)
     print(f"Final Cross-Entropy Loss on {dataset_name}: {ce_loss:.4f}")
 
 if __name__ == "__main__":
