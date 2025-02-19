@@ -1,18 +1,36 @@
+"""
+Examples:
+    python upload_to_hf.py -c results/checkpoint-300 -t submarat/gpt2-medium-without-ln
+
+Usage:
+    upload_to_hf.py -c CKPT -t TARGET -m MODEL
+
+Options:
+    -h --help                      Show this help message
+    -c CKPT --ckpt CKPT            Model checkpoint path [REQUIRED]
+    -t TARGET --target TARGET      Model huggingface repo [REQUIRED]
+    -m MODEL --model MODEL         Model name [REQUIRED]
+"""
+
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from huggingface_hub import HfApi, login
 from huggingface_hub.utils import RepositoryNotFoundError
-from std_dicts import std_dict
+from std_dicts import std_dicts
 import os
 import json
 
-def remove_ln(model_hf):
+def remove_ln(model_hf, model_name: str):
     """Remove layer normalization by scaling weights and setting high epsilon values."""
     epsilon_value = 1e12
+
+    std_dict = std_dicts[model_name]['std_dict']
     
     # Store the epsilon values in the config
     if not hasattr(model_hf.config, 'layer_norm_eps_values'):
         model_hf.config.layer_norm_eps_values = {}
+
+    n_layers = len(model_hf.transformer.h)
     
     for id, block in enumerate(model_hf.transformer.h):
         with torch.no_grad():
@@ -29,7 +47,7 @@ def remove_ln(model_hf):
             model_hf.config.layer_norm_eps_values[f'block_{id}_ln2'] = epsilon_value
     
     with torch.no_grad():
-        lnf_std = std_dict[f'blocks.11.hook_resid_post']
+        lnf_std = std_dict[f'blocks.{n_layers-1}.hook_resid_post']
         model_hf.transformer.ln_f.weight.data *= 1e6 / lnf_std
         model_hf.transformer.ln_f.eps = epsilon_value
         model_hf.config.layer_norm_eps_values['final_ln'] = epsilon_value
@@ -60,12 +78,20 @@ def verify_ln_eps(model):
     return all_correct
 
 def main():
+    from docopt import docopt
+    args = docopt(__doc__)
+    
+    # Parse arguments
+    ckpt = args['--ckpt']
+    model_name = args['--model']
+    target = args['--target']
+    
     # 1. Login to Hugging Face
     login()
 
     # 2. Set the model names
-    source_model_name = "results/checkpoint-1200"
-    target_model_name = "submarat/model-without-ln-hack"
+    source_model_name = ckpt
+    target_model_name = target
     temp_dir = "./model-without-ln"
 
     # 3. Load and modify the model
@@ -73,7 +99,7 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(source_model_name)
     
     print("Applying remove_ln transformation...")
-    modified_model = remove_ln(model)
+    modified_model = remove_ln(model, model_name)
     
     # Verify epsilon values before saving
     print("\nVerifying epsilon values before saving...")
