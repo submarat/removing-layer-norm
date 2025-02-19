@@ -115,7 +115,7 @@ def make_gpt2_medium_fasttune():
     
     # Training params
     base_batch_size = 22
-    max_steps = 1200
+    max_steps = 500
     block_size = 1024
     target_batch_tokens = 2**19
     warmup_steps = 10  # Shorter warmup due to accelerated schedule
@@ -194,8 +194,8 @@ def make_gpt2_large():
     warmup_steps = 10
     
     # Calculate layernorm schedule
-    gap_ln2 = 2
-    gap_ln1qk = 2
+    gap_ln2 = 4
+    gap_ln1qk = 4
     gap_ln1v = 3
     gap_lnf = None
     gap_eot = 0
