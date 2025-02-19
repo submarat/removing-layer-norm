@@ -26,34 +26,17 @@ from datasets import load_dataset
 from tqdm import tqdm
 from transformers import AutoTokenizer, GPT2LMHeadModel, AutoModelForCausalLM, GPT2Config
 from transformer_lens import HookedTransformer
-from std_dicts import std_dict
+from std_dicts import std_dicts
+from utils import remove_layernorm
 
 
-def load_saved_model(model_path=None):
+def load_saved_model(model_name: str, model_path=None):
     if model_path is not None: 
         model = GPT2LMHeadModel.from_pretrained(model_path)
     else:
         # Load OpenAI's GPT model - use specific model name like "gpt2-large" or "gpt2-xl"
-        model = AutoModelForCausalLM.from_pretrained("gpt2")  # or other OpenAI model version    
+        model = AutoModelForCausalLM.from_pretrained(model_name)  # or other OpenAI model version    
     return model
-
-
-def remove_layernorm(model_hf):
-    # Now kill the layer norm by setting layer_norm_epsilon to 1e12, and multiplied the ln scaling parameters by 1e6
-    for id, block in enumerate(model_hf.transformer.h):
-        with torch.no_grad():
-            # Get the standard deviations from the std_dict
-            ln1_std = std_dict[f'blocks.{id}.hook_resid_pre']
-            ln2_std = std_dict[f'blocks.{id}.hook_resid_mid']
-            block.ln_1.weight.data *= 1e6 / ln1_std
-            block.ln_2.weight.data *= 1e6 / ln2_std
-            block.ln_1.eps = 1e12
-            block.ln_2.eps = 1e12
-    with torch.no_grad():
-        lnf_std = std_dict[f'blocks.11.hook_resid_post']
-        model_hf.transformer.ln_f.weight.data *= 1e6 / lnf_std
-        model_hf.transformer.ln_f.eps = 1e12
-    return model_hf
 
 
 def load_hf_model(model_id_or_ckpt_path, slay_ln=False):

@@ -284,7 +284,7 @@ def make_gpt2_xl_test():
     n_layers = 48
     
     # Training params - minimal values for testing
-    base_batch_size = 2
+    base_batch_size = 1
     max_steps = 10
     block_size = 128
     target_batch_tokens = 2**16
