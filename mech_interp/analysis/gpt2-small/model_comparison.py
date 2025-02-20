@@ -7,10 +7,10 @@ import matplotlib.pylab as plt
 import seaborn as sns
 
 # %%
-df = pd.read_parquet('../data/pile_sub_l256-512_s16.parquet')
-baseline = np.load('../experiments/softmax_probabilities_baseline.npy')
-finetuned = np.load('../experiments/softmax_probabilities_finetuned.npy')
-noLN = np.load('../experiments/softmax_probabilities_nln.npy')
+df = pd.read_parquet('../../data/pile_sub_l256-512_s16.parquet')
+baseline = np.load('../../experiments/softmax_probabilities_baseline.npy')
+finetuned = np.load('../../experiments/softmax_probabilities_finetuned.npy')
+noLN = np.load('../../experiments/softmax_probabilities_nln.npy')
 
 # %%
 # Ensure each model's probabilities sum to one for each sample
@@ -220,11 +220,11 @@ plt.style.use('seaborn-v0_8-colorblind')
 plt.figure(figsize=(10, 6))
 
 plt.hist(js_baseline_finetuned, bins=50, alpha=0.5,
-         label=f'Baseline vs Finetuned (avg={js_baseline_finetuned.mean():.2f} ± {js_baseline_finetuned.std():.2f})')
+         label=f'Baseline vs Finetuned (avg={js_baseline_finetuned.mean():.3f} ± {js_baseline_finetuned.std():.3f})')
 plt.hist(js_baseline_noln, bins=50, alpha=0.5,
-         label=f'Baseline vs NoLN (avg={js_baseline_noln.mean():.2f} ± {js_baseline_noln.std():.2f})')
+         label=f'Baseline vs NoLN (avg={js_baseline_noln.mean():.3f} ± {js_baseline_noln.std():.3f})')
 plt.hist(js_finetuned_noln, bins=50, alpha=0.5,
-         label=f'Finetuned vs NoLN (avg={js_finetuned_noln.mean():.2f} ± {js_finetuned_noln.std():.2f})')
+         label=f'Finetuned vs NoLN (avg={js_finetuned_noln.mean():.3f} ± {js_finetuned_noln.std():.3f})')
 
 plt.yscale('log')
 plt.xlabel('Jensen-Shannon Divergence')
@@ -234,6 +234,38 @@ plt.legend()
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
 plt.savefig('js_per_model.png', dpi=300)
+plt.show()
+
+# %%
+# Plot by sequence length bins
+plt.style.use('seaborn-v0_8-colorblind')
+fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+axes = axes.ravel()
+
+bins = [(0, 50), (50, 100), (100, 200), (200, 300), (300, 400), (400, 500)]
+
+for i, (start, end) in enumerate(bins):
+    mask = (df.sequence_length >= start) & (df.sequence_length < end)
+    
+    if not mask.any():
+        continue
+        
+    axes[i].hist(js_baseline_finetuned[mask], bins=50, alpha=0.5,
+                 label=f'Baseline vs Finetuned (avg={js_baseline_finetuned[mask].mean():.3f} ± {js_baseline_finetuned[mask].std():.3f})')
+    axes[i].hist(js_baseline_noln[mask], bins=50, alpha=0.5,
+                 label=f'Baseline vs NoLN (avg={js_baseline_noln[mask].mean():.3f} ± {js_baseline_noln[mask].std():.3f})')
+    axes[i].hist(js_finetuned_noln[mask], bins=50, alpha=0.5,
+                 label=f'Finetuned vs NoLN (avg={js_finetuned_noln[mask].mean():.3f} ± {js_finetuned_noln[mask].std():.3f})')
+    
+    axes[i].set_yscale('log')
+    axes[i].set_xlabel('JS Divergence')
+    axes[i].set_ylabel('Count (log scale)')
+    axes[i].set_title(f'Sequence Length {start}-{end}\n(n={mask.sum():,})')
+    axes[i].legend()
+    axes[i].grid(True, alpha=0.3)
+
+plt.tight_layout()
+plt.savefig('js_per_model_by_seqlen.png', dpi=300)
 plt.show()
 
 # %%
@@ -263,25 +295,71 @@ plt.savefig('js_delta_ce_corr.png', dpi=300)
 plt.show()
 
 # %%
-raw_df = pd.read_parquet('../data/raw_pile10k.parquet')
-n_examples = 300
-top_fn_idx = set(np.argsort(js_finetuned_noln)[-n_examples:])
+def compute_calibration_error(probs, targets, n_bins=10):
+    """
+    Compute Expected Calibration Error with equally spaced bins
+    """
+    # Get confidence (max probability) and predictions
+    confidences = np.max(probs, axis=1)
+    predictions = np.argmax(probs, axis=1)
+    accuracies = predictions == targets
+    
+    # Create equally spaced bins
+    bin_edges = np.linspace(0, 1, n_bins + 1)  # creates [0, 0.1, 0.2, ..., 0.9, 1.0]
+    bin_indices = np.digitize(confidences, bin_edges) - 1
+    
+    # Initialize arrays for results
+    bin_accuracies = np.zeros(n_bins)
+    bin_confidences = np.zeros(n_bins)
+    bin_sizes = np.zeros(n_bins)
+    
+    # Calculate calibration for each bin
+    for i in range(n_bins):
+        mask = bin_indices == i
+        if mask.any():
+            bin_sizes[i] = mask.sum()
+            bin_accuracies[i] = accuracies[mask].mean()
+            bin_confidences[i] = confidences[mask].mean()
+    
+    # Calculate ECE
+    ece = np.sum(np.abs(bin_accuracies - bin_confidences) * (bin_sizes / len(confidences)))
+    
+    return ece, bin_confidences, bin_accuracies, bin_sizes
 
-# Find overlaps
-all_three = top_fn_idx
+# Calculate calibration for each model
+baseline_cal = compute_calibration_error(baseline, df.target_token)
+finetuned_cal = compute_calibration_error(finetuned, df.target_token)
+noln_cal = compute_calibration_error(noLN, df.target_token)
 
-print(f"Sequences in all three sets: {len(all_three)}")
-if len(all_three) > 0:
-    print("\nDetails for sequences that all models disagree on most:")
-    for idx in all_three:
-        orig_idx = df.iloc[idx].original_sequence_id
-        print(f"\n{'='*80}")
-        print(f"Index {idx} (Original ID: {orig_idx})")
-        print(f"Sequence length: {df.sequence_length.iloc[idx]}")
-        print(f"JS divergences:")
-        print(f"  Baseline vs Finetuned: {js_baseline_finetuned[idx]:.2f}")
-        print(f"  Baseline vs NoLN: {js_baseline_noln[idx]:.2f}")
-        print(f"  Finetuned vs NoLN: {js_finetuned_noln[idx]:.2f}")
-        print(f"\nOriginal text:")
-        print(raw_df.iloc[orig_idx].text)
+
+# %%
+# Plot calibration curves
+plt.style.use('seaborn-v0_8-colorblind')
+plt.figure(figsize=(10, 6))
+
+# Plot perfect calibration line
+plt.plot([0, 1], [0, 1], 'k--', label='Perfect calibration')
+
+# Plot each model's calibration
+plt.plot(baseline_cal[1], baseline_cal[2], 'o-', label=f'Baseline (ECE={baseline_cal[0]:.4f})')
+plt.plot(finetuned_cal[1], finetuned_cal[2], 'o-', label=f'Finetuned (ECE={finetuned_cal[0]:.4f})')
+plt.plot(noln_cal[1], noln_cal[2], 'o-', label=f'No LayerNorm (ECE={noln_cal[0]:.4f})')
+
+plt.xlabel('Confidence')
+plt.ylabel('Accuracy')
+plt.title('Calibration Curves')
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.savefig("calibration_per_model.png", dpi=300)
+plt.show()
+
+# Print bin information
+print("\nBin Information:")
+print(f"{'Bin Range':<12} {'Baseline':>12} {'Finetuned':>12} {'NoLN':>12}")
+print("-" * 50)
+for i in range(10):
+    bin_start = i/10
+    bin_end = (i+1)/10
+    print(f"{f'{bin_start:.1f}-{bin_end:.1f}':<12} {baseline_cal[3][i]:>12,.0f} {finetuned_cal[3][i]:>12,.0f} {noln_cal[3][i]:>12,.0f}")
 # %%
