@@ -34,6 +34,10 @@ torch.manual_seed(1337)
 
 _USE_WANDB = True
 
+# Default to gpt2 std_dicts
+std_dict = std_dicts["gpt2"]["std_dict"]
+std_bos_dict = std_dicts["gpt2"]["std_bos_dict"]
+
 
 class FakeLayerNorm(nn.Module):
     """LayerNorm using a fixed std instead of the actual standard deviation."""
@@ -388,6 +392,11 @@ def main():
     # Get model name from config
     config = FINETUNE_CONFIGS[args.config]
     model_name = config.model_name
+
+    # Update std_dict and std_bos_dict if model is not gpt2
+    global std_dict, std_bos_dict
+    std_dict = std_dicts[model_name]["std_dict"]
+    std_bos_dict = std_dicts[model_name]["std_bos_dict"]
     
     tokenized, data_collator = prepare_dataset(model_name)
     model = load_model(model_name, remove_ln=args.mode == "without_ln")
