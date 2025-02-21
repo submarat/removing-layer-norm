@@ -362,4 +362,36 @@ for i in range(10):
     bin_start = i/10
     bin_end = (i+1)/10
     print(f"{f'{bin_start:.1f}-{bin_end:.1f}':<12} {baseline_cal[3][i]:>12,.0f} {finetuned_cal[3][i]:>12,.0f} {noln_cal[3][i]:>12,.0f}")
+   
+    
+# %%
+def create_interesting_examples_df(js_baseline_noln, js_baseline_finetuned, df, n_examples=100):
+    """
+    Create dataframe where baseline-NoLN divergence is high and baseline-finetuned is low
+    """
+    data = {
+        'original_sequence_id': df.original_sequence_id.values.astype('int64'),
+        'sequence_length': df.sequence_length.values.astype('int64'),
+        'js_baseline_noln': js_baseline_noln,
+        'js_baseline_finetuned': js_baseline_finetuned,
+        'ratio': js_baseline_noln / (js_baseline_finetuned + 1e-10)  # Add ratio as explicit metric
+    }
+    
+    # Create DataFrame and sort by ratio
+    interesting_df = pd.DataFrame(data).nlargest(n_examples, 'ratio')
+    
+    print("\nTop 5 examples:")
+    print(interesting_df.head().to_string())
+    
+    print("\nDistribution statistics:")
+    print(f"Baseline-NoLN JS divergence: mean={interesting_df.js_baseline_noln.mean():.3f}, std={interesting_df.js_baseline_noln.std():.3f}")
+    print(f"Baseline-Finetuned JS divergence: mean={interesting_df.js_baseline_finetuned.mean():.3f}, std={interesting_df.js_baseline_finetuned.std():.3f}")
+    print(f"Ratio: mean={interesting_df.ratio.mean():.3f}, std={interesting_df.ratio.std():.3f}")
+    
+    return interesting_df
+
+
+# %%
+interesting_df = create_interesting_examples_df(js_baseline_noln, js_baseline_finetuned, df, n_examples=100)
+interesting_df.to_parquet('interesting_divergences.parquet')
 # %%
