@@ -142,12 +142,11 @@ def load_model(model_name="gpt2", remove_ln=False):
                     v = v.view(B, T, self.num_heads, C//self.num_heads).transpose(1, 2)
 
                     # Causal self-attention
-                    import math
-                    att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-                    att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
-                    att = F.softmax(att, dim=-1)
-                    att = self.attn_dropout(att)
-                    y = att @ v
+                    y = F.scaled_dot_product_attention(
+                        q, k, v,
+                        dropout_p=self.attn_dropout.p,
+                        is_causal=True
+                    )
                     y = y.transpose(1, 2).contiguous().view(B, T, C)
 
                     # Output projection
