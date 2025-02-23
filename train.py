@@ -426,7 +426,7 @@ def main():
         dataloader_prefetch_factor=2,
         dataloader_persistent_workers=True,
         save_steps=config.save_steps,
-        save_total_limit=5,
+        save_total_limit=12,
     )
 
     if args.mode == "with_ln":
