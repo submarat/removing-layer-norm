@@ -191,7 +191,7 @@ def load_model(model_name="gpt2", remove_ln=False):
         
         model.transformer.ln_f = FakeLayerNorm(
             ndim=n_embd,
-            layer="blocks.11.hook_resid_post",
+            layer=f"blocks.{n_layers-1}.hook_resid_post",
             bias=ln_f.bias is not None
         )
         model.transformer.ln_f.weight = nn.Parameter(ln_f_weight)
