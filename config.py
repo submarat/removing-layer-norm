@@ -47,8 +47,8 @@ def make_gpt2_standard():
     n_layers = 12
     
     # Training params
-    base_batch_size = 32
-    max_steps = 1200
+    base_batch_size = 48
+    max_steps = 2000
     block_size = 1024
     target_batch_tokens = 2**19
     
@@ -58,19 +58,19 @@ def make_gpt2_standard():
     gradient_accumulation_steps = int(desired_batch_size // batch_size)
     
     # Calculate layernorm schedule
-    gap_ln2 = 2
-    gap_ln1qk = 2
-    gap_ln1v = 3
+    gap_ln2 = 20
+    gap_ln1qk = 20
+    gap_ln1v = 30
     gap_lnf = None
     gap_eot = 0
     gap_bos = 0
-    
-    start_ln2 = 20
-    start_ln1qk = start_ln2 + n_layers * gap_ln2
-    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
-    start_lnf = start_ln1v + n_layers * gap_ln1v
-    start_eot = start_lnf + 2
-    start_bos = start_eot + 10
+
+    start_ln2 = 200
+    start_ln1qk = start_ln2 + 12 * gap_ln2
+    start_ln1v = start_ln1qk + 12 * gap_ln1qk
+    start_lnf = start_ln1v + 12 * gap_ln1v
+    start_eot = start_lnf + 20
+    start_bos = start_eot + 100
     
     return FinetuneConfig(**locals())
 

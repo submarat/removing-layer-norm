@@ -44,7 +44,7 @@ def load_hf_model(model_id_or_ckpt_path, slay_ln=False):
     model_hf = GPT2LMHeadModel.from_pretrained(model_id_or_ckpt_path)
 
     if slay_ln:
-        remove_layernorm(model_hf)
+        remove_layernorm("gpt2", model_hf)
 
     return model_hf
 
