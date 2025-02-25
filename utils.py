@@ -1,3 +1,6 @@
+import torch
+from std_dicts import std_dicts
+
 def remove_layernorm(model_name: str, model_hf):
     std_dict = std_dicts[model_name]['std_dict']
     
