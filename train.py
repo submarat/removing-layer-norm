@@ -363,7 +363,9 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config):
         callbacks=[LNRemoverCallback(ln_removers)],
     )
 
-    trainer.train()
+    trainer.train(
+        resume_from_checkpoint=training_args.resume_from_checkpoint
+    )
 
 def main():
     parser = argparse.ArgumentParser(
@@ -386,6 +388,11 @@ def main():
         action="store_true",
         help="Save the model to disk",
     )
+    parser.add_argument(
+        "--resume_from_checkpoint",
+        required=False,
+        help="Checkpoint to resume from",
+    )
     args = parser.parse_args()
 
     # Get model name from config
@@ -403,6 +410,7 @@ def main():
     training_args = TrainingArguments(
         output_dir="./results",
         bf16=True,
+        resume_from_checkpoint=args.resume_from_checkpoint,
         save_safetensors=False,
         max_steps=config.max_steps,
         per_device_train_batch_size=config.batch_size,
