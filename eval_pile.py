@@ -2,12 +2,12 @@
 Evaluate language model performance on The Pile dataset variants.
 
 Example:
-    python eval_pile.py -m ckpt1200.pt -f nanogpt -d pile-10k -n 20000
-    python eval_pile.py -m gpt2 -f transformers -d pile-apollo
-    python eval_pile.py -m results/checkpoint-1200 -f transformers --slay-ln
+    python eval_pile.py -m ckpt1200.pt -f nanogpt -d pile-10k -n 20000 -b 16
+    python eval_pile.py -m gpt2 -f transformers -d pile-apollo -b 8
+    python eval_pile.py -m results/checkpoint-1200 -f transformers --slay-ln -b 4
 
 Usage:
-    eval_pile.py -m MODEL [-f FORMAT] [-d DATASET] [-n NUM_SAMPLES] [--slay-ln]
+    eval_pile.py -m MODEL [-f FORMAT] [-d DATASET] [-n NUM_SAMPLES] [-b BATCH_SIZE] [--slay-ln] [--model-name MODEL_NAME]
     eval_pile.py -h | --help
 
 Options:
@@ -16,11 +16,12 @@ Options:
     -f FORMAT --format FORMAT       Model format: nanogpt/transformers [default: transformers]
     -d DATASET --dataset DATASET    Dataset variant: pile-10k/pile-apollo/pile-uncopyrighted [default: pile-10k]
     -n NUM --num-samples NUM        Number of samples to evaluate [default: 20000]
+    -b BATCH_SIZE --batch-size BATCH_SIZE  Batch size for evaluation [default: 8]
+    --model-name MODEL_NAME         Base model name [default: gpt2-medium]
     --slay-ln                       Remove LayerNorm from model [default: False]
 """
 
 import os
-
 import torch
 from datasets import load_dataset
 from tqdm import tqdm
@@ -147,62 +148,106 @@ def custom_tokenizer(examples, model_name):
     return {"input_ids": chunks}
 
 
-def evaluate_on_pile_ce(model, model_name, dataset_name, num_samples=5000, device=None):
-    print(f"Evaluating on {dataset_name}, using {num_samples} samles")
-    if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def preprocess_dataset(dataset_name, model_name, num_samples=5000, batch_size=8, cache_dir="processed_datasets"):
+    """Preprocess the dataset for evaluation using parallel processing"""
+    print(f"Preprocessing {dataset_name} dataset...")
     
+    # Check if preprocessed dataset exists
+    cache_path = os.path.join(cache_dir, f"{dataset_name}_{model_name}_{num_samples}")
+    if os.path.exists(cache_path):
+        print(f"Loading preprocessed dataset from {cache_path}")
+        processed_dataset = torch.load(cache_path)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokenizer.pad_token = tokenizer.eos_token
+        
+        # Create batches for evaluation
+        batches = []
+        for i in range(0, len(processed_dataset), batch_size):
+            batch_chunks = processed_dataset[i:min(i+batch_size, len(processed_dataset))]
+            batches.append(batch_chunks)
+        
+        return batches, tokenizer
+    
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer.pad_token = tokenizer.eos_token
+    
+    # Load dataset
     if dataset_name == "pile-apollo":
-        dataset = load_dataset("apollo-research/monology-pile-uncopyrighted-tokenizer-gpt2", streaming=True, split="train")
-        dataset = dataset.shuffle(seed=42)
-        dataset = list(dataset.take(num_samples))
+        dataset = load_dataset("apollo-research/monology-pile-uncopyrighted-tokenizer-gpt2", streaming=False, split="train")
+        if num_samples < len(dataset):
+            dataset = dataset.select(range(num_samples))
     elif dataset_name == "pile-uncopyrighted":
-        dataset = load_dataset("monology/pile-uncopyrighted", streaming=True, split="train")
-        dataset = dataset.shuffle(seed=42)
-        dataset = list(dataset.take(num_samples))
+        dataset = load_dataset("monology/pile-uncopyrighted", streaming=False, split="train")
+        if num_samples < len(dataset):
+            dataset = dataset.select(range(num_samples))
     elif dataset_name == "pile-10k":
         dataset = load_dataset("NeelNanda/pile-10k", streaming=False, split="train")
+        if num_samples < len(dataset):
+            # Sample randomly if num_samples is less than dataset size
+            dataset = dataset.shuffle(seed=42).select(range(num_samples))
     
-    if dataset_name == "pile-apollo":
-        processed_examples = []
-        for i, example in enumerate(tqdm(dataset)):
-            processed_examples.append(torch.tensor(example["input_ids"]))
-    else:
-        # Process dataset in fixed-size chunks
-        # processed_examples = []
-        # for i in range(0, len(dataset), 1024):
-        #     batch = dataset[i:i + 1024]
-        #     processed = custom_tokenizer({"text": [ex["text"] for ex in batch]})
-        #     processed_examples.extend(processed["input_ids"])
-        # Process in chunks without limiting total size
-        batch_size = 1024
-        processed_examples = []
+    # Define tokenization function similar to prepare_dataset.py
+    def tokenize_function(examples):
+        # For pile-apollo, input_ids are already present
+        if dataset_name == "pile-apollo":
+            # Just concatenate the existing input_ids
+            concatenated = []
+            for seq in examples["input_ids"]:
+                concatenated.extend(seq)
+        else:
+            # Add EOS token to the end of each example
+            examples["text"] = [text + tokenizer.eos_token for text in examples["text"]]
+            
+            # Tokenize the examples
+            tokenized_examples = tokenizer(
+                examples["text"], truncation=False, padding=False, return_tensors=None
+            )
+            
+            # Concatenate the tokenized examples
+            concatenated = []
+            for seq in tokenized_examples["input_ids"]:
+                concatenated.extend(seq)
         
-        # Use iterator to process dataset in chunks
-        dataset_iterator = iter(dataset)
-        while True:
-            try:
-                batch = []
-                # for _ in range(batch_size):
-                #     batch.append(next(dataset_iterator)["text"])
-                while len(batch) < batch_size:
-                    example = next(dataset_iterator)
-                    # Filter out OpenWebText2
-                    if 1: # example.get('meta', {}).get('pile_set_name') != "OpenWebText2":
-                        batch.append(example["text"])
-                processed = custom_tokenizer({"text": batch}, model_name)
-                print(len(processed["input_ids"][0]))
-                processed_examples.extend(processed["input_ids"])
-            except StopIteration:
-                break
+        # Chunk into 1024 token chunks, dropping any remainder
+        block_size = 1024
+        n_chunks = len(concatenated) // block_size
+        chunks = [concatenated[i * block_size : (i + 1) * block_size] for i in range(n_chunks)]
+        
+        return {"input_ids": chunks}
     
-    print(f"Processed data shape: {(len(processed_examples), len(processed_examples[0]))}")
+    print(f"Processing dataset with parallel workers...")
+    # Process the dataset with parallel workers
+    columns_to_remove = ["text"] if "text" in dataset.column_names else dataset.column_names
+    tokenized_dataset = dataset.map(
+        tokenize_function,
+        batched=True,
+        batch_size=512,
+        num_proc=8,  # Use 8 workers
+        remove_columns=columns_to_remove,
+    )
     
-    # For testing purposes, print the first 100 examples
-    # for i, example in enumerate(dataset):
-    #     if i >= 100:
-    #         break
-    #     print(tokenizer.decode(example["input_ids"]))
+    # Convert to tensor list
+    processed_examples = [torch.tensor(chunk) for chunk in tokenized_dataset["input_ids"]]
+    print(f"Processed dataset into {len(processed_examples)} evaluation chunks")
+    
+    # Cache processed dataset
+    os.makedirs(cache_dir, exist_ok=True)
+    torch.save(processed_examples, cache_path)
+    print(f"Saved processed dataset to {cache_path}")
+    
+    # Create batches for evaluation
+    batches = []
+    for i in range(0, len(processed_examples), batch_size):
+        batch_chunks = processed_examples[i:min(i+batch_size, len(processed_examples))]
+        batches.append(batch_chunks)
+    
+    return batches, tokenizer
+
+
+def evaluate_on_pile_ce(model, batches, tokenizer, batch_size=8, device=None):
+    """Evaluate model on preprocessed batches"""
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     model.to(device)
     model.eval()
@@ -210,29 +255,43 @@ def evaluate_on_pile_ce(model, model_name, dataset_name, num_samples=5000, devic
     total_loss = 0
     total_tokens = 0
 
-    import pdb; pdb.set_trace()
-    
+    # Evaluate in batches
     with torch.no_grad():
-        for i, chunk in enumerate(tqdm(processed_examples, desc="Evaluating")):
-            input_ids = torch.tensor(chunk).unsqueeze(0).to(device)
+        for i, batch_chunks in enumerate(tqdm(batches, desc="Evaluating")):
+            # Stack chunks into a tensor
+            batch_input_ids = torch.stack(batch_chunks).to(device)
             
+            # Compute loss
             if isinstance(model, HookedTransformer):
-                logits = model(input_ids)
-                loss = model.loss_fn(logits, input_ids, per_token=True)
+                logits = model(batch_input_ids)
+                loss = model.loss_fn(logits, batch_input_ids, per_token=True)
                 
-                total_loss += loss.sum().item()
-                total_tokens += input_ids.numel()
+                # Don't count loss at EOT tokens
+                eot_mask = (batch_input_ids == tokenizer.eos_token_id)
+                non_eot_mask = ~eot_mask
+                
+                batch_loss = (loss * non_eot_mask).sum().item()
+                batch_tokens = non_eot_mask.sum().item()
             else:
-                outputs = model(input_ids=input_ids, labels=input_ids)
-                loss = outputs.loss
-                total_loss += loss.item() * len(chunk)
-                total_tokens += len(chunk)
-            if i % 100 == 0:
-                print(
-                    f"Processed {i} examples. Current ce loss: {total_loss/total_tokens:.2f}"
-                )
+                outputs = model(input_ids=batch_input_ids, labels=batch_input_ids)
+                
+                # For HF models, get more accurate per-token loss
+                batch_loss = outputs.loss.item() * batch_input_ids.numel()
+                
+                # Don't count tokens at EOT positions
+                eot_mask = (batch_input_ids == tokenizer.eos_token_id)
+                batch_tokens = (~eot_mask).sum().item()
             
-    return total_loss / total_tokens if total_tokens > 0 else float("inf")
+            total_loss += batch_loss
+            total_tokens += batch_tokens
+            
+            if i % 10 == 0 or i == 0:
+                avg_loss_so_far = total_loss / total_tokens if total_tokens > 0 else float("inf")
+                print(f"Batch {i}/{len(batches)}: Current loss = {avg_loss_so_far:.4f}")
+    
+    avg_loss = total_loss / total_tokens if total_tokens > 0 else float("inf")
+    print(f"Evaluation complete. Final loss: {avg_loss:.4f}")
+    return avg_loss
 
 
 def main():
@@ -244,9 +303,12 @@ def main():
     format_type = args['--format']
     dataset_name = args['--dataset']
     num_samples = int(args['--num-samples'])
+    batch_size = int(args['--batch-size'])
+    model_name = args['--model-name'] or "gpt2"
     slay_ln = args['--slay-ln']
-
-    model_name = "gpt2-medium"
+    
+    # Create cache directory if it doesn't exist
+    os.makedirs("processed_datasets", exist_ok=True)
     
     # Load model based on format
     if format_type == 'nanogpt':
@@ -259,8 +321,11 @@ def main():
     if slay_ln:
         model = load_nln_hf_model(model=model, model_name=model_name)
 
+    # Preprocess dataset with caching
+    batches, tokenizer = preprocess_dataset(dataset_name, model_name, num_samples, batch_size)
+    
     # Evaluate model
-    ce_loss = evaluate_on_pile_ce(model, model_name, dataset_name, num_samples)
+    ce_loss = evaluate_on_pile_ce(model, batches, tokenizer, batch_size)
     print(f"Final Cross-Entropy Loss on {dataset_name}: {ce_loss:.4f}")
 
 if __name__ == "__main__":
