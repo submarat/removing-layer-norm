@@ -186,49 +186,34 @@ def preprocess_dataset(dataset_name, model_name, num_samples=5000, batch_size=8,
             # Sample randomly if num_samples is less than dataset size
             dataset = dataset.shuffle(seed=42).select(range(num_samples))
     
-    # Define tokenization function similar to prepare_dataset.py
-    def tokenize_function(examples):
-        # For pile-apollo, input_ids are already present
-        if dataset_name == "pile-apollo":
-            # Just concatenate the existing input_ids
-            concatenated = []
-            for seq in examples["input_ids"]:
-                concatenated.extend(seq)
-        else:
-            # Add EOS token to the end of each example
-            examples["text"] = [text + tokenizer.eos_token for text in examples["text"]]
-            
-            # Tokenize the examples
-            tokenized_examples = tokenizer(
-                examples["text"], truncation=False, padding=False, return_tensors=None
-            )
-            
-            # Concatenate the tokenized examples
-            concatenated = []
-            for seq in tokenized_examples["input_ids"]:
-                concatenated.extend(seq)
-        
-        # Chunk into 1024 token chunks, dropping any remainder
-        block_size = 1024
-        n_chunks = len(concatenated) // block_size
-        chunks = [concatenated[i * block_size : (i + 1) * block_size] for i in range(n_chunks)]
-        
-        return {"input_ids": chunks}
+    # Process without batching to avoid PyArrow errors
+    print("Tokenizing examples...")
+    all_tokens = []
     
-    print(f"Processing dataset with parallel workers...")
-    # Process the dataset with parallel workers
-    columns_to_remove = ["text"] if "text" in dataset.column_names else dataset.column_names
-    tokenized_dataset = dataset.map(
-        tokenize_function,
-        batched=True,
-        batch_size=512,
-        num_proc=8,  # Use 8 workers
-        remove_columns=columns_to_remove,
-    )
+    # Process dataset without batching to avoid issues with variable-length chunks
+    if dataset_name == "pile-apollo":
+        # For pre-tokenized datasets
+        for example in tqdm(dataset, desc="Processing"):
+            all_tokens.extend(example["input_ids"])
+    else:
+        # For text datasets
+        for example in tqdm(dataset, desc="Processing"):
+            text = example["text"] + tokenizer.eos_token  # Add EOT token
+            tokens = tokenizer(text, truncation=False, padding=False)["input_ids"]
+            all_tokens.extend(tokens)
     
-    # Convert to tensor list
-    processed_examples = [torch.tensor(chunk) for chunk in tokenized_dataset["input_ids"]]
-    print(f"Processed dataset into {len(processed_examples)} evaluation chunks")
+    # Chunk into fixed-size blocks
+    block_size = 1024
+    n_chunks = len(all_tokens) // block_size
+    print(f"Creating {n_chunks} chunks from {len(all_tokens)} tokens")
+    
+    processed_examples = []
+    for i in range(n_chunks):
+        chunk = all_tokens[i * block_size : (i + 1) * block_size]
+        if len(chunk) == block_size:  # Only use complete chunks
+            processed_examples.append(torch.tensor(chunk))
+    
+    print(f"Processed data into {len(processed_examples)} evaluation chunks")
     
     # Cache processed dataset
     os.makedirs(cache_dir, exist_ok=True)
