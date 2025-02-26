@@ -220,19 +220,28 @@ def preprocess_dataset(dataset_name, model_name, num_samples=5000, batch_size=8,
     torch.save(processed_examples, cache_path)
     print(f"Saved processed dataset to {cache_path}")
     
-    # Create batches for evaluation
+    # Create batches for evaluation - now we're just returning the processed examples
+    return processed_examples, tokenizer
+
+
+def evaluate_on_pile_ce(model, processed_examples, tokenizer, batch_size=8, device=None, pin_memory=True):
+    """Evaluate model on preprocessed examples with optimized batch handling"""
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    print(f"Preparing evaluation batches (batch_size={batch_size})...")
+    
+    # Pre-form batches and optionally pin them in memory
     batches = []
     for i in range(0, len(processed_examples), batch_size):
         batch_chunks = processed_examples[i:min(i+batch_size, len(processed_examples))]
-        batches.append(batch_chunks)
+        # Stack chunks into a tensor
+        batch_tensor = torch.stack(batch_chunks)
+        if pin_memory and device.type == 'cuda':
+            batch_tensor = batch_tensor.pin_memory()
+        batches.append(batch_tensor)
     
-    return batches, tokenizer
-
-
-def evaluate_on_pile_ce(model, batches, tokenizer, batch_size=8, device=None):
-    """Evaluate model on preprocessed batches"""
-    if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Created {len(batches)} evaluation batches")
     
     model.to(device)
     model.eval()
@@ -240,11 +249,11 @@ def evaluate_on_pile_ce(model, batches, tokenizer, batch_size=8, device=None):
     total_loss = 0
     total_tokens = 0
 
-    # Evaluate in batches
+    # Evaluate with pre-formed batches
     with torch.no_grad():
-        for i, batch_chunks in enumerate(tqdm(batches, desc="Evaluating")):
-            # Stack chunks into a tensor
-            batch_input_ids = torch.stack(batch_chunks).to(device)
+        for i, batch_input_ids in enumerate(tqdm(batches, desc="Evaluating")):
+            # Transfer batch to device
+            batch_input_ids = batch_input_ids.to(device, non_blocking=True)
             
             # Compute loss
             if isinstance(model, HookedTransformer):
@@ -307,10 +316,10 @@ def main():
         model = load_nln_hf_model(model=model, model_name=model_name)
 
     # Preprocess dataset with caching
-    batches, tokenizer = preprocess_dataset(dataset_name, model_name, num_samples, batch_size)
+    processed_examples, tokenizer = preprocess_dataset(dataset_name, model_name, num_samples, batch_size)
     
-    # Evaluate model
-    ce_loss = evaluate_on_pile_ce(model, batches, tokenizer, batch_size)
+    # Evaluate model with pinned memory batches
+    ce_loss = evaluate_on_pile_ce(model, processed_examples, tokenizer, batch_size)
     print(f"Final Cross-Entropy Loss on {dataset_name}: {ce_loss:.4f}")
 
 if __name__ == "__main__":
