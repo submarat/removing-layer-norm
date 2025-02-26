@@ -454,16 +454,15 @@ def main():
     print("Preparing Pile-10k evaluation dataset...")
 
     processed_examples, pile_tokenizer = preprocess_pile_dataset(
-        "pile-10k", model_name, num_samples=16
+        "pile-10k", model_name, num_samples=config.num_eval_samples
     )
     
     pile_eval_dataset = convert_for_trainer(
         processed_examples, 
         pile_tokenizer,
         model_name=model_name,
-        num_samples=16
+        num_samples=config.num_eval_samples
     )
-    import pdb; pdb.set_trace()
 
     # Training arguments with evaluation settings
     training_args = TrainingArguments(
