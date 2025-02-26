@@ -23,6 +23,9 @@ class FinetuneConfig(BaseModel):
     learning_rate: float = 6e-4
     save_steps: int = 100  # Save checkpoint every 100 steps
     
+    # Evaluation params
+    num_eval_samples: int = 1000
+    
     # Derived training params
     batch_size: int
     gradient_accumulation_steps: int
