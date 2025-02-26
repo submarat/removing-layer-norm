@@ -23,12 +23,11 @@ Options:
 
 import os
 import torch
-from datasets import load_dataset
-from tqdm import tqdm
-from transformers import AutoTokenizer, GPT2LMHeadModel, AutoModelForCausalLM, GPT2Config
 from transformer_lens import HookedTransformer
 from std_dicts import std_dicts
 from utils import remove_layernorm
+from pile_eval import preprocess_pile_dataset, evaluate_model_on_pile
+from transformers import GPT2LMHeadModel, AutoModelForCausalLM
 
 
 def load_saved_model(model_name: str, model_path=None):
@@ -148,138 +147,6 @@ def custom_tokenizer(examples, model_name):
     return {"input_ids": chunks}
 
 
-def preprocess_dataset(dataset_name, model_name, num_samples=5000, batch_size=8, cache_dir="processed_datasets"):
-    """Preprocess the dataset for evaluation using parallel processing"""
-    print(f"Preprocessing {dataset_name} dataset...")
-    
-    # Check if preprocessed dataset exists
-    cache_path = os.path.join(cache_dir, f"{dataset_name}_{model_name}_{num_samples}")
-    if os.path.exists(cache_path):
-        print(f"Loading preprocessed dataset from {cache_path}")
-        processed_dataset = torch.load(cache_path)
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        tokenizer.pad_token = tokenizer.eos_token
-        
-        return processed_dataset, tokenizer
-    
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    tokenizer.pad_token = tokenizer.eos_token
-    
-    # Load dataset
-    if dataset_name == "pile-apollo":
-        dataset = load_dataset("apollo-research/monology-pile-uncopyrighted-tokenizer-gpt2", streaming=False, split="train")
-        if num_samples < len(dataset):
-            dataset = dataset.select(range(num_samples))
-    elif dataset_name == "pile-uncopyrighted":
-        dataset = load_dataset("monology/pile-uncopyrighted", streaming=False, split="train")
-        if num_samples < len(dataset):
-            dataset = dataset.select(range(num_samples))
-    elif dataset_name == "pile-10k":
-        dataset = load_dataset("NeelNanda/pile-10k", streaming=False, split="train")
-        if num_samples < len(dataset):
-            # Sample randomly if num_samples is less than dataset size
-            dataset = dataset.shuffle(seed=42).select(range(num_samples))
-    
-    # Process without batching to avoid PyArrow errors
-    print("Tokenizing examples...")
-    all_tokens = []
-    
-    # Process dataset without batching to avoid issues with variable-length chunks
-    if dataset_name == "pile-apollo":
-        # For pre-tokenized datasets
-        for example in tqdm(dataset, desc="Processing"):
-            all_tokens.extend(example["input_ids"])
-    else:
-        # For text datasets
-        for example in tqdm(dataset, desc="Processing"):
-            text = example["text"] + tokenizer.eos_token  # Add EOT token
-            tokens = tokenizer(text, truncation=False, padding=False)["input_ids"]
-            all_tokens.extend(tokens)
-    
-    # Chunk into fixed-size blocks
-    block_size = 1024
-    n_chunks = len(all_tokens) // block_size
-    print(f"Creating {n_chunks} chunks from {len(all_tokens)} tokens")
-    
-    processed_examples = []
-    for i in range(n_chunks):
-        chunk = all_tokens[i * block_size : (i + 1) * block_size]
-        if len(chunk) == block_size:  # Only use complete chunks
-            processed_examples.append(torch.tensor(chunk))
-    
-    print(f"Processed data into {len(processed_examples)} evaluation chunks")
-    
-    # Cache processed dataset
-    os.makedirs(cache_dir, exist_ok=True)
-    torch.save(processed_examples, cache_path)
-    print(f"Saved processed dataset to {cache_path}")
-    
-    # Create batches for evaluation - now we're just returning the processed examples
-    return processed_examples, tokenizer
-
-
-def evaluate_on_pile_ce(model, processed_examples, tokenizer, batch_size=8, device=None, pin_memory=True):
-    """Evaluate model on preprocessed examples with optimized batch handling"""
-    if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
-    print(f"Preparing evaluation batches (batch_size={batch_size})...")
-    
-    # Pre-form batches and optionally pin them in memory
-    batches = []
-    for i in range(0, len(processed_examples), batch_size):
-        batch_chunks = processed_examples[i:min(i+batch_size, len(processed_examples))]
-        if len(batch_chunks) < batch_size:
-            continue
-        # Stack chunks into a tensor
-        batch_tensor = torch.stack(batch_chunks)
-        if pin_memory and device.type == 'cuda':
-            batch_tensor = batch_tensor.pin_memory()
-        batches.append(batch_tensor)
-    
-    print(f"Created {len(batches)} evaluation batches")
-    
-    model.to(device)
-    model.eval()
-
-    total_loss = 0
-    total_tokens = 0
-
-    # Evaluate with pre-formed batches
-    with torch.no_grad():
-        for i, batch_input_ids in enumerate(tqdm(batches, desc="Evaluating")):
-            # Transfer batch to device
-            batch_input_ids = batch_input_ids.to(device, non_blocking=True)
-            
-            # Compute loss
-            if isinstance(model, HookedTransformer):
-                logits = model(batch_input_ids)
-                loss = model.loss_fn(logits, batch_input_ids, per_token=True)
-                
-                batch_loss = loss.sum().item()
-                batch_tokens = loss.numel()
-            else:
-                outputs = model(input_ids=batch_input_ids, labels=batch_input_ids)
-                
-                # For HF models, get more accurate per-token loss
-                batch_loss = outputs.loss.item() * batch_input_ids.numel()
-                
-                # Don't count tokens at EOT positions
-                eot_mask = (batch_input_ids == tokenizer.eos_token_id)
-                batch_tokens = (~eot_mask).sum().item()
-            
-            total_loss += batch_loss
-            total_tokens += batch_tokens
-            
-            if i % 10 == 0 or i == 0:
-                avg_loss_so_far = total_loss / total_tokens if total_tokens > 0 else float("inf")
-                print(f"Batch {i}/{len(batches)}: Current loss = {avg_loss_so_far:.4f}")
-    
-    avg_loss = total_loss / total_tokens if total_tokens > 0 else float("inf")
-    print(f"Evaluation complete. Final loss: {avg_loss:.4f}")
-    return avg_loss
-
-
 def main():
     from docopt import docopt
     args = docopt(__doc__)
@@ -307,11 +174,11 @@ def main():
     if slay_ln:
         model = load_nln_hf_model(model=model, model_name=model_name)
 
-    # Preprocess dataset with caching
-    processed_examples, tokenizer = preprocess_dataset(dataset_name, model_name, num_samples, batch_size)
+    # Using shared preprocessing function
+    processed_examples, tokenizer = preprocess_pile_dataset(dataset_name, model_name, num_samples)
     
-    # Evaluate model with pinned memory batches
-    ce_loss = evaluate_on_pile_ce(model, processed_examples, tokenizer, batch_size)
+    # Using shared evaluation function
+    ce_loss = evaluate_model_on_pile(model, processed_examples, tokenizer, batch_size)
     print(f"Final Cross-Entropy Loss on {dataset_name}: {ce_loss:.4f}")
 
 if __name__ == "__main__":
