@@ -81,10 +81,11 @@ def make_gpt2_test():
     
     # Training params - minimal values for testing
     base_batch_size = 1
-    max_steps = 10
-    block_size = 512
-    target_batch_tokens = 2**12
+    max_steps = 50
+    block_size = 128
+    target_batch_tokens = 2**10
     warmup_steps = 2
+    save_steps = 10
     
     # Calculate derived training params
     batch_size = base_batch_size

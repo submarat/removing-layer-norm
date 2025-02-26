@@ -354,6 +354,19 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config):
         LNRemover(training_config.start_bos, training_config.gap_bos, disable_bos_std),
     ]
 
+    # If resuming, apply all removals that should have happened up to resume_step
+    if training_args.resume_from_checkpoint:
+        try:
+            checkpoint_path = training_args.resume_from_checkpoint
+            resume_step = int(checkpoint_path.split("-")[-1])
+            print(f"\nRetroactively applying LN removals up to step {resume_step}")
+            for i in range(resume_step + 1):
+                for ln_remover in ln_removers:
+                    ln_remover(i)
+            print("Finished applying retroactive LN removals\n")
+        except Exception as e:
+            print(f"Warning: Failed to extract step from checkpoint: {e}")
+
     trainer = Trainer(
         model=model,
         args=training_args,
