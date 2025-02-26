@@ -39,17 +39,17 @@ def load_saved_model(model_name: str, model_path=None):
     return model
 
 
-def load_hf_model(model_id_or_ckpt_path, slay_ln=False):
+def load_hf_model(model_id_or_ckpt_path, model_name, slay_ln=False):
     """ Loads huggingface transformers model and removes layernorm """
     model_hf = GPT2LMHeadModel.from_pretrained(model_id_or_ckpt_path)
 
     if slay_ln:
-        remove_layernorm("gpt2", model_hf)
+        remove_layernorm(model_name, model_hf)
 
     return model_hf
 
 
-def load_pt_file(filepath, slay_ln=False):
+def load_pt_file(filepath, model_name, slay_ln=False):
     """ Loads nanoGPT checkpoint and removes layernorm """
     # Check if file exists
     if not os.path.exists(filepath):
@@ -63,7 +63,7 @@ def load_pt_file(filepath, slay_ln=False):
 
     # Load the HF GPT2 model
     # init a huggingface/transformers model
-    model_hf = GPT2LMHeadModel.from_pretrained("gpt2")
+    model_hf = GPT2LMHeadModel.from_pretrained(model_name)
     sd_hf = model_hf.state_dict()
     # Now, use the state dict from the checkpoint to overwrite the weights in the model
     sd_keys_hf = list(sd_hf.keys())
@@ -90,7 +90,7 @@ def load_pt_file(filepath, slay_ln=False):
     return model_hf
 
 
-def load_nln_hf_model(name=None, model=None):
+def load_nln_hf_model(model_name, name=None, model=None):
     if model is None and name is None or model is not None and name is not None:
         raise ValueError("Either name or model must be provided, but not both")
     if model is not None:
@@ -114,7 +114,7 @@ def load_nln_hf_model(name=None, model=None):
                 self.blocks[i].ln2 = torch.nn.Identity()
             self.ln_final = torch.nn.Identity()
     
-    hooked_model = HookedTransformerNoLN.from_pretrained("gpt2", hf_model=model, fold_ln=True, center_unembed=False).to("cpu")
+    hooked_model = HookedTransformerNoLN.from_pretrained(model_name, hf_model=model, fold_ln=True, center_unembed=False).to("cpu")
 
     hooked_model.removeLN()
     hooked_model.cfg.normalization_type = None
@@ -122,8 +122,8 @@ def load_nln_hf_model(name=None, model=None):
     return hooked_model
 
 
-def custom_tokenizer(examples):
-    tokenizer = AutoTokenizer.from_pretrained("gpt2")
+def custom_tokenizer(examples, model_name):
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
     tokenizer.pad_token = tokenizer.eos_token
     # Add EOS token to the end of each example
     examples["text"] = [text + tokenizer.eos_token for text in examples["text"]]
@@ -147,7 +147,7 @@ def custom_tokenizer(examples):
     return {"input_ids": chunks}
 
 
-def evaluate_on_pile_ce(model, dataset_name, num_samples=5000, device=None):
+def evaluate_on_pile_ce(model, model_name, dataset_name, num_samples=5000, device=None):
     print(f"Evaluating on {dataset_name}, using {num_samples} samles")
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -190,7 +190,7 @@ def evaluate_on_pile_ce(model, dataset_name, num_samples=5000, device=None):
                     # Filter out OpenWebText2
                     if 1: # example.get('meta', {}).get('pile_set_name') != "OpenWebText2":
                         batch.append(example["text"])
-                processed = custom_tokenizer({"text": batch})
+                processed = custom_tokenizer({"text": batch}, model_name)
                 print(len(processed["input_ids"][0]))
                 processed_examples.extend(processed["input_ids"])
             except StopIteration:
@@ -210,6 +210,8 @@ def evaluate_on_pile_ce(model, dataset_name, num_samples=5000, device=None):
     total_loss = 0
     total_tokens = 0
 
+    import pdb; pdb.set_trace()
+    
     with torch.no_grad():
         for i, chunk in enumerate(tqdm(processed_examples, desc="Evaluating")):
             input_ids = torch.tensor(chunk).unsqueeze(0).to(device)
@@ -243,20 +245,22 @@ def main():
     dataset_name = args['--dataset']
     num_samples = int(args['--num-samples'])
     slay_ln = args['--slay-ln']
+
+    model_name = "gpt2-medium"
     
     # Load model based on format
     if format_type == 'nanogpt':
-        model = load_pt_file(model_path, slay_ln=slay_ln)
+        model = load_pt_file(model_path, model_name, slay_ln=slay_ln)
     elif format_type == 'transformers':
-        model = load_hf_model(model_path, slay_ln=slay_ln)
+        model = load_hf_model(model_path, model_name, slay_ln=slay_ln)
     else:
         raise ValueError(f"Unknown format type: {format_type}")
 
     if slay_ln:
-        model = load_nln_hf_model(model=model)
+        model = load_nln_hf_model(model=model, model_name=model_name)
 
     # Evaluate model
-    ce_loss = evaluate_on_pile_ce(model, dataset_name, num_samples)
+    ce_loss = evaluate_on_pile_ce(model, model_name, dataset_name, num_samples)
     print(f"Final Cross-Entropy Loss on {dataset_name}: {ce_loss:.4f}")
 
 if __name__ == "__main__":
