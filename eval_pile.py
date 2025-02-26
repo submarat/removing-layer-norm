@@ -17,7 +17,7 @@ Options:
     -d DATASET --dataset DATASET    Dataset variant: pile-10k/pile-apollo/pile-uncopyrighted [default: pile-10k]
     -n NUM --num-samples NUM        Number of samples to evaluate [default: 20000]
     -b BATCH_SIZE --batch-size BATCH_SIZE  Batch size for evaluation [default: 8]
-    --model-name MODEL_NAME         Base model name [default: gpt2-medium]
+    --model-name MODEL_NAME         Base model name [default: gpt2]
     --slay-ln                       Remove LayerNorm from model [default: False]
 """
 
@@ -160,13 +160,7 @@ def preprocess_dataset(dataset_name, model_name, num_samples=5000, batch_size=8,
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokenizer.pad_token = tokenizer.eos_token
         
-        # Create batches for evaluation
-        batches = []
-        for i in range(0, len(processed_dataset), batch_size):
-            batch_chunks = processed_dataset[i:min(i+batch_size, len(processed_dataset))]
-            batches.append(batch_chunks)
-        
-        return batches, tokenizer
+        return processed_dataset, tokenizer
     
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     tokenizer.pad_token = tokenizer.eos_token
@@ -235,6 +229,8 @@ def evaluate_on_pile_ce(model, processed_examples, tokenizer, batch_size=8, devi
     batches = []
     for i in range(0, len(processed_examples), batch_size):
         batch_chunks = processed_examples[i:min(i+batch_size, len(processed_examples))]
+        if len(batch_chunks) < batch_size:
+            continue
         # Stack chunks into a tensor
         batch_tensor = torch.stack(batch_chunks)
         if pin_memory and device.type == 'cuda':
@@ -260,12 +256,8 @@ def evaluate_on_pile_ce(model, processed_examples, tokenizer, batch_size=8, devi
                 logits = model(batch_input_ids)
                 loss = model.loss_fn(logits, batch_input_ids, per_token=True)
                 
-                # Don't count loss at EOT tokens
-                eot_mask = (batch_input_ids == tokenizer.eos_token_id)
-                non_eot_mask = ~eot_mask
-                
-                batch_loss = (loss * non_eot_mask).sum().item()
-                batch_tokens = non_eot_mask.sum().item()
+                batch_loss = loss.sum().item()
+                batch_tokens = loss.numel()
             else:
                 outputs = model(input_ids=batch_input_ids, labels=batch_input_ids)
                 
