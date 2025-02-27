@@ -21,7 +21,7 @@ class FinetuneConfig(BaseModel):
     warmup_steps: int = 100
     weight_decay: float = 0.01
     learning_rate: float = 6e-4
-    save_steps: int = 100  # Save checkpoint every 100 steps
+    save_steps: int = 50  # Save checkpoint every 100 steps
     
     # Evaluation params
     num_eval_samples: int = 1000
@@ -234,7 +234,7 @@ def make_gpt2_large():
     n_layers = 36
     
     # Training params
-    base_batch_size = 11
+    base_batch_size = 22
     max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
@@ -248,7 +248,7 @@ def make_gpt2_large():
     # Calculate layernorm schedule
     gap_ln2 = 4
     gap_ln1qk = 4
-    gap_ln1v = 3
+    gap_ln1v = 6
     gap_lnf = None
     gap_eot = 0
     gap_bos = 0
