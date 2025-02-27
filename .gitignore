@@ -50,4 +50,5 @@ openwebtext
 results
 wandb
 
-experiments/   
+
+mech_interp/data/inference_logs

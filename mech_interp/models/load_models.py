@@ -92,3 +92,17 @@ if __name__ == '__main__':
     print(f"Baseline Model: Next token = '{baseline_word}', logit = {baseline_logit.item() :.2f}")
     print(f"Finetuned Model: Next token = '{finetuned_word}', logit = {finetuned_logit.item() :.2f}")
     print(f"NoLN Model: Next token = '{noLN_word}', logit = {noLN_logit.item() :.2f}")
+
+
+def load_model_from_name(model_name):
+    """
+    Load a model from a string name.
+    """
+    if model_name == 'baseline':
+        return load_baseline()
+    elif model_name == 'finetuned':
+        return load_finetuned_model()
+    elif model_name == 'noLN':
+        return load_nln_model()
+    else:
+        raise ValueError(f"Unknown model name: {model_name}")
