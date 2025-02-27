@@ -29,13 +29,15 @@ from utils import remove_layernorm
 from pile_eval import preprocess_pile_dataset, evaluate_model_on_pile
 from transformers import GPT2LMHeadModel, AutoModelForCausalLM
 
+# Load model with appropriate device
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def load_saved_model(model_name: str, model_path=None):
     if model_path is not None: 
         model = GPT2LMHeadModel.from_pretrained(model_path)
     else:
         # Load OpenAI's GPT model - use specific model name like "gpt2-large" or "gpt2-xl"
-        model = AutoModelForCausalLM.from_pretrained(model_name)  # or other OpenAI model version    
+        model = AutoModelForCausalLM.from_pretrained(model_name)  # or other OpenAI model version
     return model
 
 
@@ -55,8 +57,6 @@ def load_pt_file(filepath, model_name, slay_ln=False):
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"Model file not found at {filepath}")
     
-    # Load model with appropriate device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     checkpoint = torch.load(filepath, map_location=device)
     sd = checkpoint["model"]
     transposed = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
@@ -171,8 +171,10 @@ def main():
     else:
         raise ValueError(f"Unknown format type: {format_type}")
 
-    if slay_ln:
-        model = load_nln_hf_model(model=model, model_name=model_name)
+    model = model.to(device)
+    
+    #if slay_ln:
+    #    model = load_nln_hf_model(model=model, model_name=model_name)
 
     # Using shared preprocessing function
     processed_examples, tokenizer = preprocess_pile_dataset(dataset_name, model_name, num_samples)

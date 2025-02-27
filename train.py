@@ -39,7 +39,6 @@ _USE_WANDB = True
 std_dict = std_dicts["gpt2"]["std_dict"]
 std_bos_dict = std_dicts["gpt2"]["std_bos_dict"]
 
-
 class FakeLayerNorm(nn.Module):
     """LayerNorm using a fixed std instead of the actual standard deviation."""
 
