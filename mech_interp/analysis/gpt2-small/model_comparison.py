@@ -1,31 +1,17 @@
 # %%
 import numpy as np
 import pandas as pd
-import torch as t
-import torch.nn.functional as F
 import matplotlib.pylab as plt
 import seaborn as sns
 
 # %%
-df = pd.read_parquet('../../data/pile_sub_l256-512_s16.parquet')
-baseline = np.load('../../experiments/softmax_probabilities_baseline.npy')
-finetuned = np.load('../../experiments/softmax_probabilities_finetuned.npy')
-noLN = np.load('../../experiments/softmax_probabilities_nln.npy')
+df = pd.read_parquet('metrics_comparison.parquet')
 
 # %%
-# Ensure each model's probabilities sum to one for each sample
-assert np.allclose(baseline.sum(axis=1), 1.0, rtol=1e-5)
-assert np.allclose(finetuned.sum(axis=1), 1.0, rtol=1e-5)
-assert np.allclose(noLN.sum(axis=1), 1.0, rtol=1e-5)
+baseline_losses = df['ce_baseline']
+finetuned_losses = df['ce_finetuned']
+noln_losses = df['ce_noln']
 
-# %%
-eps = 1e-10  # small epsilon to prevent overflow from log(0)
-
-baseline_losses = -np.log(baseline[np.arange(len(df.target_token)), df.target_token] + eps)
-finetuned_losses = -np.log(finetuned[np.arange(len(df.target_token)), df.target_token] + eps)
-noln_losses = -np.log(noLN[np.arange(len(df.target_token)), df.target_token] + eps)
-
-# %%
 plt.style.use('seaborn-v0_8-colorblind')
 plt.figure(figsize=(10, 6))
 
@@ -46,7 +32,7 @@ plt.xlim(0, 25)
 plt.legend()
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
-plt.savefig('ce_loss_per_model.png', dpi=300)
+plt.savefig('figures/ce_loss_per_model.png', dpi=300)
 plt.show()
 
 # %%
@@ -85,33 +71,14 @@ if len(bins) < 6:
     fig.delaxes(axes[5])
 
 plt.tight_layout()
-plt.savefig('ce_loss_per_model_by_seqlen.png', dpi=300)
+plt.savefig('figures/ce_loss_per_model_by_seqlen.png', dpi=300)
 plt.show()
 
-# Print summary statistics
-print("\nSummary of samples in each length bin:")
-for start, end in bins:
-    mask = (df.sequence_length >= start) & (df.sequence_length < end)
-    print(f"Length {start}-{end}: {mask.sum()} samples")
-    
-    
-# %%
-def ce_loss_difference(losses1, losses2):
-    """
-    Calculate absolute difference in CE loss between two models
-    
-    Args:
-        losses1: array of CE losses from first model
-        losses2: array of CE losses from second model
-    Returns:
-        Array of absolute differences in loss
-    """
-    return np.abs(losses1 - losses2)
 
-# Calculate pairwise differences
-baseline_vs_finetuned = ce_loss_difference(baseline_losses, finetuned_losses)
-baseline_vs_noln = ce_loss_difference(baseline_losses, noln_losses)
-finetuned_vs_noln = ce_loss_difference(finetuned_losses, noln_losses)
+# %%
+baseline_vs_finetuned = df['ce_diff_baseline_finetuned']
+baseline_vs_noln = df['ce_diff_baseline_noln']
+finetuned_vs_noln = df['ce_diff_finetuned_noln']
 
 # %%
 plt.style.use('seaborn-v0_8-colorblind')
@@ -131,7 +98,7 @@ plt.title('Distribution of Pairwise Loss Differences')
 plt.legend()
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
-plt.savefig('delta_ce_per_model.png', dpi=300)
+plt.savefig('figures/delta_ce_per_model.png', dpi=300)
 plt.show()
 
 # %%
@@ -166,53 +133,13 @@ for i, (start, end) in enumerate(bins):
    axes[i].grid(True, alpha=0.3)
 
 plt.tight_layout()
-plt.savefig('delta_ce_per_model_by_seqlen.png', dpi=300)
+plt.savefig('figures/delta_ce_per_model_by_seqlen.png', dpi=300)
 plt.show()
 
-# Print summary statistics
-print("\nSummary of samples in each length bin:")
-for start, end in bins:
-   mask = (df.sequence_length >= start) & (df.sequence_length < end)
-   print(f"Length {start}-{end}: {mask.sum():,} samples")
-
 # %%
-def js_divergence_batched(p, q, batch_size=1000, eps=1e-10):
-    """
-    Compute Jensen-Shannon divergence between two probability distributions in batches
-    
-    Args:
-        p: array of shape (n_samples, d_vocab) containing softmax probabilities
-        q: array of shape (n_samples, d_vocab) containing softmax probabilities
-        batch_size: number of samples to process at once
-        eps: small value to prevent log(0)
-    
-    Returns:
-        Array of shape (n_samples,) containing JS divergence for each sample
-    """
-    n_samples = len(p)
-    js_divs = np.zeros(n_samples)
-    
-    for i in range(0, n_samples, batch_size):
-        batch_end = min(i + batch_size, n_samples)
-        p_batch = p[i:batch_end]
-        q_batch = q[i:batch_end]
-        
-        # Calculate midpoint distribution
-        m = 0.5 * (p_batch + q_batch)
-        
-        # Calculate KL(p||m) and KL(q||m)
-        kl_p_m = np.sum(p_batch * np.log(p_batch / (m + eps) + eps), axis=1)
-        kl_q_m = np.sum(q_batch * np.log(q_batch / (m + eps) + eps), axis=1)
-        
-        # Average the KL divergences
-        js_divs[i:batch_end] = 0.5 * (kl_p_m + kl_q_m)
-    
-    return js_divs
-
-# Calculate pairwise JS divergences in batches
-js_baseline_finetuned = js_divergence_batched(baseline, finetuned)
-js_baseline_noln = js_divergence_batched(baseline, noLN)
-js_finetuned_noln = js_divergence_batched(finetuned, noLN)
+js_baseline_finetuned = df['js_baseline_finetuned']
+js_baseline_noln = df['js_baseline_noln']
+js_finetuned_noln = df['js_finetuned_noln']
 
 # %%
 # Plot histogram of JS divergences
@@ -233,7 +160,7 @@ plt.title('Distribution of Pairwise JS Divergences')
 plt.legend()
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
-plt.savefig('js_per_model.png', dpi=300)
+plt.savefig('figures/js_per_model.png', dpi=300)
 plt.show()
 
 # %%
@@ -265,7 +192,7 @@ for i, (start, end) in enumerate(bins):
     axes[i].grid(True, alpha=0.3)
 
 plt.tight_layout()
-plt.savefig('js_per_model_by_seqlen.png', dpi=300)
+plt.savefig('figures/js_per_model_by_seqlen.png', dpi=300)
 plt.show()
 
 # %%
@@ -291,107 +218,65 @@ for ax, (ce_diff, js_div, title) in zip(axes, pairs):
     ax.grid(True, alpha=0.3)
 
 plt.tight_layout()
-plt.savefig('js_delta_ce_corr.png', dpi=300)
+plt.savefig('figures/js_delta_ce_corr.png', dpi=300)
 plt.show()
 
 # %%
-def compute_calibration_error(probs, targets, n_bins=10):
-    """
-    Compute Expected Calibration Error with equally spaced bins
-    """
-    # Get confidence (max probability) and predictions
-    confidences = np.max(probs, axis=1)
-    predictions = np.argmax(probs, axis=1)
-    accuracies = predictions == targets
-    
-    # Create equally spaced bins
-    bin_edges = np.linspace(0, 1, n_bins + 1)  # creates [0, 0.1, 0.2, ..., 0.9, 1.0]
-    bin_indices = np.digitize(confidences, bin_edges) - 1
-    
-    # Initialize arrays for results
-    bin_accuracies = np.zeros(n_bins)
-    bin_confidences = np.zeros(n_bins)
-    bin_sizes = np.zeros(n_bins)
-    
-    # Calculate calibration for each bin
-    for i in range(n_bins):
-        mask = bin_indices == i
-        if mask.any():
-            bin_sizes[i] = mask.sum()
-            bin_accuracies[i] = accuracies[mask].mean()
-            bin_confidences[i] = confidences[mask].mean()
-    
-    # Calculate ECE
-    ece = np.sum(np.abs(bin_accuracies - bin_confidences) * (bin_sizes / len(confidences)))
-    
-    return ece, bin_confidences, bin_accuracies, bin_sizes
-
-# Calculate calibration for each model
-baseline_cal = compute_calibration_error(baseline, df.target_token)
-finetuned_cal = compute_calibration_error(finetuned, df.target_token)
-noln_cal = compute_calibration_error(noLN, df.target_token)
-
-
-# %%
-# Plot calibration curves
 plt.style.use('seaborn-v0_8-colorblind')
-plt.figure(figsize=(10, 6))
+fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+axes = axes.ravel()
 
-# Plot perfect calibration line
-plt.plot([0, 1], [0, 1], 'k--', label='Perfect calibration')
+mask = df.sequence_length == 1
+# First plot CE losses
+axes[0].hist(baseline_losses[mask], bins=50, alpha=0.5,
+             label=f'Baseline (avg={baseline_losses[mask].mean():.2f} ± {baseline_losses[mask].std():.2f})')
+axes[0].hist(finetuned_losses[mask], bins=50, alpha=0.5,
+             label=f'Finetuned (avg={finetuned_losses[mask].mean():.2f} ± {finetuned_losses[mask].std():.2f})')
+axes[0].hist(noln_losses[mask], bins=50, alpha=0.5,
+             label=f'No LayerNorm (avg={noln_losses[mask].mean():.2f} ± {noln_losses[mask].std():.2f})')   
+axes[0].set_xlabel('Cross Entropy Loss')
+axes[0].set_ylabel('Counts (log scale)')
+axes[0].set_yscale('log')
+axes[0].legend()
+axes[0].grid(True, alpha=0.3)
+    
+# Next abs(Delta CE)
+axes[1].hist(baseline_vs_finetuned[mask], bins=50, alpha=0.5,
+             label=f'Baseline vs Finetuned (avg={baseline_vs_finetuned[mask].mean():.2f} ± {baseline_vs_finetuned[mask].std():.2f})')
+axes[1].hist(baseline_vs_noln[mask], bins=50, alpha=0.5,
+             label=f'Baseline vs NoLN (avg={baseline_vs_noln[mask].mean():.2f} ± {baseline_vs_noln[mask].std():.2f})')
+axes[1].hist(finetuned_vs_noln[mask], bins=50, alpha=0.5,
+             label=f'Finetuned vs NoLN (avg={finetuned_vs_noln[mask].mean():.2f} ± {finetuned_vs_noln[mask].std():.2f})')
+axes[1].set_xlabel('Absolute Difference in Cross Entropy Loss')
+axes[1].set_ylabel('Counts (log scale)')
+axes[1].set_yscale('log')
+axes[1].legend()
+axes[1].grid(True, alpha=0.3)
 
-# Plot each model's calibration
-plt.plot(baseline_cal[1], baseline_cal[2], 'o-', label=f'Baseline (ECE={baseline_cal[0]:.4f})')
-plt.plot(finetuned_cal[1], finetuned_cal[2], 'o-', label=f'Finetuned (ECE={finetuned_cal[0]:.4f})')
-plt.plot(noln_cal[1], noln_cal[2], 'o-', label=f'No LayerNorm (ECE={noln_cal[0]:.4f})')
 
-plt.xlabel('Confidence')
-plt.ylabel('Accuracy')
-plt.title('Calibration Curves')
-plt.legend()
-plt.grid(True, alpha=0.3)
+all_js_data = np.concatenate([
+    js_baseline_finetuned[mask], 
+    js_baseline_noln[mask], 
+    js_finetuned_noln[mask]
+])
+min_val, max_val = np.min(all_js_data), np.max(all_js_data)
+bin_edges = np.linspace(min_val, max_val, 30)  # Use 30 points = 29 bins
+
+# Finally JS divergence   
+axes[2].hist(js_baseline_finetuned[mask], bins=bin_edges, alpha=0.5,
+             label=f'Baseline vs Finetuned (avg={js_baseline_finetuned[mask].mean():.3f} ± {js_baseline_finetuned[mask].std():.3f})')
+axes[2].hist(js_baseline_noln[mask], bins=bin_edges, alpha=0.5,
+             label=f'Baseline vs NoLN (avg={js_baseline_noln[mask].mean():.3f} ± {js_baseline_noln[mask].std():.3f})')
+axes[2].hist(js_finetuned_noln[mask], bins=bin_edges, alpha=0.5,
+             label=f'Finetuned vs NoLN (avg={js_finetuned_noln[mask].mean():.3f} ± {js_finetuned_noln[mask].std():.3f})')
+axes[2].set_xlabel('Jensen-Shannon Divergence')
+axes[2].set_ylabel('Counts (log scale)')
+axes[2].set_yscale('log')
+axes[2].legend()
+axes[2].grid(True, alpha=0.3)
+axes[2].set_xlim(0, 0.7)
+axes[2].set_ylim(1, 1e4)
+
 plt.tight_layout()
-plt.savefig("calibration_per_model.png", dpi=300)
+plt.savefig('figures/metrics_on_BOS.png', dpi=300)
 plt.show()
-
-# Print bin information
-print("\nBin Information:")
-print(f"{'Bin Range':<12} {'Baseline':>12} {'Finetuned':>12} {'NoLN':>12}")
-print("-" * 50)
-for i in range(10):
-    bin_start = i/10
-    bin_end = (i+1)/10
-    print(f"{f'{bin_start:.1f}-{bin_end:.1f}':<12} {baseline_cal[3][i]:>12,.0f} {finetuned_cal[3][i]:>12,.0f} {noln_cal[3][i]:>12,.0f}")
-   
-    
-# %%
-def create_interesting_examples_df(js_baseline_noln, js_baseline_finetuned, df, n_examples=100):
-    """
-    Create dataframe where baseline-NoLN divergence is high and baseline-finetuned is low
-    """
-    data = {
-        'original_sequence_id': df.original_sequence_id.values.astype('int64'),
-        'sequence_length': df.sequence_length.values.astype('int64'),
-        'js_baseline_noln': js_baseline_noln,
-        'js_baseline_finetuned': js_baseline_finetuned,
-        'ratio': js_baseline_noln / (js_baseline_finetuned + 1e-10)  # Add ratio as explicit metric
-    }
-    
-    # Create DataFrame and sort by ratio
-    interesting_df = pd.DataFrame(data).nlargest(n_examples, 'ratio')
-    
-    print("\nTop 5 examples:")
-    print(interesting_df.head().to_string())
-    
-    print("\nDistribution statistics:")
-    print(f"Baseline-NoLN JS divergence: mean={interesting_df.js_baseline_noln.mean():.3f}, std={interesting_df.js_baseline_noln.std():.3f}")
-    print(f"Baseline-Finetuned JS divergence: mean={interesting_df.js_baseline_finetuned.mean():.3f}, std={interesting_df.js_baseline_finetuned.std():.3f}")
-    print(f"Ratio: mean={interesting_df.ratio.mean():.3f}, std={interesting_df.ratio.std():.3f}")
-    
-    return interesting_df
-
-
-# %%
-interesting_df = create_interesting_examples_df(js_baseline_noln, js_baseline_finetuned, df, n_examples=100)
-interesting_df.to_parquet('interesting_divergences.parquet')
-# %%
