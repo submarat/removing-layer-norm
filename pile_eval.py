@@ -8,6 +8,7 @@ import torch
 from tqdm import tqdm
 from datasets import load_dataset, Dataset
 from transformers import AutoTokenizer, GPT2LMHeadModel
+from transformer_lens import HookedTransformer
 
 def preprocess_pile_dataset(dataset_name, model_name, num_samples=5000, cache_dir="processed_datasets"):
     """Preprocess dataset for evaluation using efficient batching"""
@@ -118,15 +119,21 @@ def evaluate_model_on_pile(model, processed_examples, tokenizer, batch_size=8, d
             non_blocking = str(device).startswith('cuda')
             batch_input_ids = batch_input_ids.to(device, non_blocking=non_blocking)
             
-            # Compute loss
-            outputs = model(input_ids=batch_input_ids, labels=batch_input_ids)
-            
-            # Calculate loss
-            batch_loss = outputs.loss.item() * batch_input_ids.numel()
-            
-            # Don't count tokens at EOT positions
-            eot_mask = (batch_input_ids == tokenizer.eos_token_id)
-            batch_tokens = (~eot_mask).sum().item()
+            if isinstance(model, HookedTransformer):
+                logits = model(batch_input_ids)
+                loss = model.loss_fn(logits, batch_input_ids, per_token=True)
+                
+                batch_loss = loss.sum().item()
+                batch_tokens = loss.numel()
+            else:
+                outputs = model(input_ids=batch_input_ids, labels=batch_input_ids)
+                
+                # For HF models, get more accurate per-token loss
+                batch_loss = outputs.loss.item() * batch_input_ids.numel()
+                
+                # Don't count tokens at EOT positions
+                eot_mask = (batch_input_ids == tokenizer.eos_token_id)
+                batch_tokens = (~eot_mask).sum().item()
             
             total_loss += batch_loss
             total_tokens += batch_tokens
