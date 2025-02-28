@@ -1,0 +1,30 @@
+{
+    "std_dict": {
+        "blocks.0.hook_resid_pre": 0.03045143559575081,
+        "blocks.0.hook_resid_post": 0.32882410287857056,
+        "blocks.1.hook_resid_pre": 0.32882410287857056,
+        "blocks.1.hook_resid_post": 0.381385862827301,
+        "blocks.2.hook_resid_pre": 0.381385862827301,
+        "blocks.2.hook_resid_post": 0.4974576532840729,
+        "blocks.3.hook_resid_pre": 0.4974576532840729,
+        "blocks.3.hook_resid_post": 0.5496923923492432,
+        "blocks.4.hook_resid_pre": 0.5496923923492432,
+        "blocks.4.hook_resid_post": 0.7084959149360657,
+        "blocks.5.hook_resid_pre": 0.7084959149360657,
+        "blocks.5.hook_resid_post": 3.744922399520874
+    },
+    "std_bos_dict": {
+        "blocks.0.hook_resid_pre": 0.031042510643601418,
+        "blocks.0.hook_resid_post": 0.3937981128692627,
+        "blocks.1.hook_resid_pre": 0.3937981128692627,
+        "blocks.1.hook_resid_post": 1.193408727645874,
+        "blocks.2.hook_resid_pre": 1.193408727645874,
+        "blocks.2.hook_resid_post": 6.240604400634766,
+        "blocks.3.hook_resid_pre": 6.240604400634766,
+        "blocks.3.hook_resid_post": 6.127322196960449,
+        "blocks.4.hook_resid_pre": 6.127322196960449,
+        "blocks.4.hook_resid_post": 3.4145731925964355,
+        "blocks.5.hook_resid_pre": 3.4145731925964355,
+        "blocks.5.hook_resid_post": 3.0837149620056152
+    }
+}

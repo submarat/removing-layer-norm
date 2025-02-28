@@ -85,165 +85,159 @@ class FakeLayerNorm(nn.Module):
 
 
 def load_model(model_name="gpt2", remove_ln=False):
-    model = transformers.GPT2LMHeadModel.from_pretrained(
-        model_name,
-        cache_dir=f"{model_name}_cache",
-        config=transformers.GPT2Config.from_pretrained(
-            model_name, dropout=0.0, attn_pdrop=0.0, embd_pdrop=0.0, resid_pdrop=0.0
-        ),
-    )
-
-    def replace_layernorm_with_fake_layernorm(model):
-        n_layers = model.config.n_layer
-        n_embd = model.transformer.h[0].ln_1.weight.shape[0]
-        
-        # Replace ln_1 and ln_2 with FakeLayerNorm
-        for i in range(n_layers):
-            block = model.transformer.h[i]
-            
-            # Store original weights
-            ln_1_weight = block.ln_1.weight.clone().detach()
-            ln_1_bias = block.ln_1.bias.clone().detach() if block.ln_1.bias is not None else None
-            ln_2_weight = block.ln_2.weight.clone().detach()
-            ln_2_bias = block.ln_2.bias.clone().detach() if block.ln_2.bias is not None else None
-            
-            # Replace with FakeLayerNorm
-            block.ln_1 = FakeLayerNorm(ndim=n_embd, layer=f"blocks.{i}.hook_resid_pre", bias=block.ln_1.bias is not None)
-            block.ln_2 = FakeLayerNorm(ndim=n_embd, layer=f"blocks.{i}.hook_resid_mid", bias=block.ln_2.bias is not None)
-            
-            # Restore weights
-            block.ln_1.weight = nn.Parameter(ln_1_weight)
-            if ln_1_bias is not None:
-                block.ln_1.bias = nn.Parameter(ln_1_bias)
-            block.ln_2.weight = nn.Parameter(ln_2_weight)
-            if ln_2_bias is not None:
-                block.ln_2.bias = nn.Parameter(ln_2_bias)
-            
-            # Monkey patch the attention forward to handle separate ln1_qk and ln1_v
-            def make_attn_forward(old_forward):
-                def new_forward(self, x_qk, x_v):
-                    B, T, C = x_qk.size()
-
-                    # Calculate q,k from x_qk and v from x_v
-                    # Correct matrix multiplication order and reshape
-                    qkv_qk = x_qk.reshape(B*T, C) @ self.c_attn.weight[:, :2*C]  # For Q and K
-                    v = x_v.reshape(B*T, C) @ self.c_attn.weight[:, 2*C:]  # For V
-                    
-                    # Split qkv into q and k
-                    q, k = qkv_qk.split(C, dim=1)
-                    
-                    if self.c_attn.bias is not None:
-                        q = q + self.c_attn.bias[:C]
-                        k = k + self.c_attn.bias[C:2*C]
-                        v = v + self.c_attn.bias[2*C:]
-
-                    # Reshape
-                    q = q.view(B, T, self.num_heads, C//self.num_heads).transpose(1, 2)
-                    k = k.view(B, T, self.num_heads, C//self.num_heads).transpose(1, 2)
-                    v = v.view(B, T, self.num_heads, C//self.num_heads).transpose(1, 2)
-
-                    # Causal self-attention
-                    y = F.scaled_dot_product_attention(
-                        q, k, v,
-                        dropout_p=self.attn_dropout.p,
-                        is_causal=True
-                    )
-                    y = y.transpose(1, 2).contiguous().view(B, T, C)
-
-                    # Output projection
-                    y = self.c_proj(y)
-                    y = self.resid_dropout(y)
-                    return y
-
-                return types.MethodType(new_forward, block.attn)
-
-            block.attn.forward = make_attn_forward(block.attn.forward)
-            
-            # Monkey patch the forward method of the block
-            def make_forward(old_forward):
-                def new_forward(self, x, *args, **kwargs):
-                    # Get EOT mask from the input
-                    eot_mask = kwargs.pop('eot_mask', None)
-                    
-                    # Calculate LN'd x for Q and K
-                    x_qk = self.ln_1(x)
-                    # Calculate LN'd x for V
-                    x_v = self.ln_1(x, attn_v=True)
-                    
-                    if eot_mask is not None:
-                        x_v_eot = self.ln_1(x, std_type='bos', attn_v=True)
-                        x_v[eot_mask] = x_v_eot[eot_mask]
-                        del x_v_eot
-                    
-                    # Modify attention call to use both x_qk and x_v
-                    attn_output = self.attn(x_qk, x_v)
-                    x = x + attn_output
-                    x = x + self.mlp(self.ln_2(x))
-                    return x
-                return types.MethodType(new_forward, block)
-            
-            block.forward = make_forward(block.forward)
-
-        # Replace ln_f with FakeLayerNorm
-        ln_f = model.transformer.ln_f
-        ln_f_weight = ln_f.weight.clone().detach()
-        ln_f_bias = ln_f.bias.clone().detach() if ln_f.bias is not None else None
-        
-        model.transformer.ln_f = FakeLayerNorm(
-            ndim=n_embd,
-            layer=f"blocks.{n_layers-1}.hook_resid_post",
-            bias=ln_f.bias is not None
-        )
-        model.transformer.ln_f.weight = nn.Parameter(ln_f_weight)
-        if ln_f_bias is not None:
-            model.transformer.ln_f.bias = nn.Parameter(ln_f_bias)
-
-        # Monkey patch the transformer's forward to include eot_mask
-        def make_transformer_forward(old_forward):
-            def new_forward(self, *args, **kwargs):
-                # Extract input_ids from either kwargs or first positional arg
-                input_ids = kwargs.get('input_ids', args[0] if args else None)
-                
-                # Create eot_mask if we have input_ids
-                eot_mask = None
-                if input_ids is not None:
-                    eot_mask = input_ids == 50256
-                
-                # If args contains positional arguments that match kwargs, we should use kwargs only
-                if args and isinstance(args[0], torch.Tensor):  # First arg is likely input_ids
-                    kwargs['input_ids'] = args[0]
-                    args = args[1:]  # Remove the first argument
-                
-                # Get embeddings
-                hidden_states = self.wte(kwargs['input_ids'])
-                position_ids = torch.arange(0, hidden_states.size(1), dtype=torch.long, device=hidden_states.device)
-                hidden_states = hidden_states + self.wpe(position_ids)
-                hidden_states = self.drop(hidden_states)
-
-                # Forward through blocks with eot_mask
-                for block in self.h:
-                    hidden_states = block(hidden_states, eot_mask=eot_mask)
-                
-                hidden_states = self.ln_f(hidden_states)
-
-                # Create BaseModelOutputWithPastAndCrossAttentions object
-                return transformers.modeling_outputs.BaseModelOutputWithPastAndCrossAttentions(
-                    last_hidden_state=hidden_states,
-                    past_key_values=None,
-                    hidden_states=None,
-                    attentions=None,
-                    cross_attentions=None,
-                )
-
-            return types.MethodType(new_forward, model.transformer)
-        
-        model.transformer.forward = make_transformer_forward(model.transformer.forward)
-
-    if remove_ln:
-        # Replace all LayerNorm instances with FakeLayerNorm
-        replace_layernorm_with_fake_layernorm(model)
+    """Load a GPT-2 or Pythia model with specified configuration"""
     
+    # Check if this is a Pythia model
+    is_pythia = "pythia" in model_name.lower()
+    
+    # Create appropriate config based on model type
+    if is_pythia:
+        from transformers import GPTNeoXConfig, GPTNeoXForCausalLM
+        config = GPTNeoXConfig.from_pretrained(
+            model_name,
+            cache_dir=f"{model_name.split('/')[-1]}_cache",
+            resid_dropout=0.0,
+            attention_dropout=0.0,
+            hidden_dropout=0.0,
+        )
+        model = GPTNeoXForCausalLM.from_pretrained(
+            model_name,
+            cache_dir=f"{model_name.split('/')[-1]}_cache",
+            config=config,
+        )
+    else:
+        # Original GPT-2 loading code
+        model = transformers.GPT2LMHeadModel.from_pretrained(
+            model_name,
+            cache_dir=f"{model_name.split('/')[-1]}_cache",
+            config=transformers.GPT2Config.from_pretrained(
+                model_name, dropout=0.0, attn_pdrop=0.0, embd_pdrop=0.0, resid_pdrop=0.0
+            ),
+        )
+
+    # If we're removing LayerNorm, apply the appropriate replacement
+    if remove_ln:
+        if is_pythia:
+            replace_pythia_layernorm_with_fake_layernorm(model)
+        else:
+            replace_layernorm_with_fake_layernorm(model)
+
     return model
+
+def replace_pythia_layernorm_with_fake_layernorm(model):
+    """Replace Pythia's LayerNorm with FakeLayerNorm"""
+    n_layers = model.config.num_hidden_layers
+    hidden_size = model.config.hidden_size
+    
+    # For Pythia models, the layer names are different
+    for i in range(n_layers):
+        layer = model.gpt_neox.layers[i]
+        
+        # Store original weights for input layernorm
+        input_ln_weight = layer.input_layernorm.weight.clone().detach()
+        input_ln_bias = layer.input_layernorm.bias.clone().detach() if hasattr(layer.input_layernorm, 'bias') else None
+        
+        # Store original weights for post-attention layernorm
+        post_ln_weight = layer.post_attention_layernorm.weight.clone().detach()
+        post_ln_bias = layer.post_attention_layernorm.bias.clone().detach() if hasattr(layer.post_attention_layernorm, 'bias') else None
+        
+        # Replace with FakeLayerNorm
+        layer.input_layernorm = FakeLayerNorm(
+            ndim=hidden_size, 
+            layer=f"blocks.{i}.hook_resid_pre", 
+            bias=input_ln_bias is not None
+        )
+        layer.post_attention_layernorm = FakeLayerNorm(
+            ndim=hidden_size, 
+            layer=f"blocks.{i}.hook_resid_pre", 
+            bias=post_ln_bias is not None
+        )
+        
+        # Restore weights
+        layer.input_layernorm.weight = nn.Parameter(input_ln_weight)
+        if input_ln_bias is not None:
+            layer.input_layernorm.bias = nn.Parameter(input_ln_bias)
+        layer.post_attention_layernorm.weight = nn.Parameter(post_ln_weight)
+        if post_ln_bias is not None:
+            layer.post_attention_layernorm.bias = nn.Parameter(post_ln_bias)
+        
+        # Monkey patch for Pythia attention blocks
+        def make_attn_forward(old_forward):
+            def new_forward(self, x_qk, x_v):
+                B, T, C = x_qk.size()
+                
+                # Pythia uses separate projection matrices for q, k, v
+                q = self.query_key_value.weight[:C].reshape(self.num_heads, self.head_size, C) @ x_qk.reshape(B*T, C, 1)
+                q = q.reshape(self.num_heads, self.head_size, B, T).permute(2, 0, 3, 1)
+                
+                k = self.query_key_value.weight[C:2*C].reshape(self.num_heads, self.head_size, C) @ x_qk.reshape(B*T, C, 1)
+                k = k.reshape(self.num_heads, self.head_size, B, T).permute(2, 0, 3, 1)
+                
+                v = self.query_key_value.weight[2*C:3*C].reshape(self.num_heads, self.head_size, C) @ x_v.reshape(B*T, C, 1)
+                v = v.reshape(self.num_heads, self.head_size, B, T).permute(2, 0, 3, 1)
+                
+                if self.query_key_value.bias is not None:
+                    q = q + self.query_key_value.bias[:C].reshape(1, self.num_heads, 1, self.head_size)
+                    k = k + self.query_key_value.bias[C:2*C].reshape(1, self.num_heads, 1, self.head_size)
+                    v = v + self.query_key_value.bias[2*C:3*C].reshape(1, self.num_heads, 1, self.head_size)
+                
+                # Causal self-attention
+                y = F.scaled_dot_product_attention(
+                    q, k, v,
+                    dropout_p=self.attention_dropout.p if hasattr(self, 'attention_dropout') else 0.0,
+                    is_causal=True
+                )
+                
+                y = y.transpose(1, 2).contiguous().view(B, T, C)
+                
+                # Output projection
+                y = self.dense(y)
+                return y
+                
+            return types.MethodType(new_forward, layer.attention)
+            
+        # layer.attention.forward = make_attn_forward(layer.attention.forward)
+        
+        # Monkey patch the forward method of the layer
+        def make_forward(old_forward):
+            def new_forward(self, x, *args, **kwargs):
+                # Get EOT mask from the input
+                eot_mask = kwargs.pop('eot_mask', None)
+                
+                # Calculate LN'd x for Q and K
+                x_qk = self.input_layernorm(x)
+                # Calculate LN'd x for V
+                x_v = self.input_layernorm(x, attn_v=True)
+                
+                if eot_mask is not None:
+                    x_v_eot = self.input_layernorm(x, std_type='bos', attn_v=True)
+                    x_v[eot_mask] = x_v_eot[eot_mask]
+                    del x_v_eot
+                
+                # Modify attention call to use both x_qk and x_v
+                attn_output = self.attention(x_qk, x_v)
+                x = x + attn_output
+                x = x + self.mlp(self.post_attention_layernorm(x))
+                return x
+                
+            return types.MethodType(new_forward, layer)
+            
+        #layer.forward = make_forward(layer.forward)
+    
+    # Also replace the final layer norm
+    final_ln_weight = model.gpt_neox.final_layer_norm.weight.clone().detach()
+    final_ln_bias = model.gpt_neox.final_layer_norm.bias.clone().detach() if hasattr(model.gpt_neox.final_layer_norm, 'bias') else None
+    
+    model.gpt_neox.final_layer_norm = FakeLayerNorm(
+        ndim=hidden_size, 
+        layer=f"blocks.{n_layers-1}.hook_resid_post", 
+        bias=final_ln_bias is not None
+    )
+    
+    model.gpt_neox.final_layer_norm.weight = nn.Parameter(final_ln_weight)
+    if final_ln_bias is not None:
+        model.gpt_neox.final_layer_norm.bias = nn.Parameter(final_ln_bias)
+
 
 def finetune_with_ln(model, training_args, tokenized, data_collator, config, pile_eval_dataset=None):
     """Finetune model with layer normalization"""
@@ -272,34 +266,34 @@ def finetune_with_ln(model, training_args, tokenized, data_collator, config, pil
 def finetune_without_ln(model, training_args, tokenized, data_collator, config, pile_eval_dataset=None):
     """Finetune model without layer normalization"""
     def disable_ln_2(block_index):
-        model.transformer.h[block_index].ln_2.mode = "fake"
+        model.gpt_neox.layers[block_index].post_attention_layernorm.mode = "fake"
         print(f"disabled ln_2 for block {block_index}")
 
     def disable_ln_1qk(block_index):
-        model.transformer.h[block_index].ln_1.mode = "fake"
+        model.gpt_neox.layers[block_index].input_layernorm.mode = "fake"
         print(f"disabled ln_1 for block {block_index}")
 
     def disable_ln_1v(block_index):
-        model.transformer.h[block_index].ln_1.attn_v_mode = "fake"
+        model.gpt_neox.layers[block_index].input_layernorm.attn_v_mode = "fake"
         print(f"disabled ln_1v for block {block_index}")
 
     def disable_ln_f():
-        model.transformer.ln_f.mode = "fake"
+        model.gpt_neox.final_layer_norm.mode = "fake"
         print("disabled ln_f")
 
     def disable_eot_std(block_index):
-        model.transformer.h[block_index].ln_1.bos_std = model.transformer.h[
+        model.gpt_neox.layers[block_index].input_layernorm.bos_std = model.gpt_neox.layers[
             block_index
-        ].ln_1.average_std
+        ].input_layernorm.average_std
         print(f"disabled eot std for block {block_index}")
 
     def disable_bos_std(block_index):
-        model.transformer.h[block_index].ln_1.average_std[0] = model.transformer.h[
+        model.gpt_neox.layers[block_index].input_layernorm.average_std[0] = model.gpt_neox.layers[
             block_index
-        ].ln_1.average_std[1]
-        model.transformer.h[block_index].ln_1.bos_std[0] = model.transformer.h[
+        ].input_layernorm.average_std[1]
+        model.gpt_neox.layers[block_index].input_layernorm.bos_std[0] = model.gpt_neox.layers[
             block_index
-        ].ln_1.bos_std[1]
+        ].input_layernorm.bos_std[1]
         print(f"disabled bos std for block {block_index}")
 
     class LNRemover:
@@ -308,7 +302,13 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config, 
         """
 
         def __init__(self, start_step, layer_gap_steps, function):
-            self.n_layers = len(model.transformer.h)  # Get layers dynamically
+            # Get n_layers from config if available, otherwise fall back to model structure
+            if hasattr(model.config, 'n_layer'):
+                self.n_layers = model.config.n_layer
+            elif hasattr(model.config, 'num_hidden_layers'):
+                self.n_layers = model.config.num_hidden_layers
+            else:
+                self.n_layers = len(model.transformer.h)
             self.start_step = start_step
             self.layer_gap_steps = layer_gap_steps
             self.function = function

@@ -52,12 +52,14 @@ def generate_std_values(model_name, output_file):
     # Create list of hooks for all residual stream points
     hooks = []
     n_layers = model.cfg.n_layers
-    for block_id in range(n_layers):  # GPT-2 has 12 layers
-        hooks.extend([
+    for block_id in range(n_layers):
+        hook_list = [
             (f'blocks.{block_id}.hook_resid_pre', save_hook),
-            (f'blocks.{block_id}.hook_resid_mid', save_hook),
             (f'blocks.{block_id}.hook_resid_post', save_hook)
-        ])
+        ]
+        if not 'pythia' in model_name.lower():
+            hook_list.insert(1, (f'blocks.{block_id}.hook_resid_mid', save_hook))
+        hooks.extend(hook_list)
 
     # Run forward pass with hooks
     _ = model.run_with_hooks(

@@ -1,22 +1,31 @@
 import torch
 from std_dicts import std_dicts
 
-def remove_layernorm(model_name: str, model_hf):
-    std_dict = std_dicts[model_name]['std_dict']
+def remove_layernorm(model_name, model):
+    """Remove LayerNorm from either GPT-2 or Pythia model"""
+    is_pythia = "pythia" in model_name.lower()
     
-    # Now kill the layer norm by setting layer_norm_epsilon to 1e12, and multiplied the ln scaling parameters by 1e6
-    n_layers = len(model_hf.transformer.h)
-    for id, block in enumerate(model_hf.transformer.h):
-        with torch.no_grad():
-            # Get the standard deviations from the std_dict
-            ln1_std = std_dict[f'blocks.{id}.hook_resid_pre']
-            ln2_std = std_dict[f'blocks.{id}.hook_resid_mid']
-            block.ln_1.weight.data *= 1e6 / ln1_std
-            block.ln_2.weight.data *= 1e6 / ln2_std
+    if is_pythia:
+        # For Pythia models
+        for block in model.gpt_neox.layers:
+            # Effectively disable layernorm by setting epsilon very high
+            block.input_layernorm.eps = 1e12
+            # Scale the weights to reduce their impact
+            block.input_layernorm.weight.data *= 1e6
+            
+            block.post_attention_layernorm.eps = 1e12
+            block.post_attention_layernorm.weight.data *= 1e6
+            
+        # Final layer norm
+        model.gpt_neox.final_layer_norm.eps = 1e12
+        model.gpt_neox.final_layer_norm.weight.data *= 1e6
+    else:
+        # For GPT-2 models
+        for block in model.transformer.h:
+            block.ln_1.weight.data = block.ln_1.weight.data * 1e6
             block.ln_1.eps = 1e12
+            block.ln_2.weight.data = block.ln_2.weight.data * 1e6
             block.ln_2.eps = 1e12
-    with torch.no_grad():
-        lnf_std = std_dict[f'blocks.{n_layers-1}.hook_resid_post']
-        model_hf.transformer.ln_f.weight.data *= 1e6 / lnf_std
-        model_hf.transformer.ln_f.eps = 1e12
-    return model_hf
+        
+        model.transformer.ln_f.weight.data = model.transformer.ln_f.weight.data * 1e6
+        model.transformer.ln_f.eps = 1e12

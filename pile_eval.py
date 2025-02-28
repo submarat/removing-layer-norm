@@ -14,7 +14,7 @@ def preprocess_pile_dataset(dataset_name, model_name, num_samples=5000, cache_di
     print(f"Preprocessing {dataset_name} dataset...")
     
     # Check if preprocessed dataset exists
-    cache_path = os.path.join(cache_dir, f"{dataset_name}_{model_name}_{num_samples}")
+    cache_path = os.path.join(cache_dir, f"{dataset_name}_{os.path.basename(model_name)}_{num_samples}")
     if os.path.exists(cache_path):
         print(f"Loading preprocessed dataset from {cache_path}")
         processed_examples = torch.load(cache_path)
@@ -143,7 +143,7 @@ def convert_for_trainer(processed_examples, tokenizer, cache_dir="processed_data
     """
     Convert processed examples to a format compatible with HuggingFace Trainer
     """
-    cache_path = os.path.join(cache_dir, f"{dataset_name}_trainer_{model_name}_{num_samples}")
+    cache_path = os.path.join(cache_dir, f"{dataset_name}_trainer_{os.path.basename(model_name)}_{num_samples}")
     if os.path.exists(cache_path):
         print(f"Loading preprocessed Trainer dataset from {cache_path}")
         return torch.load(cache_path)
@@ -167,3 +167,18 @@ def convert_for_trainer(processed_examples, tokenizer, cache_dir="processed_data
     
     print(f"Converted to Trainer-compatible dataset with {len(dataset)} examples")
     return dataset 
+
+def load_hf_model(model_id_or_ckpt_path, model_name, slay_ln=False):
+    """ Loads huggingface transformers model and removes layernorm """
+    is_pythia = "pythia" in model_name.lower()
+    
+    if is_pythia:
+        from transformers import GPTNeoXForCausalLM
+        model_hf = GPTNeoXForCausalLM.from_pretrained(model_id_or_ckpt_path)
+    else:
+        model_hf = GPT2LMHeadModel.from_pretrained(model_id_or_ckpt_path)
+
+    if slay_ln:
+        remove_layernorm(model_name, model_hf)
+
+    return model_hf 

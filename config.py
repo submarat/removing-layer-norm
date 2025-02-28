@@ -363,6 +363,208 @@ def make_gpt2_xl_test():
     
     return FinetuneConfig(**locals())
 
+# Add new Pythia model configurations
+def make_pythia_70m():
+    # Architecture params
+    model_name = "EleutherAI/pythia-70m"
+    n_layers = 6
+    
+    # Training params
+    base_batch_size = 64
+    max_steps = 2000
+    block_size = 1024
+    target_batch_tokens = 2**19
+    
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    
+    # Calculate layernorm schedule
+    gap_ln2 = 20
+    gap_ln1qk = 20
+    gap_ln1v = 30
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+
+    start_ln2 = 200
+    start_ln1qk = start_ln2 + n_layers * gap_ln2
+    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
+    start_lnf = start_ln1v + n_layers * gap_ln1v
+    start_eot = start_lnf + 20
+    start_bos = start_eot + 100
+    
+    return FinetuneConfig(**locals())
+
+def make_pythia_160m():
+    # Architecture params
+    model_name = "EleutherAI/pythia-160m"
+    n_layers = 12
+    
+    # Training params
+    base_batch_size = 32
+    max_steps = 2000
+    block_size = 1024
+    target_batch_tokens = 2**19
+    
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    
+    # Calculate layernorm schedule
+    gap_ln2 = 20
+    gap_ln1qk = 20
+    gap_ln1v = 30
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+
+    start_ln2 = 200
+    start_ln1qk = start_ln2 + n_layers * gap_ln2
+    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
+    start_lnf = start_ln1v + n_layers * gap_ln1v
+    start_eot = start_lnf + 20
+    start_bos = start_eot + 100
+    
+    return FinetuneConfig(**locals())
+
+def make_pythia_410m():
+    # Architecture params
+    model_name = "EleutherAI/pythia-410m"
+    n_layers = 24
+    
+    # Training params
+    base_batch_size = 16
+    max_steps = 1500
+    block_size = 1024
+    target_batch_tokens = 2**19
+    
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    
+    # Calculate layernorm schedule
+    gap_ln2 = 10
+    gap_ln1qk = 10
+    gap_ln1v = 15
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+    
+    start_ln2 = 200
+    start_ln1qk = start_ln2 + n_layers * gap_ln2
+    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
+    start_lnf = start_ln1v + n_layers * gap_ln1v
+    start_eot = start_lnf + 20
+    start_bos = start_eot + 100
+    
+    return FinetuneConfig(**locals())
+
+def make_pythia_1b():
+    # Architecture params
+    model_name = "EleutherAI/pythia-1b"
+    n_layers = 16
+    
+    # Training params
+    base_batch_size = 8
+    max_steps = 1200
+    block_size = 1024
+    target_batch_tokens = 2**19
+    
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    
+    # Calculate layernorm schedule
+    gap_ln2 = 10
+    gap_ln1qk = 10
+    gap_ln1v = 15
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+    
+    start_ln2 = 200
+    start_ln1qk = start_ln2 + n_layers * gap_ln2
+    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
+    start_lnf = start_ln1v + n_layers * gap_ln1v
+    start_eot = start_lnf + 20
+    start_bos = start_eot + 100
+    
+    return FinetuneConfig(**locals())
+
+def make_pythia_1b_test():
+    # Architecture params
+    model_name = "EleutherAI/pythia-1b"
+    n_layers = 16
+    
+    # Training params - minimal values for testing
+    base_batch_size = 1
+    max_steps = 10
+    block_size = 512
+    target_batch_tokens = 2**12
+    warmup_steps = 2
+    
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    
+    # Calculate layernorm schedule
+    gap_ln2 = 2
+    gap_ln1qk = 2
+    gap_ln1v = 3
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+    
+    start_ln2 = 2  # Start earlier for testing
+    start_ln1qk = start_ln2 + n_layers * gap_ln2
+    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
+    start_lnf = start_ln1v + n_layers * gap_ln1v
+    start_eot = start_lnf + 2
+    start_bos = start_eot + 1  # Shorter gap for testing
+    
+    return FinetuneConfig(**locals())
+
+def make_pythia_70m_test():
+    # Architecture params
+    model_name = "EleutherAI/pythia-70m"
+    n_layers = 6
+    
+    # Training params - minimal values for testing
+    base_batch_size = 1
+    max_steps = 10
+    block_size = 128
+    target_batch_tokens = 2**12
+    warmup_steps = 2
+    save_steps = 5  # Save checkpoints frequently
+    
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    
+    # Calculate layernorm schedule - minimal gaps for quick testing
+    gap_ln2 = 1
+    gap_ln1qk = 1
+    gap_ln1v = 1
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+    
+    start_ln2 = 1
+    start_ln1qk = start_ln2 + n_layers * gap_ln2
+    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
+    start_lnf = start_ln1v + n_layers * gap_ln1v
+    start_eot = start_lnf + 1
+    start_bos = start_eot + 1  # Shorter gap for testing
+    
+    return FinetuneConfig(**locals())
+
 FINETUNE_CONFIGS = {
     "gpt2_standard": make_gpt2_standard(),
     "gpt2_test": make_gpt2_test(),
@@ -373,6 +575,12 @@ FINETUNE_CONFIGS = {
     "gpt2-large_test": make_gpt2_large_test(),
     "gpt2-xl": make_gpt2_xl(),
     "gpt2-xl_test": make_gpt2_xl_test(),
+    "pythia-70m": make_pythia_70m(),
+    "pythia-70m_test": make_pythia_70m_test(),
+    "pythia-160m": make_pythia_160m(),
+    "pythia-410m": make_pythia_410m(),
+    "pythia-1b": make_pythia_1b(),
+    "pythia-1b_test": make_pythia_1b_test(),
 }
 
 def main():
