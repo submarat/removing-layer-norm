@@ -2,12 +2,12 @@
 Evaluate language model performance on The Pile dataset variants.
 
 Example:
-    python eval_pile.py -m ckpt1200.pt -f nanogpt -d pile-10k -n 20000
-    python eval_pile.py -m gpt2 -f transformers -d pile-apollo
-    python eval_pile.py -m results/checkpoint-1200 -f transformers --slay-ln
+    python eval_pile.py -m ckpt1200.pt -f nanogpt -d pile-10k -n 20000 -b 16
+    python eval_pile.py -m gpt2 -f transformers -d pile-apollo -b 8
+    python eval_pile.py -m results/checkpoint-1200 -f transformers --slay-ln -b 4
 
 Usage:
-    eval_pile.py -m MODEL [-f FORMAT] [-d DATASET] [-n NUM_SAMPLES] [--slay-ln]
+    eval_pile.py -m MODEL [-f FORMAT] [-d DATASET] [-n NUM_SAMPLES] [-b BATCH_SIZE] [--slay-ln] [--model-name MODEL_NAME]
     eval_pile.py -h | --help
 
 Options:
@@ -16,54 +16,54 @@ Options:
     -f FORMAT --format FORMAT       Model format: nanogpt/transformers [default: transformers]
     -d DATASET --dataset DATASET    Dataset variant: pile-10k/pile-apollo/pile-uncopyrighted [default: pile-10k]
     -n NUM --num-samples NUM        Number of samples to evaluate [default: 20000]
+    -b BATCH_SIZE --batch-size BATCH_SIZE  Batch size for evaluation [default: 8]
+    --model-name MODEL_NAME         Base model name [default: gpt2]
     --slay-ln                       Remove LayerNorm from model [default: False]
 """
 
 import os
-
 import torch
-from datasets import load_dataset
-from tqdm import tqdm
-from transformers import AutoTokenizer, GPT2LMHeadModel, AutoModelForCausalLM, GPT2Config
 from transformer_lens import HookedTransformer
 from std_dicts import std_dicts
 from utils import remove_layernorm
+from pile_eval import preprocess_pile_dataset, evaluate_model_on_pile
+from transformers import GPT2LMHeadModel, AutoModelForCausalLM
 
+# Load model with appropriate device
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def load_saved_model(model_name: str, model_path=None):
     if model_path is not None: 
         model = GPT2LMHeadModel.from_pretrained(model_path)
     else:
         # Load OpenAI's GPT model - use specific model name like "gpt2-large" or "gpt2-xl"
-        model = AutoModelForCausalLM.from_pretrained(model_name)  # or other OpenAI model version    
+        model = AutoModelForCausalLM.from_pretrained(model_name)  # or other OpenAI model version
     return model
 
 
-def load_hf_model(model_id_or_ckpt_path, slay_ln=False):
+def load_hf_model(model_id_or_ckpt_path, model_name, slay_ln=False):
     """ Loads huggingface transformers model and removes layernorm """
     model_hf = GPT2LMHeadModel.from_pretrained(model_id_or_ckpt_path)
 
     if slay_ln:
-        remove_layernorm("gpt2", model_hf)
+        remove_layernorm(model_name, model_hf)
 
     return model_hf
 
 
-def load_pt_file(filepath, slay_ln=False):
+def load_pt_file(filepath, model_name, slay_ln=False):
     """ Loads nanoGPT checkpoint and removes layernorm """
     # Check if file exists
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"Model file not found at {filepath}")
     
-    # Load model with appropriate device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     checkpoint = torch.load(filepath, map_location=device)
     sd = checkpoint["model"]
     transposed = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
 
     # Load the HF GPT2 model
     # init a huggingface/transformers model
-    model_hf = GPT2LMHeadModel.from_pretrained("gpt2")
+    model_hf = GPT2LMHeadModel.from_pretrained(model_name)
     sd_hf = model_hf.state_dict()
     # Now, use the state dict from the checkpoint to overwrite the weights in the model
     sd_keys_hf = list(sd_hf.keys())
@@ -90,7 +90,7 @@ def load_pt_file(filepath, slay_ln=False):
     return model_hf
 
 
-def load_nln_hf_model(name=None, model=None):
+def load_nln_hf_model(model_name, name=None, model=None):
     if model is None and name is None or model is not None and name is not None:
         raise ValueError("Either name or model must be provided, but not both")
     if model is not None:
@@ -114,7 +114,7 @@ def load_nln_hf_model(name=None, model=None):
                 self.blocks[i].ln2 = torch.nn.Identity()
             self.ln_final = torch.nn.Identity()
     
-    hooked_model = HookedTransformerNoLN.from_pretrained("gpt2", hf_model=model, fold_ln=True, center_unembed=False).to("cpu")
+    hooked_model = HookedTransformerNoLN.from_pretrained(model_name, hf_model=model, fold_ln=True, center_unembed=False).to("cpu")
 
     hooked_model.removeLN()
     hooked_model.cfg.normalization_type = None
@@ -122,8 +122,8 @@ def load_nln_hf_model(name=None, model=None):
     return hooked_model
 
 
-def custom_tokenizer(examples):
-    tokenizer = AutoTokenizer.from_pretrained("gpt2")
+def custom_tokenizer(examples, model_name):
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
     tokenizer.pad_token = tokenizer.eos_token
     # Add EOS token to the end of each example
     examples["text"] = [text + tokenizer.eos_token for text in examples["text"]]
@@ -147,92 +147,6 @@ def custom_tokenizer(examples):
     return {"input_ids": chunks}
 
 
-def evaluate_on_pile_ce(model, dataset_name, num_samples=5000, device=None):
-    print(f"Evaluating on {dataset_name}, using {num_samples} samles")
-    if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
-    if dataset_name == "pile-apollo":
-        dataset = load_dataset("apollo-research/monology-pile-uncopyrighted-tokenizer-gpt2", streaming=True, split="train")
-        dataset = dataset.shuffle(seed=42)
-        dataset = list(dataset.take(num_samples))
-    elif dataset_name == "pile-uncopyrighted":
-        dataset = load_dataset("monology/pile-uncopyrighted", streaming=True, split="train")
-        dataset = dataset.shuffle(seed=42)
-        dataset = list(dataset.take(num_samples))
-    elif dataset_name == "pile-10k":
-        dataset = load_dataset("NeelNanda/pile-10k", streaming=False, split="train")
-    
-    if dataset_name == "pile-apollo":
-        processed_examples = []
-        for i, example in enumerate(tqdm(dataset)):
-            processed_examples.append(torch.tensor(example["input_ids"]))
-    else:
-        # Process dataset in fixed-size chunks
-        # processed_examples = []
-        # for i in range(0, len(dataset), 1024):
-        #     batch = dataset[i:i + 1024]
-        #     processed = custom_tokenizer({"text": [ex["text"] for ex in batch]})
-        #     processed_examples.extend(processed["input_ids"])
-        # Process in chunks without limiting total size
-        batch_size = 1024
-        processed_examples = []
-        
-        # Use iterator to process dataset in chunks
-        dataset_iterator = iter(dataset)
-        while True:
-            try:
-                batch = []
-                # for _ in range(batch_size):
-                #     batch.append(next(dataset_iterator)["text"])
-                while len(batch) < batch_size:
-                    example = next(dataset_iterator)
-                    # Filter out OpenWebText2
-                    if 1: # example.get('meta', {}).get('pile_set_name') != "OpenWebText2":
-                        batch.append(example["text"])
-                processed = custom_tokenizer({"text": batch})
-                print(len(processed["input_ids"][0]))
-                processed_examples.extend(processed["input_ids"])
-            except StopIteration:
-                break
-    
-    print(f"Processed data shape: {(len(processed_examples), len(processed_examples[0]))}")
-    
-    # For testing purposes, print the first 100 examples
-    # for i, example in enumerate(dataset):
-    #     if i >= 100:
-    #         break
-    #     print(tokenizer.decode(example["input_ids"]))
-    
-    model.to(device)
-    model.eval()
-
-    total_loss = 0
-    total_tokens = 0
-
-    with torch.no_grad():
-        for i, chunk in enumerate(tqdm(processed_examples, desc="Evaluating")):
-            input_ids = torch.tensor(chunk).unsqueeze(0).to(device)
-            
-            if isinstance(model, HookedTransformer):
-                logits = model(input_ids)
-                loss = model.loss_fn(logits, input_ids, per_token=True)
-                
-                total_loss += loss.sum().item()
-                total_tokens += input_ids.numel()
-            else:
-                outputs = model(input_ids=input_ids, labels=input_ids)
-                loss = outputs.loss
-                total_loss += loss.item() * len(chunk)
-                total_tokens += len(chunk)
-            if i % 100 == 0:
-                print(
-                    f"Processed {i} examples. Current ce loss: {total_loss/total_tokens:.2f}"
-                )
-            
-    return total_loss / total_tokens if total_tokens > 0 else float("inf")
-
-
 def main():
     from docopt import docopt
     args = docopt(__doc__)
@@ -242,21 +156,31 @@ def main():
     format_type = args['--format']
     dataset_name = args['--dataset']
     num_samples = int(args['--num-samples'])
+    batch_size = int(args['--batch-size'])
+    model_name = args['--model-name'] or "gpt2"
     slay_ln = args['--slay-ln']
+    
+    # Create cache directory if it doesn't exist
+    os.makedirs("processed_datasets", exist_ok=True)
     
     # Load model based on format
     if format_type == 'nanogpt':
-        model = load_pt_file(model_path, slay_ln=slay_ln)
+        model = load_pt_file(model_path, model_name, slay_ln=slay_ln)
     elif format_type == 'transformers':
-        model = load_hf_model(model_path, slay_ln=slay_ln)
+        model = load_hf_model(model_path, model_name, slay_ln=slay_ln)
     else:
         raise ValueError(f"Unknown format type: {format_type}")
 
-    if slay_ln:
-        model = load_nln_hf_model(model=model)
+    model = model.to(device)
+    
+    #if slay_ln:
+    #    model = load_nln_hf_model(model=model, model_name=model_name)
 
-    # Evaluate model
-    ce_loss = evaluate_on_pile_ce(model, dataset_name, num_samples)
+    # Using shared preprocessing function
+    processed_examples, tokenizer = preprocess_pile_dataset(dataset_name, model_name, num_samples)
+    
+    # Using shared evaluation function
+    ce_loss = evaluate_model_on_pile(model, processed_examples, tokenizer, batch_size)
     print(f"Final Cross-Entropy Loss on {dataset_name}: {ce_loss:.4f}")
 
 if __name__ == "__main__":
