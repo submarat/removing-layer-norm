@@ -18,7 +18,7 @@ class FinetuneConfig(BaseModel):
     max_steps: int
     block_size: int = 1024
     target_batch_tokens: int = Field(default=2**19, description="Desired total tokens per batch")
-    warmup_steps: int = 20
+    warmup_steps: int = 100
     weight_decay: float = 0.01
     learning_rate: float = 6e-4
     save_steps: int = 50  # Save checkpoint every 100 steps
@@ -45,6 +45,7 @@ class FinetuneConfig(BaseModel):
     start_bos: int
 
 def make_gpt2_standard():
+    # Fast schedule
     # Architecture params
     model_name = "gpt2"
     n_layers = 12
@@ -54,6 +55,7 @@ def make_gpt2_standard():
     max_steps = 300
     block_size = 1024
     target_batch_tokens = 2**19
+    warmup_steps = 20
     
     # Calculate derived training params
     batch_size = base_batch_size
@@ -77,7 +79,7 @@ def make_gpt2_standard():
     
     return FinetuneConfig(**locals())
 
-def make_gpt2_standard_def():
+def make_gpt2_standard_slow():
     # Architecture params
     model_name = "gpt2"
     n_layers = 12
