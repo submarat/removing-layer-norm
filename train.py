@@ -434,6 +434,10 @@ def main():
     )
     args = parser.parse_args()
 
+    if torch.cuda.is_available() and torch.cuda.device_count() > 1:
+        print(f"Multiple GPUs detected ({torch.cuda.device_count()}). Forcing single GPU usage.")
+        os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
     # Get model name from config
     config = FINETUNE_CONFIGS[args.config]
     model_name = config.model_name
