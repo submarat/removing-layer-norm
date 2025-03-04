@@ -39,6 +39,38 @@ _USE_WANDB = True
 std_dict = std_dicts["gpt2"]["std_dict"]
 std_bos_dict = std_dicts["gpt2"]["std_bos_dict"]
 
+class CustomTrainer(Trainer):
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        """Compute CE loss with a negative log gaussian loss across all transformer blocks."""
+        outputs = model(**inputs)
+        loss = outputs.loss
+
+        def penalty(activations, block_index):
+            
+            # Forward through block 0 only
+            block_activations = model.transformer.h[block_index](hidden_states)[0]
+            
+            # Calculate mean and std of activations
+            mean = block_activations.mean()
+            std = block_activations.std()
+            
+            # Negative log gaussian penalty
+            gaussian_penalty = 0.5 * (torch.log(2 * torch.pi * std**2) + (block_activations - mean)**2 / (2 * std**2))
+            gaussian_penalty = gaussian_penalty.mean()
+            return gaussian_penalty
+
+        # Get embeddings
+        hidden_states = model.transformer.wte(inputs["input_ids"])
+        position_ids = torch.arange(0, hidden_states.size(1), dtype=torch.long, device=hidden_states.device)
+        hidden_states = hidden_states + model.transformer.wpe(position_ids)
+        hidden_states = model.transformer.drop(hidden_states)
+
+        # Add penalty to loss to encourage the model's residuals to unity
+        for i in range(len(model.transformer.h)):
+            loss = loss + penalty(hidden_states, i)
+
+        return (loss, outputs) if return_outputs else loss
+
 class FakeLayerNorm(nn.Module):
     """LayerNorm using a fixed std instead of the actual standard deviation."""
 
@@ -255,7 +287,7 @@ def finetune_with_ln(model, training_args, tokenized, data_collator, config, pil
     else:
         eval_datasets = tokenized["test"]
     
-    trainer = Trainer(
+    trainer = CustomTrainer(
         model=model,
         args=training_args,
         train_dataset=tokenized["train"],
