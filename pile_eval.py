@@ -4,13 +4,14 @@ Used by both train.py and eval_pile.py.
 """
 
 import os
+import random
 import torch
 from tqdm import tqdm
 from datasets import load_dataset, Dataset
 from transformers import AutoTokenizer, GPT2LMHeadModel
 from transformer_lens import HookedTransformer
 
-def preprocess_pile_dataset(dataset_name, model_name, num_samples=5000, cache_dir="processed_datasets"):
+def preprocess_pile_dataset(dataset_name, model_name, num_samples=5000, cache_dir="processed_datasets", filter_subsets=True):
     """Preprocess dataset for evaluation using efficient batching"""
     print(f"Preprocessing {dataset_name} dataset...")
     
@@ -40,6 +41,7 @@ def preprocess_pile_dataset(dataset_name, model_name, num_samples=5000, cache_di
         if num_samples < len(dataset):
             # Sample randomly if num_samples is less than dataset size
             dataset = dataset.shuffle(seed=42).select(range(num_samples))
+
     
     # Process without batching to avoid PyArrow errors
     print("Tokenizing examples...")
@@ -53,9 +55,18 @@ def preprocess_pile_dataset(dataset_name, model_name, num_samples=5000, cache_di
     else:
         # For text datasets
         for example in tqdm(dataset, desc="Processing"):
-            text = example["text"] + tokenizer.eos_token  # Add EOT token
-            tokens = tokenizer(text, truncation=False, padding=False)["input_ids"]
-            all_tokens.extend(tokens)
+            # Filter out OpenWebText2 and books
+            add_example = True
+            if filter_subsets:
+                try:
+                    if example.get('meta', {}).get('pile_set_name') in ["OpenWebText2", "Books3", "BookCorpus2"]:
+                        add_example = False
+                except Exception as e:
+                    pass
+            if add_example:
+                text = example["text"] + tokenizer.eos_token  # Add EOT token
+                tokens = tokenizer(text, truncation=False, padding=False)["input_ids"]
+                all_tokens.extend(tokens)
     
     # Chunk into fixed-size blocks
     block_size = 1024
@@ -69,6 +80,9 @@ def preprocess_pile_dataset(dataset_name, model_name, num_samples=5000, cache_di
         if len(chunk) == block_size:  # Only use complete chunks
             processed_examples.append(torch.tensor(chunk))
     
+    # Shufflink after chunking, important if there are long samples that yield many chunks.
+    print("Shufflink after chunking, important if there are long samples that yield many chunks.")
+    random.shuffle(processed_examples)
     print(f"Processed data into {len(processed_examples)} evaluation chunks")
     
     # Cache processed dataset
