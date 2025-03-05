@@ -186,7 +186,7 @@ def main():
     config = ProcessingConfig(
         input_file=Path('data/pile_sub_l256-512_s16.parquet'),
         output_dir=Path('experiments'),
-        model_type='nln',
+        model_type='baseline',
         batch_size=8,  # Increased batch size
         chunk_size=1000,  # Process 1000 batches at a time
         use_memmap=True,  # Use memory mapping
