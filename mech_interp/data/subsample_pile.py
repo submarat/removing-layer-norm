@@ -25,7 +25,10 @@ def main(input_path, min_length=256, max_length=512, stride=16):
 
     # Load data
     print("Loading data...")
-    df_pile = pd.read_parquet(input_path)[['text']]
+    df_pile = pd.read_parquet(input_path)
+    df_pile.meta = df_pile.meta.apply(lambda x : x['pile_set_name'])
+    print(f"Filtering out OpenWebText2 data")
+    df_pile = df_pile[df_pile.meta != 'OpenWebText2']
 
     # Initialize tokenizer
     print("Tokenizing texts...")
@@ -34,8 +37,8 @@ def main(input_path, min_length=256, max_length=512, stride=16):
         tokenizer.encode(text, add_special_tokens=False)
         for text in tqdm(df_pile.text.tolist())
     ]
-    # Add BOS and EOS tokens
-    token_indices = [[50256] + seq for seq in token_indices]
+    # Add EOS tokens
+    token_indices = [seq + [50256] for seq in token_indices]
     num_tokens = [len(i) for i in token_indices]
     df_pile['token_indices'] = token_indices
     df_pile['num_tokens'] = num_tokens
@@ -51,6 +54,7 @@ def main(input_path, min_length=256, max_length=512, stride=16):
 
         tokens = row['token_indices']
         seq_length = len(tokens)
+        meta = row['meta']
         
         # Generate end positions using stride
         end_positions = range(1, len(tokens), stride)
@@ -67,7 +71,8 @@ def main(input_path, min_length=256, max_length=512, stride=16):
                 'input_sequence': input_seq,
                 'target_token': target,
                 'sequence_length': len(input_seq),
-                'end_position': end_pos
+                'end_position': end_pos,
+                'meta': meta,
             })
 
     # Create and save output DataFrame
