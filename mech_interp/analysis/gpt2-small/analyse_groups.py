@@ -13,7 +13,7 @@ df = df[df.sequence_length >= 20]
 plt.style.use('seaborn-v0_8-colorblind')
 
 # Assuming df is your dataframe with all the columns mentioned
-def analyze_divergences(df, low_threshold=0.02, high_threshold=0.20):
+def analyze_divergences(df, low_threshold=0.01, high_threshold=0.20):
     """
     Analyze and visualize divergences between models.
     
@@ -119,7 +119,7 @@ def analyze_divergences(df, low_threshold=0.02, high_threshold=0.20):
 
 # Example usage:
 fig, labeled_df, counts = analyze_divergences(df)
-#fig.savefig('figures/subgroup_counts.png', dpi=200)
+fig.savefig('figures/subgroup_counts.png', dpi=200)
 plt.show()
 
 # %%
@@ -141,7 +141,7 @@ def plot_sequence_length_by_region(region_df):
         'B': 'finetuning or noLN',
         'C': 'no difference',
     }
-    
+   
     # Create a figure
     fig, ax = plt.subplots(figsize=(12, 8))
     
@@ -186,7 +186,7 @@ def plot_sequence_length_by_region(region_df):
     return fig
 
 fig = plot_sequence_length_by_region(labeled_df)
-#fig.savefig('figures/subgroup_seq_len.png', dpi=200)
+fig.savefig('figures/subgroup_seq_len.png', dpi=200)
 plt.show()
 
 
@@ -285,7 +285,7 @@ def analyze_accuracy_by_region(region_df):
 
 
 fig, _ = analyze_accuracy_by_region(labeled_df)
-#fig.savefig('figures/subgroup_accuracies.png', dpi=200)
+fig.savefig('figures/subgroup_accuracies.png', dpi=200)
 plt.show()
 
 # %%
