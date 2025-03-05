@@ -434,6 +434,8 @@ def main():
     )
     args = parser.parse_args()
 
+    # Forcing to use only 1 GPU. Otherwise, tensors end up on different devices.
+    # Fixing this is an open TODO but not a priority.
     if torch.cuda.is_available() and torch.cuda.device_count() > 1:
         print(f"Multiple GPUs detected ({torch.cuda.device_count()}). Forcing single GPU usage.")
         os.environ["CUDA_VISIBLE_DEVICES"] = "0"

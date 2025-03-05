@@ -46,8 +46,7 @@ venv.bak/
 # Misc
 .DS_Store
 
-gpt2_cache
-gpt2-large_cache
+*_cache
 openwebtext
 results
 wandb
