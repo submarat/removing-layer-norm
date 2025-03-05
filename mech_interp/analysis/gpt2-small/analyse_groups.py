@@ -6,13 +6,14 @@ import seaborn as sns
 from matplotlib.colors import LinearSegmentedColormap
 
 df = pd.read_parquet('metrics_comparison.parquet')
+df = df[df.sequence_length >= 20]
 
 # %% 
 # Use colorblind-friendly style
 plt.style.use('seaborn-v0_8-colorblind')
 
 # Assuming df is your dataframe with all the columns mentioned
-def analyze_divergences(df, low_threshold=0.05, high_threshold=0.15):
+def analyze_divergences(df, low_threshold=0.02, high_threshold=0.20):
     """
     Analyze and visualize divergences between models.
     
@@ -33,7 +34,7 @@ def analyze_divergences(df, low_threshold=0.05, high_threshold=0.15):
         'A': high_baseline_noLN & low_baseline_finetuned,     # Top-Left (noLN effect)
         'C': low_baseline_noLN & low_baseline_finetuned,      # Bottom-Left (consensus)
         'B': high_baseline_noLN & high_baseline_finetuned,    # Top-Right (both effects)
-        'D': low_baseline_noLN & high_baseline_finetuned,     # Bottom-Right (finetuning effect)
+        #'D': low_baseline_noLN & high_baseline_finetuned,     # Bottom-Right (finetuning effect)
     }
     
     # Region explanations for the legend
@@ -41,7 +42,7 @@ def analyze_divergences(df, low_threshold=0.05, high_threshold=0.15):
         'A': 'noLN only',
         'B': 'finetuning or noLN',
         'C': 'no difference',
-        'D': 'finetuning only'
+        #'D': 'finetuning only'
     }
     
     # Create a new column for region labels
@@ -118,7 +119,7 @@ def analyze_divergences(df, low_threshold=0.05, high_threshold=0.15):
 
 # Example usage:
 fig, labeled_df, counts = analyze_divergences(df)
-fig.savefig('figures/subgroup_counts.png', dpi=200)
+#fig.savefig('figures/subgroup_counts.png', dpi=200)
 plt.show()
 
 # %%
@@ -185,7 +186,7 @@ def plot_sequence_length_by_region(region_df):
     return fig
 
 fig = plot_sequence_length_by_region(labeled_df)
-fig.savefig('figures/subgroup_seq_len.png', dpi=200)
+#fig.savefig('figures/subgroup_seq_len.png', dpi=200)
 plt.show()
 
 
@@ -284,7 +285,7 @@ def analyze_accuracy_by_region(region_df):
 
 
 fig, _ = analyze_accuracy_by_region(labeled_df)
-fig.savefig('figures/subgroup_accuracies.png', dpi=200)
+#fig.savefig('figures/subgroup_accuracies.png', dpi=200)
 plt.show()
 
 # %%
@@ -376,9 +377,9 @@ plt.show()
 
 # %%
 labeled_df.region.value_counts()
+
 # %%
-print(labeled_df.columns)
-out_df = labeled_df[labeled_df.region == 'A']
-out_df = out_df[['input_sequence', 'target_token', 'pred_baseline', 'pred_finetuned', 'pred_noln']]
-out_df.to_csv('test.csv', index=False)
+a = labeled_df[labeled_df.region == 'A'][['input_sequence']]
+c = labeled_df[labeled_df.region == 'C'][['input_sequence']].sample(1000, replace=False)
+print(len(a), len(c))
 # %%
