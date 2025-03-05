@@ -9,9 +9,9 @@ from transformers import GPT2TokenizerFast
 
 # %%
 df = pd.read_parquet('../../data/pile_sub_l256-512_s16.parquet')
-baseline = np.load('../../experiments/softmax_probabilities_baseline.npy')
-finetuned = np.load('../../experiments/softmax_probabilities_finetuned.npy')
-noLN = np.load('../../experiments/softmax_probabilities_nln.npy')
+baseline = np.memmap('../../experiments/softmax_probabilities_baseline.npy', dtype=np.float32, mode='r', shape=(len(df), 50257))
+finetuned = np.memmap('../../experiments/softmax_probabilities_finetuned.npy', dtype=np.float32, mode='r', shape=(len(df), 50257))
+noLN = np.memmap('../../experiments/softmax_probabilities_nln.npy', dtype=np.float32, mode='r', shape=(len(df), 50257))
 
 # %%
 # Ensure each model's probabilities sum to one for each sample
