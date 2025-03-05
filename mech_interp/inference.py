@@ -18,6 +18,9 @@ class ProcessingConfig:
     output_dir: Path
     batch_size: int = 32
     model_type: Literal["baseline", "finetuned", "nln"] = "baseline"
+    use_memmap: bool = True  # Use memory-mapped array
+    chunk_size: int = 1000  # Process in chunks to save memory
+    precision: str = "float32"  # Reduced precision to save memory
     device: str = "cuda" if t.cuda.is_available() else "cpu"
     shuffle: bool = False
     
@@ -65,6 +68,12 @@ class ModelProcessor:
         self.model = self._load_model()
         self.device = t.device(config.device)
         self.model.to(self.device)
+        # Enable torch.cuda.amp for mixed precision if on GPU
+        self.use_amp = self.config.device == "cuda" and self.config.precision == "float16"
+
+        # Clean up GPU memory if possible
+        if self.config.device == "cuda":
+            t.cuda.empty_cache()
         
     def _load_model(self):
         """Load the appropriate model based on configuration."""
@@ -95,49 +104,93 @@ class ModelProcessor:
             seq.clone().detach().to(device=self.device, dtype=t.long)
             for seq in batch['input_sequences']
         ]
-        indices = [
-            t.tensor(idx, device=self.device, dtype=t.long, requires_grad=False)
-            for idx in batch['indices']
-        ]
         
-        # Stack both sequences and indices
+        # Stack sequences
         input_tensor = t.stack(input_sequences)
-        indices = t.stack(indices)
+        indices = batch['indices']
         
-        with t.no_grad():
-            logits = self.model(input_tensor)
-            probs = F.softmax(logits, dim=-1)[:, -1, :]
-            
-        return indices, probs
-    
+        # Use autocast for mixed precision if on GPU
+        if self.use_amp:
+            with t.cuda.amp.autocast():
+                with t.no_grad():
+                    logits = self.model(input_tensor)
+                    probs = F.softmax(logits, dim=-1)[:, -1, :]
+        else:
+            with t.no_grad():
+                logits = self.model(input_tensor)
+                probs = F.softmax(logits, dim=-1)[:, -1, :]
+
+        # Move to CPU and convert to numpy immediately to free GPU memory
+        probs_np = probs.cpu().to(dtype=getattr(t, self.config.precision)).numpy()
+
+        # Clear cache after each batch if using GPU
+        if self.config.device == "cuda":
+            t.cuda.empty_cache()
+
+        return indices, probs_np
+
     def run_processing(self) -> None:
         """Run the complete processing pipeline."""
         # Load data
         df = pd.read_parquet(self.config.input_file)
-        dataloader = self._create_dataloader(df)
-        
-        # Initialize output array
+
+        # Create memory-mapped array or regular array based on config
         vocab_size = self.model.cfg.d_vocab
-        softmax_probs = np.zeros((len(df), vocab_size), dtype=np.float32)
-        softmax_probs.flags.writeable = True
+        dtype = np.float16 if self.config.precision == "float16" else np.float32
 
-        # Process batches
-        for batch in tqdm(dataloader, desc="Processing Batches"):
-            indices, probs = self.process_batch(batch)
-            softmax_probs[indices.cpu().numpy()] = probs.float().cpu().numpy()
-        
-        # Save results
-        np.save(f"{self.config.output_file}", softmax_probs)
-        print(f"Saved softmax probabilities to : {self.config.output_file}.")
+        if self.config.use_memmap:
+            # Create memory-mapped array
+            self.config.output_dir.mkdir(exist_ok=True, parents=True)
+            softmax_probs = np.memmap(
+                self.config.output_file,
+                dtype=dtype,
+                mode='w+',
+                shape=(len(df), vocab_size)
+            )
+        else:
+            # Regular numpy array
+            softmax_probs = np.zeros((len(df), vocab_size), dtype=dtype)
+
+        # Process in chunks to reduce memory usage
+        total_batches = len(df) // self.config.batch_size + (1 if len(df) % self.config.batch_size > 0 else 0)
+
+        # Process dataloader in chunks
+        dataloader = self._create_dataloader(df)
+
+        for chunk_idx in range(0, len(dataloader), self.config.chunk_size):
+            chunk_end = min(chunk_idx + self.config.chunk_size, len(dataloader))
+            chunk_loader = list(dataloader)[chunk_idx:chunk_end]
+
+            for batch in tqdm(chunk_loader,
+                             desc=f"Processing Chunk {chunk_idx//self.config.chunk_size + 1}/{(len(dataloader)-1)//self.config.chunk_size + 1}"):
+                indices, probs = self.process_batch(batch)
+                softmax_probs[indices] = probs
+
+            # Flush memory-mapped array after each chunk
+            if self.config.use_memmap:
+                softmax_probs.flush()
+
+        # If using memmap, we need to explicitly close it
+        if self.config.use_memmap:
+            # The flush should have already saved it
+            del softmax_probs
+        else:
+            # Save results for regular array
+            np.save(self.config.output_file, softmax_probs)
+
+        print(f"Saved softmax probabilities to: {self.config.output_file}")
         print("Inference complete...")
-
 
 def main():
     # Define configuration
     config = ProcessingConfig(
         input_file=Path('data/pile_sub_l256-512_s16.parquet'),
         output_dir=Path('experiments'),
-        model_type='baseline'
+        model_type='nln',
+        batch_size=8,  # Increased batch size
+        chunk_size=1000,  # Process 1000 batches at a time
+        use_memmap=True,  # Use memory mapping
+        precision="float32"  # Use lower precision
     )
     
     # Run processing
