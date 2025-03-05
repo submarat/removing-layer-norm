@@ -96,7 +96,7 @@ def parse_arguments():
     parser.add_argument('--max_length', type=int, default=512,
                         help='Maximum sequence length (default: 512)')
     parser.add_argument('--stride', type=int, default=16,
-                        help='Stride length for generating subsequences (default: 8)')
+                        help='Stride length for generating subsequences (default: 16)')
     
     return parser.parse_args()
 
