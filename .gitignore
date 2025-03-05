@@ -3,6 +3,7 @@ model-with-ln/
 model-without-ln/
 tokenizer/
 tokenized_dataset/
+processed_datasets/
 
 # Python
 __pycache__/
@@ -45,7 +46,7 @@ venv.bak/
 # Misc
 .DS_Store
 
-gpt2_cache
+*_cache
 openwebtext
 results
 wandb

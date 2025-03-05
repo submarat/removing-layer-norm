@@ -45,6 +45,41 @@ class FinetuneConfig(BaseModel):
     start_bos: int
 
 def make_gpt2_standard():
+    # Fast schedule
+    # Architecture params
+    model_name = "gpt2"
+    n_layers = 12
+    
+    # Training params
+    base_batch_size = 48
+    max_steps = 300
+    block_size = 1024
+    target_batch_tokens = 2**19
+    warmup_steps = 20
+    
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    
+    # Calculate layernorm schedule
+    gap_ln2 = 2
+    gap_ln1qk = 2
+    gap_ln1v = 3
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+
+    start_ln2 = 20
+    start_ln1qk = start_ln2 + 12 * gap_ln2
+    start_ln1v = start_ln1qk + 12 * gap_ln1qk
+    start_lnf = start_ln1v + 12 * gap_ln1v
+    start_eot = start_lnf + 2
+    start_bos = start_eot + 10
+    
+    return FinetuneConfig(**locals())
+
+def make_gpt2_standard_slow():
     # Architecture params
     model_name = "gpt2"
     n_layers = 12
