@@ -54,7 +54,7 @@ def make_gpt2_standard_aux():
     n_layers = 12
     
     # Training params
-    base_batch_size = 40
+    base_batch_size = 32
     max_steps = 300
     block_size = 1024
     target_batch_tokens = 2**19
