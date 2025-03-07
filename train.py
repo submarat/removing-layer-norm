@@ -20,11 +20,10 @@ from transformers import (
     TrainingArguments,
 )
 import types
-from datasets import load_dataset
+
 from std_dicts import std_dicts
 from pydantic import BaseModel, Field
 from typing import Dict, Optional, Callable, Any
-from pile_eval import preprocess_pile_dataset, evaluate_model_on_pile, convert_for_trainer
 
 # TODO: support multi-GPU. If multiple GPUs are available, this will select the first one.
 device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
@@ -38,6 +37,133 @@ _USE_WANDB = True
 # Default to gpt2 std_dicts
 std_dict = std_dicts["gpt2"]["std_dict"]
 std_bos_dict = std_dicts["gpt2"]["std_bos_dict"]
+
+class CustomTrainer(Trainer):
+    """Trainer with auxiliary loss to encourage uniform residual norms."""
+    
+    def __init__(self, *args, aux_loss_weight=0.1, **kwargs):
+        """
+        CustomTrainer with auxiliary loss to encourage uniform residual norms.
+        
+        Args:
+            aux_loss_weight: Weight of the auxiliary loss for uniform residual norms.
+                             Set to 0 to disable the auxiliary loss.
+        """
+        super().__init__(*args, **kwargs)
+        self.aux_loss_weight = aux_loss_weight
+        self.pre_ln_f_activations = None
+        
+        # Register a hook to capture activations if we're using auxiliary loss
+        if self.aux_loss_weight > 0 and hasattr(self.model, 'transformer'):
+            # Register forward hook to capture activations before ln_f
+            def pre_ln_f_hook(module, input):
+                # Store the input to ln_f (which is what we want to normalize)
+                self.pre_ln_f_activations = input[0].detach()
+                return input
+                
+            # Register the hook on the final layer norm
+            self.model.transformer.ln_f.register_forward_pre_hook(pre_ln_f_hook)
+        
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        """Compute CE loss with an auxiliary loss to encourage uniform residual norms."""
+        # Regular forward pass - hook will capture activations before ln_f
+        outputs = model(**inputs)
+        loss = outputs.loss
+        
+        # Skip auxiliary loss calculation if weight is 0 or no activations captured
+        if self.aux_loss_weight == 0 or self.pre_ln_f_activations is None:
+            return (loss, outputs) if return_outputs else loss
+        
+        # Get input_ids for identifying special tokens
+        input_ids = inputs["input_ids"]
+        
+        # Identify BOS and EOS tokens
+        # BOS is the first token (position 0)
+        bos_positions = torch.zeros_like(input_ids, dtype=torch.bool)
+        bos_positions[:, 0] = True
+        
+        # For GPT-2, the EOS token ID is 50256
+        eos_token_id = 50256  # GPT-2 specific EOS token ID
+        eos_positions = (input_ids == eos_token_id)
+        
+        # Create a mask for non-BOS/EOS positions
+        non_special_positions = ~(bos_positions | eos_positions)
+        
+        # Calculate norm statistics from the captured activations
+        # We need to reshape the activations to match the input_ids shape for masking
+        hidden_states = self.pre_ln_f_activations
+        
+        # Compute std along feature dimension for each position
+        # Do this in a memory-efficient way
+        mean = hidden_states.mean(dim=-1, keepdim=True)
+        
+        # Compute variance with a memory-efficient approach
+        var = ((hidden_states - mean) ** 2).mean(dim=-1)
+        
+        # Free up memory
+        del hidden_states, mean
+        torch.cuda.empty_cache()  # Explicitly clear cache if using CUDA
+        
+        # Compute standard deviation
+        std = torch.sqrt(var + 1e-5)  # Adding epsilon for numerical stability
+        
+        # Get target std from non-special positions
+        # Create flattened masks aligned with the std tensor
+        batch_size, seq_len = input_ids.size()
+        flat_std = std.view(-1)
+        flat_non_special = non_special_positions.view(-1)
+        
+        # Extract valid standard deviations using the mask
+        valid_stds = flat_std[flat_non_special]
+        
+        if valid_stds.numel() > 0:
+            target_std = valid_stds.mean()
+        else:
+            # Fallback if no valid positions
+            target_std = torch.tensor(1.0, device=std.device)
+        
+        # Calculate auxiliary loss - MSE to encourage uniform norms
+        # Computing this on the original std tensor to maintain gradients
+        aux_loss = self.aux_loss_weight * ((std - target_std) ** 2).mean()
+        
+        # Log statistics if using wandb
+        if _USE_WANDB:
+            try:
+                is_main_process = torch.distributed.get_rank() == 0 if torch.distributed.is_initialized() else True
+            except:
+                is_main_process = True
+                
+            if is_main_process:
+                # Compute statistics for logging
+                flat_bos = bos_positions.view(-1)
+                flat_eos = eos_positions.view(-1)
+                
+                bos_std_val = flat_std[flat_bos].mean().item() if flat_bos.any() else 0
+                eos_std_val = flat_std[flat_eos].mean().item() if flat_eos.any() else 0
+                
+                wandb.log({
+                    "target_std": target_std.item(),
+                    "avg_std": std.mean().item(),
+                    "bos_std": bos_std_val,
+                    "eos_std": eos_std_val,
+                    "aux_loss": aux_loss.item(),
+                    "main_loss": loss.item()
+                })
+        
+        # Free up memory for other tensors we no longer need
+        del std, var, flat_std, flat_non_special
+        if _USE_WANDB:
+            del flat_bos, flat_eos
+        torch.cuda.empty_cache()  # Explicitly clear cache if using CUDA
+        
+        # Add auxiliary loss to main loss
+        loss = loss + aux_loss
+        
+        # Clear the stored activations for the next batch
+        self.pre_ln_f_activations = None
+        
+        return (loss, outputs) if return_outputs else loss
+
 
 class FakeLayerNorm(nn.Module):
     """LayerNorm using a fixed std instead of the actual standard deviation."""
@@ -244,32 +370,32 @@ def load_model(model_name="gpt2", remove_ln=False):
     
     return model
 
-def finetune_with_ln(model, training_args, tokenized, data_collator, config, pile_eval_dataset=None):
-    """Finetune model with layer normalization"""
-    # Create multi-dataset dictionary if pile_eval_dataset is provided
-    if pile_eval_dataset is not None:
-        eval_datasets = {
-            # "openwebtext": tokenized["test"],
-            "pile10k": pile_eval_dataset
-        }
-    else:
-        eval_datasets = tokenized["test"]
+def finetune_with_ln(model, training_args, tokenized, data_collator, config):
+    """Finetune model with layer normalization
     
-    trainer = Trainer(
+    Args:
+        model: The model to finetune
+        training_args: Training arguments
+        tokenized: Tokenized dataset
+        data_collator: Data collator for language modeling
+        config: Training configuration
+    """
+    # Extract auxiliary loss weight from config if available
+    aux_loss_weight = getattr(config, "aux_loss_weight", 0.1)
+    
+    trainer = CustomTrainer(
         model=model,
         args=training_args,
         train_dataset=tokenized["train"],
-        eval_dataset=eval_datasets,
+        eval_dataset=tokenized["test"],
         data_collator=data_collator,
+        aux_loss_weight=aux_loss_weight,
     )
 
-    trainer.train(
-        resume_from_checkpoint=training_args.resume_from_checkpoint
-    )
+    trainer.train()
 
+def finetune_without_ln(model, training_args, tokenized, data_collator, config):
 
-def finetune_without_ln(model, training_args, tokenized, data_collator, config, pile_eval_dataset=None):
-    """Finetune model without layer normalization"""
     def disable_ln_2(block_index):
         model.transformer.h[block_index].ln_2.mode = "fake"
         print(f"disabled ln_2 for block {block_index}")
@@ -367,39 +493,17 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config, 
         LNRemover(training_config.start_bos, training_config.gap_bos, disable_bos_std),
     ]
 
-    # If resuming, apply all removals that should have happened up to resume_step
-    if training_args.resume_from_checkpoint:
-        try:
-            checkpoint_path = training_args.resume_from_checkpoint
-            resume_step = int(checkpoint_path.split("-")[-1])
-            print(f"\nRetroactively applying LN removals up to step {resume_step}")
-            for i in range(resume_step + 1):
-                for ln_remover in ln_removers:
-                    ln_remover(i)
-            print("Finished applying retroactive LN removals\n")
-        except Exception as e:
-            print(f"Warning: Failed to extract step from checkpoint: {e}")
+    # Extract auxiliary loss weight from config if available
+    aux_loss_weight = getattr(config, "aux_loss_weight", 0.1)
 
-    callbacks = [
-        LNRemoverCallback(ln_removers),
-    ]
-
-    # Create multi-dataset dictionary if pile_eval_dataset is provided
-    if pile_eval_dataset is not None:
-        eval_datasets = {
-            # "openwebtext": tokenized["test"],
-            "pile10k": pile_eval_dataset
-        }
-    else:
-        eval_datasets = tokenized["test"]
-    
-    trainer = Trainer(
+    trainer = CustomTrainer(
         model=model,
         args=training_args,
         train_dataset=tokenized["train"],
-        eval_dataset=eval_datasets,
+        eval_dataset=tokenized["test"],
         data_collator=data_collator,
-        callbacks=callbacks,
+        aux_loss_weight=aux_loss_weight,
+        callbacks=[LNRemoverCallback(ln_removers)],
     )
 
     trainer.train(
@@ -434,12 +538,6 @@ def main():
     )
     args = parser.parse_args()
 
-    # Forcing to use only 1 GPU. Otherwise, tensors end up on different devices.
-    # Fixing this is an open TODO but not a priority.
-    if torch.cuda.is_available() and torch.cuda.device_count() > 1:
-        print(f"Multiple GPUs detected ({torch.cuda.device_count()}). Forcing single GPU usage.")
-        os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-
     # Get model name from config
     config = FINETUNE_CONFIGS[args.config]
     model_name = config.model_name
@@ -449,27 +547,9 @@ def main():
     std_dict = std_dicts[model_name]["std_dict"]
     std_bos_dict = std_dicts[model_name]["std_bos_dict"]
     
-    # Prepare datasets
     tokenized, data_collator = prepare_dataset(model_name)
-    
-    # Initialize model
     model = load_model(model_name, remove_ln=args.mode == "without_ln")
-    
-    # Initialize Pile-10k dataset once at the beginning
-    print("Preparing Pile-10k evaluation dataset...")
 
-    processed_examples, pile_tokenizer = preprocess_pile_dataset(
-        "pile-10k", model_name, num_samples=config.num_eval_samples
-    )
-    
-    pile_eval_dataset = convert_for_trainer(
-        processed_examples, 
-        pile_tokenizer,
-        model_name=model_name,
-        num_samples=config.num_eval_samples
-    )
-
-    # Training arguments with evaluation settings
     training_args = TrainingArguments(
         output_dir="./results",
         bf16=True,
@@ -497,20 +577,15 @@ def main():
         dataloader_persistent_workers=True,
         save_steps=config.save_steps,
         save_total_limit=12,
-        eval_accumulation_steps=1,
-        eval_strategy="steps",
-        eval_steps=config.save_steps,
-        load_best_model_at_end=False,
     )
 
-    # Pass the pile_eval_dataset to the appropriate training function
     if args.mode == "with_ln":
-        finetune_with_ln(model, training_args, tokenized, data_collator, config, pile_eval_dataset)
+        finetune_with_ln(model, training_args, tokenized, data_collator, config)
         if args.save:
             model.save_pretrained("model-with-ln")
             tokenizer.save_pretrained("model-with-ln")
     elif args.mode == "without_ln":
-        finetune_without_ln(model, training_args, tokenized, data_collator, config, pile_eval_dataset)
+        finetune_without_ln(model, training_args, tokenized, data_collator, config)
         if args.save:
             model.save_pretrained("model-without-ln")
             tokenizer.save_pretrained("model-without-ln")

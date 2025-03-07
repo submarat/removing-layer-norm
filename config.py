@@ -30,6 +30,9 @@ class FinetuneConfig(BaseModel):
     batch_size: int
     gradient_accumulation_steps: int
     
+    # Auxiliary loss params
+    aux_loss_weight: float = Field(default=0.1, description="Weight for the auxiliary loss to encourage uniform residual norms")
+    
     # Layernorm schedule params
     gap_ln2: Optional[int]
     gap_ln1qk: Optional[int]
