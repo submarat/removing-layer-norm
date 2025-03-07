@@ -58,7 +58,7 @@ class CustomTrainer(Trainer):
             # Register forward hook to capture activations before ln_f
             def pre_ln_f_hook(module, input):
                 # Store the input to ln_f (which is what we want to normalize)
-                self.pre_ln_f_activations = input[0].detach()
+                self.pre_ln_f_activations = input[0]
                 return input
                 
             # Register the hook on the final layer norm
@@ -94,37 +94,41 @@ class CustomTrainer(Trainer):
         hidden_states = self.pre_ln_f_activations
         
         # Compute std along feature dimension for each position
-        # Do this in a memory-efficient way
-        mean = hidden_states.mean(dim=-1, keepdim=True)
+        with torch.no_grad():  # Only for computing statistics, not affecting gradients
+            mean = hidden_states.mean(dim=-1, keepdim=True)
+            # Compute variance 
+            var = ((hidden_states - mean) ** 2).mean(dim=-1)
+            # Compute standard deviation
+            std = torch.sqrt(var + 1e-5)  # Adding epsilon for numerical stability
+            
+            # Get target std from non-special positions
+            # Create flattened masks aligned with the std tensor
+            batch_size, seq_len = input_ids.size()
+            flat_std = std.view(-1)
+            flat_non_special = non_special_positions.view(-1)
+            
+            # Extract valid standard deviations using the mask
+            valid_stds = flat_std[flat_non_special]
+            
+            if valid_stds.numel() > 0:
+                target_std = valid_stds.mean()
+            else:
+                # Fallback if no valid positions
+                target_std = torch.tensor(1.0, device=std.device)
         
-        # Compute variance with a memory-efficient approach
-        var = ((hidden_states - mean) ** 2).mean(dim=-1)
-        
-        # Free up memory
-        del hidden_states, mean
-        torch.cuda.empty_cache()  # Explicitly clear cache if using CUDA
-        
-        # Compute standard deviation
-        std = torch.sqrt(var + 1e-5)  # Adding epsilon for numerical stability
-        
-        # Get target std from non-special positions
-        # Create flattened masks aligned with the std tensor
-        batch_size, seq_len = input_ids.size()
-        flat_std = std.view(-1)
-        flat_non_special = non_special_positions.view(-1)
-        
-        # Extract valid standard deviations using the mask
-        valid_stds = flat_std[flat_non_special]
-        
-        if valid_stds.numel() > 0:
-            target_std = valid_stds.mean()
-        else:
-            # Fallback if no valid positions
-            target_std = torch.tensor(1.0, device=std.device)
+        # Now compute the loss with gradients
+        # Recompute mean and std with gradient tracking enabled
+        mean_with_grad = hidden_states.mean(dim=-1, keepdim=True)
+        centered = hidden_states - mean_with_grad
+        var_with_grad = (centered ** 2).mean(dim=-1)
+        std_with_grad = torch.sqrt(var_with_grad + 1e-5)
         
         # Calculate auxiliary loss - MSE to encourage uniform norms
-        # Computing this on the original std tensor to maintain gradients
-        aux_loss = self.aux_loss_weight * ((std - target_std) ** 2).mean()
+        # Computing this using the gradable tensors
+        aux_loss = self.aux_loss_weight * ((std_with_grad - target_std) ** 2).mean()
+        
+        # Free up memory - important to avoid OOM errors
+        self.pre_ln_f_activations = None
         
         # Log statistics if using wandb
         if _USE_WANDB:
@@ -134,33 +138,32 @@ class CustomTrainer(Trainer):
                 is_main_process = True
                 
             if is_main_process:
-                # Compute statistics for logging
-                flat_bos = bos_positions.view(-1)
-                flat_eos = eos_positions.view(-1)
-                
-                bos_std_val = flat_std[flat_bos].mean().item() if flat_bos.any() else 0
-                eos_std_val = flat_std[flat_eos].mean().item() if flat_eos.any() else 0
-                
-                wandb.log({
-                    "target_std": target_std.item(),
-                    "avg_std": std.mean().item(),
-                    "bos_std": bos_std_val,
-                    "eos_std": eos_std_val,
-                    "aux_loss": aux_loss.item(),
-                    "main_loss": loss.item()
-                })
+                # Compute statistics for logging using the already computed values
+                with torch.no_grad():
+                    flat_bos = bos_positions.view(-1)
+                    flat_eos = eos_positions.view(-1)
+                    
+                    bos_std_val = flat_std[flat_bos].mean().item() if flat_bos.any() else 0
+                    eos_std_val = flat_std[flat_eos].mean().item() if flat_eos.any() else 0
+                    
+                    wandb.log({
+                        "target_std": target_std.item(),
+                        "avg_std": std.mean().item(),
+                        "bos_std": bos_std_val,
+                        "eos_std": eos_std_val,
+                        "aux_loss": aux_loss.item(),
+                        "main_loss": loss.item()
+                    })
         
         # Free up memory for other tensors we no longer need
-        del std, var, flat_std, flat_non_special
+        del std, var
         if _USE_WANDB:
-            del flat_bos, flat_eos
+            with torch.no_grad():
+                del flat_bos, flat_eos
         torch.cuda.empty_cache()  # Explicitly clear cache if using CUDA
         
         # Add auxiliary loss to main loss
         loss = loss + aux_loss
-        
-        # Clear the stored activations for the next batch
-        self.pre_ln_f_activations = None
         
         return (loss, outputs) if return_outputs else loss
 
