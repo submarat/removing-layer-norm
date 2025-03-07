@@ -314,32 +314,35 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config, 
 
         def __call__(self, step):
             if self.layer_gap_steps is None:
-                # LN functions without layer (i.e. ln_f)
                 if step == self.start_step:
-                    print(f"step {step}")
                     self.function()
+                    self.log_event(step)
             elif self.layer_gap_steps == 0:
-                # LNs where we disable all layers at once
                 if step == self.start_step:
-                    print(f"step {step}")
                     [self.function(i) for i in range(self.n_layers)]
+                    self.log_event(step)
             elif (step - self.start_step) % self.layer_gap_steps == 0:
-                # LNs where we disable one layer at a time
                 layer_index = (step - self.start_step) // self.layer_gap_steps
                 if 0 <= layer_index < self.n_layers:
-                    print(f"step {step}")
                     self.function(layer_index)
+                    self.log_event(step, layer_index)
             else:
-                # Not at a step where we need to disable a LN
                 pass
 
+        def log_event(self, step, layer_index=None):
+            if _USE_WANDB:
+                event_name = f"{self.function.__name__}"
+                if layer_index is not None:
+                    event_name += f"_layer_{layer_index}"
+                # Log a nan value - it will show up at the top of the graph in wandb
+                wandb.log({event_name: float('nan')})
+
         def log(self, wandb):
-            name = self.function.__name__
             if _USE_WANDB:
                 wandb.log(
                     {
-                        f"{name}.start_step": self.start_step,
-                        f"{name}.layer_gap_steps": self.layer_gap_steps,
+                        f"{self.function.__name__}.start_step": self.start_step,
+                        f"{self.function.__name__}.layer_gap_steps": self.layer_gap_steps,
                     }
                 )
 
