@@ -169,18 +169,26 @@ class CustomTrainer(Trainer):
 
 
 class FakeLayerNorm(nn.Module):
-    """LayerNorm using a fixed std instead of the actual standard deviation."""
+    """
+    A fake layer norm that can switch between real layer norm and just
+    dividing by a fixed standard deviation.
+    """
 
     def __init__(self, ndim, layer, bias):
         super().__init__()
-        self.weight = nn.Parameter(torch.ones(ndim))
-        self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None
-        # Flag whether the LayerNorm is enabled ("real") or disabled ("fake")
+        self.weight = layer.weight
+        self.bias = layer.bias
+        self.eps = layer.eps
+        self.ndim = ndim
+        self.device = layer.weight.device
+
+        # Stateful components of ln
         self.mode = "real"
         self.attn_v_mode = "real"
-        self.average_std = torch.ones(ndim, device=device) * std_dict[layer]
-        self.average_std[0] = std_bos_dict[layer]
-        self.bos_std = torch.ones(ndim, device=device) * std_bos_dict[layer]
+
+        # We will freeze the average std and BOS std for each layer when Fake LN is activated
+        self.average_std = torch.ones(ndim, device=self.device)
+        self.bos_std = torch.ones(ndim, device=self.device)
 
     def forward(self, input, std_type="avg", attn_v=False):
         # We want all the enable / disable information to be in this class, but the class is re-used
@@ -188,28 +196,71 @@ class FakeLayerNorm(nn.Module):
         # the V path. Thus we get to have flags `mode` and `attn_v_mode` to enable / disable the
         # LN for the QK and V paths separately.
         mode = self.attn_v_mode if attn_v else self.mode
-        if mode == "fake":
-            # Which std values to use: We use (1) average std (which is actually a vector of length
-            # n_ctx for most of the time*) [a, b, b, ...] where a is the average std for position 1,
-            # and b is the average std for all other positions. We also have the option to use (2)
-            # the bos std [a, a, a, ...] for all positions, which we do if the input token is EOT.
-            # Note that we could differentiate between EOT and BOS, but I didn't need it here.
-            # *at the end (with disable_eot_std) we make the latter be like the former, and with
-            # disable_bos_std we make both vectors to be [b, b, b, ...], equivalent to scalars.
-            assert std_type in ["avg", "bos"]
-            std = self.average_std if std_type == "avg" else self.bos_std
-            return (
-                (input - input.mean(-1, keepdim=True)) / std * self.weight
-                + self.bias
-                if self.bias is not None
-                else input * self.weight
-            )
-        elif mode == "real":
-            return F.layer_norm(
-                input, self.weight.shape, self.weight, self.bias, 1e-5
-            )
+
+        if mode == "real":
+            # Compute and update std values during real forward pass
+            mean = input.mean(dim=-1, keepdim=True)
+            var = ((input - mean) ** 2).mean(dim=-1, keepdim=True)
+            std = torch.sqrt(var + self.eps)
+            
+            # Update running stats (detached to avoid modifying computation graph)
+            with torch.no_grad():
+                # Update average std across all positions
+                self.average_std = std.mean(dim=(0, 1)).detach().clone()
+                
+                # Update BOS std - use position 0 (first token) for each sequence in batch
+                if input.size(1) > 0:  # Ensure there's at least one token
+                    # Get std values for the first position (BOS token)
+                    bos_std = std[:, 0].squeeze(-1)  # Shape: [batch_size, hidden_dim]
+                    
+                    # Average across batch dimension
+                    self.bos_std = bos_std.mean(dim=0).detach().clone()
+            
+            # Perform actual layer normalization
+            normalized = (input - mean) / std
+            return normalized * self.weight + self.bias
         else:
-            raise ValueError(f"Unknown mode {mode}")
+            # Use fixed standard deviation in fake mode
+            if std_type == "avg":
+                std = self.average_std
+            elif std_type == "bos":
+                std = self.bos_std
+            else:
+                raise ValueError(f"Unknown std_type {std_type}")
+            
+            # Just divide by the fixed std, don't subtract the mean
+            return input / std.view(1, 1, -1) * self.weight + self.bias
+
+
+def log_std_values(model):
+    """
+    Log the standard deviation values from all FakeLayerNorm layers to wandb.
+    
+    Args:
+        model: The model containing FakeLayerNorm layers
+    """
+    if not _USE_WANDB:
+        return
+        
+    # Log std values for each layer
+    for i, block in enumerate(model.transformer.h):
+        if hasattr(block.ln_1, 'average_std'):
+            wandb.log({
+                f"layer_{i}_ln_1_avg_std": block.ln_1.average_std.mean().item(),
+                f"layer_{i}_ln_1_bos_std": block.ln_1.bos_std.mean().item()
+            })
+        if hasattr(block.ln_2, 'average_std'):
+            wandb.log({
+                f"layer_{i}_ln_2_avg_std": block.ln_2.average_std.mean().item(),
+                f"layer_{i}_ln_2_bos_std": block.ln_2.bos_std.mean().item()
+            })
+    
+    # Log std values for ln_f
+    if hasattr(model.transformer.ln_f, 'average_std'):
+        wandb.log({
+            "ln_f_avg_std": model.transformer.ln_f.average_std.mean().item(),
+            "ln_f_bos_std": model.transformer.ln_f.bos_std.mean().item()
+        })
 
 
 def load_model(model_name="gpt2", remove_ln=False):
@@ -236,8 +287,8 @@ def load_model(model_name="gpt2", remove_ln=False):
             ln_2_bias = block.ln_2.bias.clone().detach() if block.ln_2.bias is not None else None
             
             # Replace with FakeLayerNorm
-            block.ln_1 = FakeLayerNorm(ndim=n_embd, layer=f"blocks.{i}.hook_resid_pre", bias=block.ln_1.bias is not None)
-            block.ln_2 = FakeLayerNorm(ndim=n_embd, layer=f"blocks.{i}.hook_resid_mid", bias=block.ln_2.bias is not None)
+            block.ln_1 = FakeLayerNorm(ndim=n_embd, layer=block.ln_1, bias=ln_1_bias is not None)
+            block.ln_2 = FakeLayerNorm(ndim=n_embd, layer=block.ln_2, bias=ln_2_bias is not None)
             
             # Restore weights
             block.ln_1.weight = nn.Parameter(ln_1_weight)
@@ -319,8 +370,8 @@ def load_model(model_name="gpt2", remove_ln=False):
         
         model.transformer.ln_f = FakeLayerNorm(
             ndim=n_embd,
-            layer=f"blocks.{n_layers-1}.hook_resid_post",
-            bias=ln_f.bias is not None
+            layer=ln_f,
+            bias=ln_f_bias is not None
         )
         model.transformer.ln_f.weight = nn.Parameter(ln_f_weight)
         if ln_f_bias is not None:
@@ -416,18 +467,30 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config):
         print("disabled ln_f")
 
     def disable_eot_std(block_index):
+        """
+        Make the bos_std match the average_std, effectively disabling special handling for EOT tokens.
+        """
+        # Simply set bos_std to be the same as average_std
         model.transformer.h[block_index].ln_1.bos_std = model.transformer.h[
             block_index
-        ].ln_1.average_std
+        ].ln_1.average_std.clone()
         print(f"disabled eot std for block {block_index}")
 
     def disable_bos_std(block_index):
-        model.transformer.h[block_index].ln_1.average_std[0] = model.transformer.h[
-            block_index
-        ].ln_1.average_std[1]
-        model.transformer.h[block_index].ln_1.bos_std[0] = model.transformer.h[
-            block_index
-        ].ln_1.bos_std[1]
+        """
+        Disable special handling for BOS tokens by making all values in the std vectors uniform.
+        """
+        # Instead of trying to modify specific positions, replace with uniform values
+        # Use the mean value across the entire vector to ensure uniformity
+        avg_value = model.transformer.h[block_index].ln_1.average_std.mean()
+        
+        # Create new tensors with the uniform value
+        uniform_std = torch.ones_like(model.transformer.h[block_index].ln_1.average_std) * avg_value
+        
+        # Replace the std tensors with uniform ones
+        model.transformer.h[block_index].ln_1.average_std = uniform_std
+        model.transformer.h[block_index].ln_1.bos_std = uniform_std.clone()
+        
         print(f"disabled bos std for block {block_index}")
 
     class LNRemover:
@@ -475,13 +538,17 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config):
     class LNRemoverCallback(TrainerCallback):
         def __init__(self, ln_removers):
             self.ln_removers = ln_removers
+            self.log_interval = 10  # Log std values every 10 steps
 
         def on_step_begin(self, args, state, control, **kwargs):
-            # Iterate over the ln_removers
+            # Call the LNRemovers
             for ln_remover in self.ln_removers:
                 ln_remover(state.global_step)
                 ln_remover.log(wandb)
-            return control
+            
+            # Log std values periodically
+            if state.global_step % self.log_interval == 0:
+                log_std_values(kwargs.get('model', None))
 
     # Get schedule from config
     model_name = config.model_name
