@@ -306,12 +306,11 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config, 
         Schedules the "removal" of LayerNorms by calling the disable function.
         """
 
-        def __init__(self, start_step, layer_gap_steps, function, name):
+        def __init__(self, start_step, layer_gap_steps, function):
             self.n_layers = len(model.transformer.h)  # Get layers dynamically
             self.start_step = start_step
             self.layer_gap_steps = layer_gap_steps
             self.function = function
-            self.name = name
 
         def __call__(self, step):
             if self.layer_gap_steps is None:
@@ -332,7 +331,7 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config, 
 
         def log_event(self, step, layer_index=None):
             if _USE_WANDB:
-                event_name = f"{self.name}_disabled"
+                event_name = f"{self.function.__name__}"
                 if layer_index is not None:
                     event_name += f"_layer_{layer_index}"
                 # Log a nan value - it will show up at the top of the graph in wandb
@@ -342,8 +341,8 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config, 
             if _USE_WANDB:
                 wandb.log(
                     {
-                        f"{self.name}.start_step": self.start_step,
-                        f"{self.name}.layer_gap_steps": self.layer_gap_steps,
+                        f"{self.function.__name__}.start_step": self.start_step,
+                        f"{self.function.__name__}.layer_gap_steps": self.layer_gap_steps,
                     }
                 )
 
@@ -363,12 +362,12 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config, 
     training_config = config
     
     ln_removers = [
-        LNRemover(training_config.start_ln2, training_config.gap_ln2, disable_ln_2, "ln_2"),
-        LNRemover(training_config.start_ln1qk, training_config.gap_ln1qk, disable_ln_1qk, "ln_1qk"),
-        LNRemover(training_config.start_ln1v, training_config.gap_ln1v, disable_ln_1v, "ln_1v"),
-        LNRemover(training_config.start_lnf, training_config.gap_lnf, disable_ln_f, "ln_f"),
-        LNRemover(training_config.start_eot, training_config.gap_eot, disable_eot_std, "eot_std"),
-        LNRemover(training_config.start_bos, training_config.gap_bos, disable_bos_std, "bos_std"),
+        LNRemover(training_config.start_ln2, training_config.gap_ln2, disable_ln_2),
+        LNRemover(training_config.start_ln1qk, training_config.gap_ln1qk, disable_ln_1qk),
+        LNRemover(training_config.start_ln1v, training_config.gap_ln1v, disable_ln_1v),
+        LNRemover(training_config.start_lnf, training_config.gap_lnf, disable_ln_f),
+        LNRemover(training_config.start_eot, training_config.gap_eot, disable_eot_std),
+        LNRemover(training_config.start_bos, training_config.gap_bos, disable_bos_std),
     ]
 
     # If resuming, apply all removals that should have happened up to resume_step
