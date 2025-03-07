@@ -31,7 +31,7 @@ class FinetuneConfig(BaseModel):
     gradient_accumulation_steps: int
     
     # Auxiliary loss params
-    aux_loss_weight: float = Field(default=0.1, description="Weight for the auxiliary loss to encourage uniform residual norms")
+    aux_loss_weight: float = Field(default=0.0, description="Weight for the auxiliary loss to encourage uniform residual norms")
     
     # Layernorm schedule params
     gap_ln2: Optional[int]
@@ -47,6 +47,43 @@ class FinetuneConfig(BaseModel):
     start_eot: int
     start_bos: int
 
+def make_gpt2_standard_aux():
+    # Fast schedule
+    # Architecture params
+    model_name = "gpt2"
+    n_layers = 12
+    
+    # Training params
+    base_batch_size = 40
+    max_steps = 300
+    block_size = 1024
+    target_batch_tokens = 2**19
+    warmup_steps = 25
+    
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    
+    # Calculate layernorm schedule
+    gap_ln2 = 2
+    gap_ln1qk = 2
+    gap_ln1v = 3
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+
+    start_ln2 = 20
+    start_ln1qk = start_ln2 + 12 * gap_ln2
+    start_ln1v = start_ln1qk + 12 * gap_ln1qk
+    start_lnf = start_ln1v + 12 * gap_ln1v
+    start_eot = start_lnf + 2
+    start_bos = start_eot + 10
+
+    aux_loss_weight = 0.1
+    
+    return FinetuneConfig(**locals())
+
 def make_gpt2_standard():
     # Fast schedule
     # Architecture params
@@ -58,7 +95,7 @@ def make_gpt2_standard():
     max_steps = 300
     block_size = 1024
     target_batch_tokens = 2**19
-    warmup_steps = 20
+    warmup_steps = 25
     
     # Calculate derived training params
     batch_size = base_batch_size
@@ -232,6 +269,42 @@ def make_gpt2_medium_fasttune():
     
     return FinetuneConfig(**locals())
 
+def make_gpt2_medium_fasttune_aux():
+    # Architecture params
+    model_name = "gpt2-medium"
+    n_layers = 24
+    
+    # Training params
+    base_batch_size = 22
+    max_steps = 500
+    block_size = 1024
+    target_batch_tokens = 2**19
+    warmup_steps = 10  # Shorter warmup due to accelerated schedule
+    
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    
+    # Calculate layernorm schedule
+    gap_ln2 = 2
+    gap_ln1qk = 2
+    gap_ln1v = 3
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+    
+    start_ln2 = 20
+    start_ln1qk = start_ln2 + n_layers * gap_ln2
+    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
+    start_lnf = start_ln1v + n_layers * gap_ln1v
+    start_eot = start_lnf + 2
+    start_bos = start_eot + 10
+
+    aux_loss_weight = 0.1
+    
+    return FinetuneConfig(**locals())
+
 def make_gpt2_medium_test():
     # Architecture params
     model_name = "gpt2-medium"
@@ -402,10 +475,12 @@ def make_gpt2_xl_test():
     return FinetuneConfig(**locals())
 
 FINETUNE_CONFIGS = {
+    "gpt2_standard_aux": make_gpt2_standard_aux(),
     "gpt2_standard": make_gpt2_standard(),
     "gpt2_test": make_gpt2_test(),
     "gpt2-medium_slow": make_gpt2_medium_slow(),
     "gpt2-medium_fasttune": make_gpt2_medium_fasttune(),
+    "gpt2-medium_fasttune_aux": make_gpt2_medium_fasttune_aux(),
     "gpt2-medium_test": make_gpt2_medium_test(),
     "gpt2-large": make_gpt2_large(),
     "gpt2-large_test": make_gpt2_large_test(),
