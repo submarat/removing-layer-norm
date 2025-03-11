@@ -264,6 +264,13 @@ class FakeLayerNorm(nn.Module):
         """
         Optimized forward pass for both training and inference.
         """
+        # Ensure input is on the same device as our weights
+        if input.device != self.weight.device:
+            input = input.to(self.weight.device)
+        
+        # Update our device attribute if it has changed
+        self.device = self.weight.device
+        
         # Determine which mode to use
         mode = self.attn_v_mode if attn_v else self.mode
         
@@ -303,7 +310,22 @@ class FakeLayerNorm(nn.Module):
                 std = self.bos_std
             else:
                 raise ValueError(f"Unknown std_type {std_type}")
+            
+            # Extra checks for device consistency
+            if std.device != self.weight.device:
+                # This shouldn't happen, but just in case
+                print(f"Warning: Device mismatch in FakeLayerNorm! Moving std from {std.device} to {self.weight.device}")
+                std = std.to(self.weight.device)
                 
+                # Update our stored tensors as well to prevent future mismatches
+                if std_type == "avg":
+                    self.average_std = std
+                else:  # std_type == "bos"
+                    self.bos_std = std
+                
+                # Sync buffers
+                self._sync_buffers()
+            
             # Fast division without mean subtraction
             # Pre-compute weight/std for better performance
             weight_adjusted = self.weight / std.view(1, 1, -1) if std.dim() == 1 else self.weight / std
@@ -417,6 +439,7 @@ def load_model(model_name="gpt2", remove_ln=False, checkpoint_path=None):
             # Load the weights
             print("Loading weights from state dict")
             model.load_state_dict(state_dict, strict=False)
+            model = model.to(device)
             
             # Now restore mode information
             print("Restoring FakeLayerNorm modes...")
@@ -442,18 +465,20 @@ def load_model(model_name="gpt2", remove_ln=False, checkpoint_path=None):
         elif state_dict:
             # Load weights but don't convert to FakeLayerNorm
             print("Loading weights from state dict (keeping original LayerNorm)")
-            model.load_state_dict(state_dict, strict=False)
+            model.load_state_dict(state_dict, strict=False, device=device)
             
+        model = model.to(device)
         return model
         
     # Loading fresh model without checkpoint
     print(f"Loading pretrained model: {model_name}")
-    model = AutoModelForCausalLM.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
     
     if remove_ln:
         print("Converting model to use FakeLayerNorm")
         model = replace_layernorm_with_fake_layernorm(model)
     
+    model = model.to(device)
     return model
 
 def finetune_with_ln(model, training_args, tokenized, data_collator, config):
@@ -481,49 +506,91 @@ def finetune_with_ln(model, training_args, tokenized, data_collator, config):
     trainer.train()
 
 def finetune_without_ln(model, training_args, tokenized, data_collator, config):
-
+    """
+    Finetune model without layer normalization, progressively disabling layer norms.
+    
+    Args:
+        model: The model to finetune
+        training_args: Training arguments
+        tokenized: Tokenized dataset
+        data_collator: Data collator for language modeling
+        config: Training configuration
+    """
     def disable_ln_2(block_index):
         model.transformer.h[block_index].ln_2.mode = "fake"
-        print(f"disabled ln_2 for block {block_index}")
+        # Explicitly sync buffers and move to the correct device
+        model.transformer.h[block_index].ln_2._sync_buffers()
+        model.transformer.h[block_index].ln_2.to(device)
+        print(f"disabled ln_2 for block {block_index} (device: {device})")
 
     def disable_ln_1qk(block_index):
         model.transformer.h[block_index].ln_1.mode = "fake"
-        print(f"disabled ln_1 for block {block_index}")
+        # Explicitly sync buffers and move to the correct device
+        model.transformer.h[block_index].ln_1._sync_buffers()
+        model.transformer.h[block_index].ln_1.to(device)
+        print(f"disabled ln_1 for block {block_index} (device: {device})")
 
     def disable_ln_1v(block_index):
         model.transformer.h[block_index].ln_1.attn_v_mode = "fake"
-        print(f"disabled ln_1v for block {block_index}")
+        # Explicitly sync buffers and move to the correct device
+        model.transformer.h[block_index].ln_1._sync_buffers()
+        model.transformer.h[block_index].ln_1.to(device)
+        print(f"disabled ln_1v for block {block_index} (device: {device})")
 
     def disable_ln_f():
         model.transformer.ln_f.mode = "fake"
-        print("disabled ln_f")
+        # Explicitly sync buffers and move to the correct device
+        model.transformer.ln_f._sync_buffers()
+        model.transformer.ln_f.to(device)
+        print(f"disabled ln_f (device: {device})")
 
     def disable_eot_std(block_index):
         """
         Make the bos_std match the average_std, effectively disabling special handling for EOT tokens.
         """
-        # Simply set bos_std to be the same as average_std
-        model.transformer.h[block_index].ln_1.bos_std = model.transformer.h[
-            block_index
-        ].ln_1.average_std.clone()
-        print(f"disabled eot std for block {block_index}")
+        # Move tensors to the correct device before operations
+        model.transformer.h[block_index].ln_1.to(device)
+        
+        # Get the average_std tensor and ensure it's on the right device
+        avg_std = model.transformer.h[block_index].ln_1.average_std
+        if avg_std.device != device:
+            avg_std = avg_std.to(device)
+        
+        # Set bos_std to a clone of average_std
+        model.transformer.h[block_index].ln_1.bos_std = avg_std.clone()
+        
+        # Sync buffers and ensure correct device
+        model.transformer.h[block_index].ln_1._sync_buffers()
+        model.transformer.h[block_index].ln_1.to(device)
+        
+        print(f"disabled eot std for block {block_index} (device: {device})")
 
     def disable_bos_std(block_index):
         """
         Disable special handling for BOS tokens by making all values in the std vectors uniform.
         """
-        # Instead of trying to modify specific positions, replace with uniform values
-        # Use the mean value across the entire vector to ensure uniformity
-        avg_value = model.transformer.h[block_index].ln_1.average_std.mean()
+        # Move module to the correct device first
+        model.transformer.h[block_index].ln_1.to(device)
         
-        # Create new tensors with the uniform value
-        uniform_std = torch.ones_like(model.transformer.h[block_index].ln_1.average_std) * avg_value
+        # Get average value, ensuring tensor is on the correct device
+        avg_std = model.transformer.h[block_index].ln_1.average_std
+        if avg_std.device != device:
+            avg_std = avg_std.to(device)
+            
+        avg_value = avg_std.mean()
+        
+        # Create new tensors with the uniform value, directly on the correct device
+        uniform_std = torch.ones_like(avg_std, device=device) * avg_value
         
         # Replace the std tensors with uniform ones
         model.transformer.h[block_index].ln_1.average_std = uniform_std
         model.transformer.h[block_index].ln_1.bos_std = uniform_std.clone()
         
-        print(f"disabled bos std for block {block_index}")
+        # Sync buffers and ensure correct device 
+        model.transformer.h[block_index].ln_1._sync_buffers()
+        model.transformer.h[block_index].ln_1.to(device)
+        
+        print(f"disabled bos std for block {block_index} (device: {device})")
 
     class LNRemover:
         """
@@ -625,6 +692,9 @@ def replace_layernorm_with_fake_layernorm(model):
     Returns:
         The modified model
     """
+    print(f"Moving model to device: {device}")
+    model = model.to(device)
+    
     n_layers = model.config.n_layer
     n_embd = model.transformer.h[0].ln_1.weight.shape[0]
     
@@ -642,6 +712,10 @@ def replace_layernorm_with_fake_layernorm(model):
         block.ln_1 = FakeLayerNorm(ndim=n_embd, layer=block.ln_1, bias=ln_1_bias is not None)
         block.ln_2 = FakeLayerNorm(ndim=n_embd, layer=block.ln_2, bias=ln_2_bias is not None)
         
+        # Explicitly move to the correct device
+        block.ln_1 = block.ln_1.to(device)
+        block.ln_2 = block.ln_2.to(device)
+        
         # Restore weights
         block.ln_1.weight = nn.Parameter(ln_1_weight)
         if ln_1_bias is not None:
@@ -654,7 +728,7 @@ def replace_layernorm_with_fake_layernorm(model):
         def make_attn_forward(old_forward):
             def new_forward(self, x_qk, x_v):
                 B, T, C = x_qk.size()
-
+                
                 # Calculate q,k from x_qk and v from x_v
                 # Correct matrix multiplication order and reshape
                 qkv_qk = x_qk.reshape(B*T, C) @ self.c_attn.weight[:, :2*C]  # For Q and K
@@ -693,8 +767,14 @@ def replace_layernorm_with_fake_layernorm(model):
         # Monkey patch the forward method of the block
         def make_forward(old_forward):
             def new_forward(self, x, *args, **kwargs):
+                # Ensure x is on the correct device
+                if x.device != device:
+                    x = x.to(device)
+                
                 # Get EOT mask from the input
                 eot_mask = kwargs.pop('eot_mask', None)
+                if eot_mask is not None and eot_mask.device != device:
+                    eot_mask = eot_mask.to(device)
                 
                 # Calculate LN'd x for Q and K
                 x_qk = self.ln_1(x)
@@ -714,7 +794,7 @@ def replace_layernorm_with_fake_layernorm(model):
             return types.MethodType(new_forward, block)
         
         block.forward = make_forward(block.forward)
-
+    
     # Replace ln_f with FakeLayerNorm
     ln_f = model.transformer.ln_f
     ln_f_weight = ln_f.weight.clone().detach()
@@ -725,6 +805,9 @@ def replace_layernorm_with_fake_layernorm(model):
         layer=ln_f,
         bias=ln_f_bias is not None
     )
+    # Explicitly move to the correct device
+    model.transformer.ln_f = model.transformer.ln_f.to(device)
+    
     model.transformer.ln_f.weight = nn.Parameter(ln_f_weight)
     if ln_f_bias is not None:
         model.transformer.ln_f.bias = nn.Parameter(ln_f_bias)
@@ -734,6 +817,11 @@ def replace_layernorm_with_fake_layernorm(model):
         def new_forward(self, *args, **kwargs):
             # Extract input_ids from either kwargs or first positional arg
             input_ids = kwargs.get('input_ids', args[0] if args else None)
+            
+            # Ensure input_ids is on the correct device
+            if input_ids is not None and input_ids.device != device:
+                input_ids = input_ids.to(device)
+                kwargs['input_ids'] = input_ids
             
             # Create eot_mask if we have input_ids
             eot_mask = None
@@ -750,7 +838,7 @@ def replace_layernorm_with_fake_layernorm(model):
             position_ids = torch.arange(0, hidden_states.size(1), dtype=torch.long, device=hidden_states.device)
             hidden_states = hidden_states + self.wpe(position_ids)
             hidden_states = self.drop(hidden_states)
-
+            
             # Forward through blocks with eot_mask
             for block in self.h:
                 hidden_states = block(hidden_states, eot_mask=eot_mask)
@@ -769,6 +857,11 @@ def replace_layernorm_with_fake_layernorm(model):
         return types.MethodType(new_forward, model.transformer)
     
     model.transformer.forward = make_transformer_forward(model.transformer.forward)
+    
+    print("Replaced all LayerNorm instances with FakeLayerNorm")
+    
+    # Final check to make sure everything is on the correct device
+    model = model.to(device)
     
     return model
 
