@@ -444,6 +444,7 @@ def load_model(model_name="gpt2", remove_ln=False, checkpoint_path=None):
             # Now restore mode information
             print("Restoring FakeLayerNorm modes...")
             mode_count = 0
+            std_count = 0
             for name, module in model.named_modules():
                 if isinstance(module, FakeLayerNorm):
                     # Check for mode buffers
@@ -454,8 +455,13 @@ def load_model(model_name="gpt2", remove_ln=False, checkpoint_path=None):
                     if (name, "attn_v_mode_buffer") in mode_info:
                         module.attn_v_mode = mode_info[(name, "attn_v_mode_buffer")]
                         mode_count += 1
+                    
+                    # Explicitly load std buffers into the module
+                    # This will ensure average_std and bos_std are loaded from the checkpoint
+                    module._load_from_buffers()
+                    std_count += 1
             
-            print(f"Restored {mode_count} mode values")
+            print(f"Restored {mode_count} mode values and {std_count} std buffers")
             
         elif remove_ln:
             # Just convert to FakeLayerNorm without checkpoint weights
