@@ -44,7 +44,7 @@ class FinetuneConfig(BaseModel):
     start_eot: int
     start_bos: int
 
-def make_gpt2_standard():
+def make_gpt2_standard_fast():
     # Fast schedule
     # Architecture params
     model_name = "gpt2"
@@ -52,7 +52,7 @@ def make_gpt2_standard():
     
     # Training params
     base_batch_size = 48
-    max_steps = 300
+    max_steps = 3000
     block_size = 1024
     target_batch_tokens = 2**19
     warmup_steps = 20
@@ -79,7 +79,7 @@ def make_gpt2_standard():
     
     return FinetuneConfig(**locals())
 
-def make_gpt2_standard_slow():
+def make_gpt2_standard():
     # Architecture params
     model_name = "gpt2"
     n_layers = 12

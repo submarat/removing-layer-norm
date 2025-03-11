@@ -86,7 +86,7 @@ def load_pt_file(filepath, model_name, slay_ln=False):
 
     # Now kill the layer norm by setting layer_norm_epsilon to 1e12, and multiplied the ln scaling parameters by 1e6
     if slay_ln:
-        remove_layernorm(model_hf)
+       remove_layernorm(model_name, model_hf)
     return model_hf
 
 

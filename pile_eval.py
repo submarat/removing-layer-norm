@@ -59,7 +59,7 @@ def preprocess_pile_dataset(dataset_name, model_name, num_samples=5000, cache_di
             add_example = True
             if filter_subsets:
                 try:
-                    if example.get('meta', {}).get('pile_set_name') in ["OpenWebText2", "Books3", "BookCorpus2"]:
+                    if example.get('meta', {}).get('pile_set_name') == "OpenWebText2": #, "Books3", "BookCorpus2"]:
                         add_example = False
                 except Exception as e:
                     pass
