@@ -398,18 +398,18 @@ def make_gpt2_large_aux_resume():
     gap_ln1qk = 4
     gap_ln1v = 6
     gap_lnf = None
-    gap_eot = 2
-    gap_bos = 2
+    gap_eot = 0
+    gap_bos = 0
     
     start_ln2 = 20
     start_ln1qk = start_ln2 + n_layers * gap_ln2
     start_ln1v = start_ln1qk + n_layers * gap_ln1qk
     start_lnf = start_ln1v + n_layers * gap_ln1v
-    start_eot = start_lnf + 10 # train for a little longer after disabling ln_f
-    start_bos = start_eot + 10
+    start_eot = start_lnf + 4 # train for a little longer after disabling ln_f
+    start_bos = start_eot + 2
 
-    lr_scheduler_type = 'linear'
-    learning_rate = 6e-5
+    lr_scheduler_type = 'linear' # set linear lr_schedule
+    learning_rate = 6e-5 # set LR to be lower
 
     aux_loss_weight = 0.001 # Use stronger aux loss
     

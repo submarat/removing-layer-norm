@@ -2,11 +2,12 @@
 Generate standard deviations used for layernorm removal.
 
 Usage:
-    print_std.py [--model-name=<model>] [--output=<file>]
+    print_std.py [--model-name=<model>] [--output=<file>] [--checkpoint-path=<ckpt_path>]
 
 Options:
-    --model-name=<model>  Name of model to analyze [default: gpt2]
-    --output=<file>       Output JSON file defaults to {model-name}_std_dicts.json
+    --model-name=<model>              Name of model to analyze [default: gpt2]
+    --output=<file>                   Output JSON file defaults to {model-name}_std_dicts.json
+    --checkpoint-path=<ckpt_path>     Checkpoint path
 """
 
 import json
@@ -16,8 +17,31 @@ import random
 from docopt import docopt
 from transformer_lens import HookedTransformer
 from prepare_dataset import prepare_dataset
+from train import load_model
 
 device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
+
+def generate_std_values_from_checkpoint(model_name, checkpoint_path, output_file):
+
+    model = load_model(model_name, remove_ln=True, checkpoint_path=checkpoint_path)
+
+    std_dict = {}
+    std_bos_dict = {}
+    n_layers = len(model.transformer.h)
+    for i, block in enumerate(model.transformer.h):
+        std_dict[f"blocks.{i}.hook_resid_pre"] = block.ln_1.average_std.mean().item()
+        std_dict[f"blocks.{i}.hook_resid_mid"] = block.ln_2.average_std.mean().item()
+        std_bos_dict[f"blocks.{i}.hook_resid_pre"] = block.ln_1.bos_std.mean().item()
+        std_bos_dict[f"blocks.{i}.hook_resid_mid"] = block.ln_2.bos_std.mean().item()
+    std_dict[f"blocks.{n_layers-1}.hook_resid_post"] = model.transformer.ln_f.average_std.mean().item()
+    std_bos_dict[f"blocks.{n_layers-1}.hook_resid_post"] = model.transformer.ln_f.bos_std.mean().item()
+
+    combined_dict = {
+        "std_dict": std_dict,
+        "std_bos_dict": std_bos_dict
+    }
+
+    open(output_file, "w").write(json.dumps(combined_dict, indent=4))
 
 def generate_std_values(model_name, output_file):
     # Load the model using HookedTransformer
@@ -102,9 +126,13 @@ if __name__ == "__main__":
     args = docopt(__doc__)
     model_name = args["--model-name"]
     output_file = args["--output"]
+    checkpoint_path = args["--checkpoint-path"]
     if output_file is None:
         output_file = f"{model_name}_std_dicts.json"
 
     print(f"Model name: {model_name}")
     print(f"Output file: {output_file}")
-    generate_std_values(model_name, output_file)
+    if checkpoint_path:
+        generate_std_values_from_checkpoint(model_name, checkpoint_path, output_file)
+    else:
+        generate_std_values(model_name, output_file)

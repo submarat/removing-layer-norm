@@ -524,6 +524,7 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config):
     """
     def disable_ln_2(block_index):
         model.transformer.h[block_index].ln_2.mode = "fake"
+        model.transformer.h[block_index].ln_2.attn_v_mode = "fake"
         # Explicitly sync buffers and move to the correct device
         model.transformer.h[block_index].ln_2._sync_buffers()
         model.transformer.h[block_index].ln_2.to(device)
@@ -555,19 +556,19 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config):
         Make the bos_std match the average_std, effectively disabling special handling for EOT tokens.
         """
         # Move tensors to the correct device before operations
-        model.transformer.h[block_index].ln_1.to(device)
-        
-        # Get the average_std tensor and ensure it's on the right device
-        avg_std = model.transformer.h[block_index].ln_1.average_std
-        if avg_std.device != device:
-            avg_std = avg_std.to(device)
-        
-        # Set bos_std to a clone of average_std
-        model.transformer.h[block_index].ln_1.bos_std = avg_std.clone()
+        model.transformer.h[block_index].ln_1.bos_std = model.transformer.h[block_index].ln_1.average_std
+        model.transformer.h[block_index].ln_2.bos_std = model.transformer.h[block_index].ln_2.average_std
+        model.transformer.ln_f.bos_std = model.transformer.ln_f.average_std
         
         # Sync buffers and ensure correct device
         model.transformer.h[block_index].ln_1._sync_buffers()
         model.transformer.h[block_index].ln_1.to(device)
+
+        model.transformer.h[block_index].ln_2._sync_buffers()
+        model.transformer.h[block_index].ln_2.to(device)
+
+        model.transformer.ln_f._sync_buffers()
+        model.transformer.ln_f.to(device)
         
         print(f"disabled eot std for block {block_index} (device: {device})")
 
@@ -576,25 +577,18 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config):
         Disable special handling for BOS tokens by making all values in the std vectors uniform.
         """
         # Move module to the correct device first
-        model.transformer.h[block_index].ln_1.to(device)
-        
-        # Get average value, ensuring tensor is on the correct device
-        avg_std = model.transformer.h[block_index].ln_1.average_std
-        if avg_std.device != device:
-            avg_std = avg_std.to(device)
-            
-        avg_value = avg_std.mean()
-        
-        # Create new tensors with the uniform value, directly on the correct device
-        uniform_std = torch.ones_like(avg_std, device=device) * avg_value
-        
-        # Replace the std tensors with uniform ones
-        model.transformer.h[block_index].ln_1.average_std = uniform_std
-        model.transformer.h[block_index].ln_1.bos_std = uniform_std.clone()
+        model.transformer.h[block_index].ln_1.average_std[0] = model.transformer.h[block_index].ln_1.average_std[1]
+        model.transformer.h[block_index].ln_1.bos_std[0] = model.transformer.h[block_index].ln_1.bos_std[1]
+
+        model.transformer.h[block_index].ln_2.average_std[0] = model.transformer.h[block_index].ln_2.average_std[1]
+        model.transformer.h[block_index].ln_2.bos_std[0] = model.transformer.h[block_index].ln_2.bos_std[1]
         
         # Sync buffers and ensure correct device 
         model.transformer.h[block_index].ln_1._sync_buffers()
         model.transformer.h[block_index].ln_1.to(device)
+
+        model.transformer.h[block_index].ln_2._sync_buffers()
+        model.transformer.h[block_index].ln_2.to(device)
         
         print(f"disabled bos std for block {block_index} (device: {device})")
 
