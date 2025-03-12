@@ -195,7 +195,7 @@ class FakeLayerNorm(nn.Module):
         self.is_training = True
         
         # Track update frequency to avoid updating on every forward pass
-        self.update_freq = 10  # Update every 10 steps
+        self.update_freq = 1  # Update every 10 steps
         self.steps_since_update = 0
         
         # Register buffers for std values and modes so they get saved with the model
@@ -646,7 +646,7 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config):
     class LNRemoverCallback(TrainerCallback):
         def __init__(self, ln_removers):
             self.ln_removers = ln_removers
-            self.log_interval = 10  # Log std values every 10 steps
+            self.log_interval = 1  # Log std values every 10 steps
 
         def on_step_begin(self, args, state, control, **kwargs):
             # Call the LNRemovers
@@ -939,7 +939,7 @@ def main():
         max_grad_norm=1.0,
         logging_dir="./logs",
         prediction_loss_only=True,
-        lr_scheduler_type="cosine",
+        lr_scheduler_type=config.lr_scheduler_type,
         report_to="wandb" if _USE_WANDB else "none",
         run_name=f"{args.config}-{args.mode}",
         logging_steps=1,
