@@ -10,6 +10,7 @@ import tqdm
 import transformers
 import wandb
 from config import FINETUNE_CONFIGS
+from datetime import datetime
 from prepare_dataset import prepare_dataset
 from torch.utils.data import Dataset
 from transformers import (
@@ -911,9 +912,11 @@ def main():
         remove_ln=args.mode == "without_ln", 
         checkpoint_path=args.resume_from_checkpoint
     )
-
+    
+    output_dir = f"results/{model_name}/{datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}"
+    os.makedirs(output_dir, exist_ok=True)
     training_args = TrainingArguments(
-        output_dir="./results",
+        output_dir=output_dir,
         bf16=True,
         resume_from_checkpoint=args.resume_from_checkpoint,
         save_safetensors=False,
