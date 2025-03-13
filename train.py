@@ -291,11 +291,9 @@ class FakeLayerNorm(nn.Module):
                     self.steps_since_update = 0
                     with torch.no_grad():
                         # Update stats (vectorized operations)
-                        self.average_std = std.mean(dim=(0, 1)).detach()
-                        
-                        # Update BOS std more efficiently if there are tokens
-                        if input.size(1) > 0:
-                            self.bos_std = std[:, 0].mean(dim=0).detach()
+                        self.average_std = torch.full((self.ndim,), std.mean().detach()).to(self.weight.device)
+                        self.bos_std = torch.full((self.ndim,), std[:, 0].mean().detach()).to(self.weight.device)
+                        self.average_std[0] = self.bos_std[0].item()
                             
                     # Sync to buffers periodically
                     self._sync_buffers()
@@ -311,26 +309,15 @@ class FakeLayerNorm(nn.Module):
             else:
                 raise ValueError(f"Unknown std_type {std_type}")
             
-            # Extra checks for device consistency
-            if std.device != self.weight.device:
-                # This shouldn't happen, but just in case
-                print(f"Warning: Device mismatch in FakeLayerNorm! Moving std from {std.device} to {self.weight.device}")
-                std = std.to(self.weight.device)
-                
-                # Update our stored tensors as well to prevent future mismatches
-                if std_type == "avg":
-                    self.average_std = std
-                else:  # std_type == "bos"
-                    self.bos_std = std
-                
-                # Sync buffers
-                self._sync_buffers()
-            
-            # Fast division without mean subtraction
-            # Pre-compute weight/std for better performance
-            weight_adjusted = self.weight / std.view(1, 1, -1) if std.dim() == 1 else self.weight / std
-            
-            return input * weight_adjusted + self.bias
+            std = std.view(1, -1, 1)
+            try:
+                return (
+                    (input - input.mean(-1, keepdim=True)) / std * self.weight + self.bias
+                    if self.bias is not None
+                    else input / std * self.weight
+                )
+            except Exception as e:
+                import pdb; pdb.set_trace()
 
 
 def log_std_values(model):
@@ -425,11 +412,12 @@ def load_model(model_name="gpt2", remove_ln=False, checkpoint_path=None):
                         print("safetensors not available, skipping safetensors file")
         except Exception as e:
             print(f"Error loading state dict: {e}")
+
         
         # 2. Load a fresh model architecture
         print(f"Loading base model architecture from {model_name}")
         model = AutoModelForCausalLM.from_pretrained(model_name)
-        
+
         # 3. Process based on what we found and what was requested
         if remove_ln and state_dict:
             # Convert to FakeLayerNorm and restore weights + modes
@@ -582,6 +570,9 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config):
 
         model.transformer.h[block_index].ln_2.average_std[0] = model.transformer.h[block_index].ln_2.average_std[1]
         model.transformer.h[block_index].ln_2.bos_std[0] = model.transformer.h[block_index].ln_2.bos_std[1]
+
+        model.transformer.ln_f.average_std[0] = model.transformer.ln_f.average_std[1]
+        model.transformer.ln_f.bos_std[0] = model.transformer.ln_f.bos_std[1]
         
         # Sync buffers and ensure correct device 
         model.transformer.h[block_index].ln_1._sync_buffers()
@@ -589,6 +580,9 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config):
 
         model.transformer.h[block_index].ln_2._sync_buffers()
         model.transformer.h[block_index].ln_2.to(device)
+
+        model.transformer.ln_f._sync_buffers()
+        model.transformer.ln_f.to(device)
         
         print(f"disabled bos std for block {block_index} (device: {device})")
 
@@ -696,7 +690,7 @@ def replace_layernorm_with_fake_layernorm(model):
     model = model.to(device)
     
     n_layers = model.config.n_layer
-    n_embd = model.transformer.h[0].ln_1.weight.shape[0]
+    n_ctx = model.config.n_ctx
     
     # Replace ln_1 and ln_2 with FakeLayerNorm
     for i in range(n_layers):
@@ -709,8 +703,8 @@ def replace_layernorm_with_fake_layernorm(model):
         ln_2_bias = block.ln_2.bias.clone().detach() if block.ln_2.bias is not None else None
         
         # Replace with FakeLayerNorm
-        block.ln_1 = FakeLayerNorm(ndim=n_embd, layer=block.ln_1, bias=ln_1_bias is not None)
-        block.ln_2 = FakeLayerNorm(ndim=n_embd, layer=block.ln_2, bias=ln_2_bias is not None)
+        block.ln_1 = FakeLayerNorm(ndim=n_ctx, layer=block.ln_1, bias=ln_1_bias is not None)
+        block.ln_2 = FakeLayerNorm(ndim=n_ctx, layer=block.ln_2, bias=ln_2_bias is not None)
         
         # Explicitly move to the correct device
         block.ln_1 = block.ln_1.to(device)
@@ -801,7 +795,7 @@ def replace_layernorm_with_fake_layernorm(model):
     ln_f_bias = ln_f.bias.clone().detach() if ln_f.bias is not None else None
     
     model.transformer.ln_f = FakeLayerNorm(
-        ndim=n_embd,
+        ndim=n_ctx,
         layer=ln_f,
         bias=ln_f_bias is not None
     )

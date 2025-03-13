@@ -179,7 +179,7 @@ def make_gpt2_test():
     gap_eot = 0
     gap_bos = 0
     
-    start_ln2 = 20  # Start earlier for testing
+    start_ln2 = 0  # Start earlier for testing
     start_ln1qk = start_ln2 + n_layers * gap_ln2
     start_ln1v = start_ln1qk + n_layers * gap_ln1qk
     start_lnf = start_ln1v + n_layers * gap_ln1v
