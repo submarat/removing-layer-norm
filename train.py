@@ -20,7 +20,7 @@ from transformers import (
     TrainingArguments,
 )
 import types
-
+import torch.nn as nn
 from std_dicts import std_dicts
 from pydantic import BaseModel, Field
 from typing import Dict, Optional, Callable, Any
@@ -179,6 +179,8 @@ class FakeLayerNorm(nn.Module):
         self.weight = layer.weight
         self.bias = layer.bias
         self.eps = layer.eps
+        alpha_init_value = 0.45
+        self.alpha = nn.Parameter(torch.ones(1) * alpha_init_value)
         self.ndim = ndim
         self.device = layer.weight.device
 
@@ -195,8 +197,8 @@ class FakeLayerNorm(nn.Module):
         # for both the QK and V paths. Thus we add the attn_v flag to the call that is True only for
         # the V path. Thus we get to have flags `mode` and `attn_v_mode` to enable / disable the
         # LN for the QK and V paths separately.
-        mode = self.attn_v_mode if attn_v else self.mode
-
+        # mode = self.attn_v_mode if attn_v else self.mode
+        mode = self.mode
         if mode == "real":
             # Compute and update std values during real forward pass
             mean = input.mean(dim=-1, keepdim=True)
@@ -221,16 +223,19 @@ class FakeLayerNorm(nn.Module):
             return normalized * self.weight + self.bias
         else:
             # Use fixed standard deviation in fake mode
-            if std_type == "avg":
-                std = self.average_std
-            elif std_type == "bos":
-                std = self.bos_std
-            else:
-                raise ValueError(f"Unknown std_type {std_type}")
+            # if std_type == "avg":
+            #     std = self.average_std
+            # elif std_type == "bos":
+            #     std = self.bos_std
+            # else:
+            #     raise ValueError(f"Unknown std_type {std_type}")
             
-            # Just divide by the fixed std, don't subtract the mean
-            return input / std.view(1, 1, -1) * self.weight + self.bias
-
+            # # Just divide by the fixed std, don't subtract the mean
+            # return input / std.view(1, 1, -1) * self.weight + self.bias
+            x = torch.tanh(self.alpha * input)
+            return x * self.weight + self.bias
+            
+        
 
 def log_std_values(model):
     """
@@ -247,19 +252,21 @@ def log_std_values(model):
         if hasattr(block.ln_1, 'average_std'):
             wandb.log({
                 f"layer_{i}_ln_1_avg_std": block.ln_1.average_std.mean().item(),
-                f"layer_{i}_ln_1_bos_std": block.ln_1.bos_std.mean().item()
+                f"layer_{i}_ln_1_bos_std": block.ln_1.bos_std.mean().item(),
+                f"layer_{i}_ln1 DyTAlpha": block.ln_1.alpha.item()
             })
         if hasattr(block.ln_2, 'average_std'):
             wandb.log({
                 f"layer_{i}_ln_2_avg_std": block.ln_2.average_std.mean().item(),
-                f"layer_{i}_ln_2_bos_std": block.ln_2.bos_std.mean().item()
+                f"layer_{i}_ln_2_bos_std": block.ln_2.bos_std.mean().item(),
+                f"layer_{i}_ln2 DyTAlpha": block.ln_2.alpha.item()
             })
-    
     # Log std values for ln_f
     if hasattr(model.transformer.ln_f, 'average_std'):
         wandb.log({
             "ln_f_avg_std": model.transformer.ln_f.average_std.mean().item(),
-            "ln_f_bos_std": model.transformer.ln_f.bos_std.mean().item()
+            "ln_f_bos_std": model.transformer.ln_f.bos_std.mean().item(),
+            "lnf DyTAlpha": model.transformer.ln_f.alpha.item()
         })
 
 
@@ -459,8 +466,9 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config):
         print(f"disabled ln_1 for block {block_index}")
 
     def disable_ln_1v(block_index):
-        model.transformer.h[block_index].ln_1.attn_v_mode = "fake"
-        print(f"disabled ln_1v for block {block_index}")
+        # model.transformer.h[block_index].ln_1.attn_v_mode = "fake"
+        # print(f"disabled ln_1v for block {block_index}")
+        print("nothing_happens")
 
     def disable_ln_f():
         model.transformer.ln_f.mode = "fake"
@@ -471,10 +479,11 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config):
         Make the bos_std match the average_std, effectively disabling special handling for EOT tokens.
         """
         # Simply set bos_std to be the same as average_std
-        model.transformer.h[block_index].ln_1.bos_std = model.transformer.h[
-            block_index
-        ].ln_1.average_std.clone()
-        print(f"disabled eot std for block {block_index}")
+        # model.transformer.h[block_index].ln_1.bos_std = model.transformer.h[
+        #     block_index
+        # ].ln_1.average_std.clone()
+        # print(f"disabled eot std for block {block_index}")
+        print(f"Nothing happens here anymore")
 
     def disable_bos_std(block_index):
         """
@@ -482,16 +491,15 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config):
         """
         # Instead of trying to modify specific positions, replace with uniform values
         # Use the mean value across the entire vector to ensure uniformity
-        avg_value = model.transformer.h[block_index].ln_1.average_std.mean()
+        # avg_value = model.transformer.h[block_index].ln_1.average_std.mean()
         
-        # Create new tensors with the uniform value
-        uniform_std = torch.ones_like(model.transformer.h[block_index].ln_1.average_std) * avg_value
+        # # Create new tensors with the uniform value
+        # uniform_std = torch.ones_like(model.transformer.h[block_index].ln_1.average_std) * avg_value
         
-        # Replace the std tensors with uniform ones
-        model.transformer.h[block_index].ln_1.average_std = uniform_std
-        model.transformer.h[block_index].ln_1.bos_std = uniform_std.clone()
-        
-        print(f"disabled bos std for block {block_index}")
+        # # Replace the std tensors with uniform ones
+        # model.transformer.h[block_index].ln_1.average_std = uniform_std
+        # model.transformer.h[block_index].ln_1.bos_std = uniform_std.clone()
+        print(f"Nothing happens here anymore")
 
     class LNRemover:
         """
@@ -635,7 +643,7 @@ def main():
         max_grad_norm=1.0,
         logging_dir="./logs",
         prediction_loss_only=True,
-        lr_scheduler_type="cosine",
+        lr_scheduler_type="constant_with_warmup",
         report_to="wandb" if _USE_WANDB else "none",
         run_name=f"{args.config}-{args.mode}",
         logging_steps=1,
