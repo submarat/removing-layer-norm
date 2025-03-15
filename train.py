@@ -174,12 +174,22 @@ class FakeLayerNorm(nn.Module):
     dividing by a fixed standard deviation.
     """
 
-    def __init__(self, ndim, layer, bias):
+    def __init__(self, ndim, layer, bias, layer_nb, ln_id):
         super().__init__()
         self.weight = layer.weight
         self.bias = layer.bias
         self.eps = layer.eps
-        alpha_init_value = 0.45
+        alpha_init_values_ln1 = [1.249, 0.533, 0.441, 0.399, 0.382, 0.367, 0.330, 0.299, 0.253, 0.223, 0.180, 0.150]
+        alpha_init_values_ln2 = [0.715, 0.479, 0.394, 0.350, 0.327, 0.275, 0.238, 0.191, 0.160, 0.132, 0.107, 0.077]
+        alpha_init_lnf = 0.08157863467931747
+        if ln_id == 'ln1':
+            alpha_init_value = alpha_init_values_ln1[layer_nb]
+        elif ln_id == 'ln2':
+            alpha_init_value = alpha_init_values_ln2[layer_nb]
+        elif ln_id == 'lnf':
+            alpha_init_value = alpha_init_lnf 
+        else: 
+            raise NotImplementedError('ln_id must be either ln1, ln2, or lnf')
         self.alpha = nn.Parameter(torch.ones(1) * alpha_init_value)
         self.ndim = ndim
         self.device = layer.weight.device
@@ -294,8 +304,8 @@ def load_model(model_name="gpt2", remove_ln=False):
             ln_2_bias = block.ln_2.bias.clone().detach() if block.ln_2.bias is not None else None
             
             # Replace with FakeLayerNorm
-            block.ln_1 = FakeLayerNorm(ndim=n_embd, layer=block.ln_1, bias=ln_1_bias is not None)
-            block.ln_2 = FakeLayerNorm(ndim=n_embd, layer=block.ln_2, bias=ln_2_bias is not None)
+            block.ln_1 = FakeLayerNorm(ndim=n_embd, layer=block.ln_1, bias=ln_1_bias is not None, layer_nb=i, ln_id = 'ln1')
+            block.ln_2 = FakeLayerNorm(ndim=n_embd, layer=block.ln_2, bias=ln_2_bias is not None, layer_nb=i, ln_id = 'ln2')
             
             # Restore weights
             block.ln_1.weight = nn.Parameter(ln_1_weight)
@@ -378,7 +388,9 @@ def load_model(model_name="gpt2", remove_ln=False):
         model.transformer.ln_f = FakeLayerNorm(
             ndim=n_embd,
             layer=ln_f,
-            bias=ln_f_bias is not None
+            bias=ln_f_bias is not None,
+            layer_nb=n_layers,
+            ln_id = 'lnf'
         )
         model.transformer.ln_f.weight = nn.Parameter(ln_f_weight)
         if ln_f_bias is not None:

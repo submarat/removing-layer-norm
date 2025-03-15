@@ -92,7 +92,7 @@ def make_gpt2_standard():
     
     # Training params
     base_batch_size = 32
-    max_steps = 300
+    max_steps = 3000
     block_size = 1024
     target_batch_tokens = 2**19
     warmup_steps = 25
@@ -241,8 +241,8 @@ def make_gpt2_medium_fasttune():
     n_layers = 24
     
     # Training params
-    base_batch_size = 22
-    max_steps = 500
+    base_batch_size = 15
+    max_steps = 5000
     block_size = 1024
     target_batch_tokens = 2**19
     warmup_steps = 10  # Shorter warmup due to accelerated schedule
