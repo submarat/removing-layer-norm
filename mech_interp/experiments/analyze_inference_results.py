@@ -12,6 +12,31 @@ from IPython.display import HTML
 plt.rcParams.update({'font.size': 18})  # Increase default font size
 
 
+def get_token_id(tokenizer, token_str):
+    """
+    Get the token ID for a given token string.
+
+    Args:
+        tokenizer: A tokenizer object (e.g., GPT2TokenizerFast)
+        token_str: The token string to look up
+        
+    Returns:
+        int: The token ID corresponding to the token string
+        
+    Note:
+        This function handles both raw token strings and strings with special 
+        characters that might be displayed in visualizations (e.g., '\n').
+    """
+    # Try direct encoding first
+    token_id = tokenizer.encode(token_str, add_special_tokens=False)
+    
+    # If we got multiple tokens, this might be because the string contains
+    # escape sequences or special characters
+    if len(token_id) != 1:
+       raise ValueError(f"Could not find a single token ID for '{token_str}'. Got: {token_id}")
+    
+    return token_id[0]
+
 def combine_rendered_html(*html_objects, layout="vertical", background_color="white", labels=None, title=None):
     """
     Combine multiple RenderedHTML objects into a single HTML string.
@@ -71,7 +96,7 @@ def combine_rendered_html(*html_objects, layout="vertical", background_color="wh
 class H5DataAnalyzer:
     """Analyzes H5 files containing model inference results."""
     
-    def __init__(self, h5_file_path, output_dir=None):
+    def __init__(self, h5_file_path, tokenizer, output_dir=None):
         """
         Initialize the analyzer with the path to an H5 file.
         
@@ -93,7 +118,8 @@ class H5DataAnalyzer:
         os.makedirs(self.output_dir, exist_ok=True)
         
 
-        
+        #add tokenizer
+        self.tokenizer = tokenizer
         # Load data
         self.data = self._load_data()
         
@@ -129,7 +155,7 @@ class H5DataAnalyzer:
             tokens = f['tokens'][:]
             
             # Load CE losses
-            ce_losses = {model: f['CE_loss'][model][:] for model in models}
+            ce_losses = {model: f['CE_loss'][model][:].astype(np.float32) for model in models}
             
             # Calculate CE differences for all model pairs
             ce_diffs = {}
@@ -137,10 +163,10 @@ class H5DataAnalyzer:
                 for model2 in models:
                     if model1 < model2:  # Only calculate each pair once
                         pair_name = f"{model1}_vs_{model2}"
-                        ce_diffs[pair_name] = ce_losses[model1] - ce_losses[model2]
+                        ce_diffs[pair_name] = (ce_losses[model1] - ce_losses[model2]).astype(np.float32)
             
             # Load JSD
-            jsd = {pair: f['JSD'][pair][:] for pair in model_pairs}
+            jsd = {pair: f['JSD'][pair][:].astype(np.float32) for pair in model_pairs}
             
         return {
             'tokens': tokens,
@@ -174,7 +200,7 @@ class H5DataAnalyzer:
                 'values': self.data['jsd'],
                 'models': self.data['model_pairs'],
                 'label': 'JS Divergence',
-                'title_prefix': 'Jensen-Shannon Divergence',
+                'title_prefix': 'JS Divergence',
                 'bin_range': (0, 0.8, 0.01)  # (start, stop, step)
             }
         else:
@@ -197,11 +223,17 @@ class H5DataAnalyzer:
             print(f"NaN percentage: {(nan_count / values.size) * 100:.2f}%\n")
         return nan_count
 
-    def plot_average_metric_values_by_position(self, metric_type, visualize=False):
+    def plot_average_metric_values_by_position(self, metric_type, visualize=False, subtract_mean=False):
         """Generic function to plot average metric values per position."""
         data = self._get_metric_data(metric_type)
         sequence_length = next(iter(data['values'].values())).shape[1]
         dataset_name = self.metadata.get('dataset', 'Unknown')
+        
+        if subtract_mean:
+            values = np.stack([data['values'][model] for model in data['models']])
+            mean_value = np.mean(values, axis=0)
+            mean_value_per_position = np.mean(mean_value, axis=0)
+                
         
         plt.figure(figsize=(12, 8))
         
@@ -212,10 +244,15 @@ class H5DataAnalyzer:
                 mean_value = np.nanmean(values, axis=0)
             else:
                 mean_value = np.mean(values, axis=0)
+            if subtract_mean:
+                mean_value = mean_value - mean_value_per_position
             plt.plot(range(sequence_length), mean_value, label=f'{model}')
         
         plt.xlabel('Position in Sequence')
-        plt.ylabel(f'Average {data["label"]}')
+        if subtract_mean:
+            plt.ylabel(f'Average {data["label"]} deviation from mean across models')
+        else:
+            plt.ylabel(f'Average {data["label"]}')
         plt.title(f'Average {data["title_prefix"]} by Position - Dataset: {dataset_name}')
         plt.legend()
         plt.grid(True, alpha=0.3)
@@ -248,17 +285,20 @@ class H5DataAnalyzer:
             
             for i, model in enumerate(data['models']):
                 values = data['values'][model].flatten()
-                if metric_type.lower() == 'jsd':
-                    nan_count = self._check_nans(values, model, metric_type)
-                    values = values[~np.isnan(values)]
-                    if nan_count > 0:
-                        print(f"Plotting histogram after removing NaN values...")
                 
-                if metric_type.lower() == 'jsd':
-                    values = values[values < np.percentile(values, 99.5)]
+                # Check for NaNs and infs
+                nan_count = np.sum(np.isnan(values))
+                inf_count = np.sum(np.isinf(values))
+                if nan_count > 0 or inf_count > 0:
+                    print(f"Warning: Found {nan_count} NaN values and {inf_count} infinite values in {model} {metric_type} data")
                 
-                plt.hist(values, bins=bins, alpha=0.5, label=f'{model}', color=colors[i])
+                # Filter out NaNs and infs
+                valid_mask = ~(np.isnan(values) | np.isinf(values))
+                valid_values = values[valid_mask]
                 
+                # No longer excluding values based on percentiles
+                plt.hist(valid_values, bins=bins, alpha=0.5, label=f'{model}', color=colors[i], histtype='step', linewidth=3.0)
+            
             plt.xlabel(data['label'])
             plt.ylabel('Frequency')
             plt.legend()
@@ -407,23 +447,32 @@ class H5DataAnalyzer:
             for position in positions:
                 for model in data['models']:
                     position_values = data['values'][model][:, position]
-                    if metric_type == 'jsd':
-                        position_values = position_values[~np.isnan(position_values)]
-                    hist, _ = np.histogram(position_values, bins=bins, density=True)
+                    
+                    # Check for NaNs and infs
+                    nan_count = np.sum(np.isnan(position_values))
+                    inf_count = np.sum(np.isinf(position_values))
+                    if nan_count > 0 or inf_count > 0:
+                        print(f"Warning: Found {nan_count} NaN values and {inf_count} infinite values in {model} {metric_type} data at position {position}")
+                    
+                    # Filter out NaNs and infs
+                    valid_mask = ~(np.isnan(position_values) | np.isinf(position_values))
+                    valid_values = position_values[valid_mask]
+                    
+                    hist, _ = np.histogram(valid_values, bins=bins, density=True)
                     max_freq = max(max_freq, np.max(hist))
             
             # Second pass to plot histograms
             for i, position in enumerate(positions):
                 ax = axes[i]
                 
-                for model in data['models']:
+                for j, model in enumerate(data['models']):
                     position_values = data['values'][model][:, position]
                     
-                    if metric_type == 'jsd':
-                        self._check_nans(position_values, model, metric_type)
-                        position_values = position_values[~np.isnan(position_values)]
+                    # Filter out NaNs and infs
+                    valid_mask = ~(np.isnan(position_values) | np.isinf(position_values))
+                    valid_values = position_values[valid_mask]
                     
-                    ax.hist(position_values, bins=bins, alpha=0.5, label=model)
+                    ax.hist(valid_values, bins=bins, alpha=0.5, label=model, histtype='step', color=plt.cm.tab10.colors[j], linewidth=3.0)
                 
                 ax.set_xlabel(data['label'])
                 if i == 0:
@@ -560,6 +609,216 @@ class H5DataAnalyzer:
         display(combined)
         return combined
     
+    def plot_metric_distribution_excluding_tokens(self, metric_type, exclude_tokens=None, log_scale=False, bins=None, visualize=False, sharey=True, exclude_positions=None):
+        """
+        Plot distribution of metric values for both excluded and included tokens/positions.
+        
+        Args:
+            metric_type: Type of metric to analyze ('ce', 'ce_diff', or 'jsd')
+            exclude_tokens: Token string or list of token strings to exclude from the analysis
+            log_scale: Whether to use log scale for y-axis
+            bins: Custom bins for histogram (if None, uses default bins)
+            visualize: Whether to display the plot
+            sharey: Whether to share y-axis between the two subplots
+            exclude_positions: List or array of positions to exclude from the analysis (e.g. [0,1,2] excludes first 3 positions)
+            
+        Returns:
+            dict: Statistics about the excluded tokens/positions for each model
+        """
+        data = self._get_metric_data(metric_type)
+        dataset_name = self.metadata.get('dataset', 'Unknown')
+        
+        # Initialize exclude_tokens as empty list if None
+        if exclude_tokens is None:
+            exclude_tokens = []
+        elif not isinstance(exclude_tokens, list):
+            exclude_tokens = [exclude_tokens]
+            
+        # Convert token strings to token IDs
+        exclude_token_ids = []
+        token_display_names = []
+        
+        for token in exclude_tokens:
+            try:
+                token_id = get_token_id(self.tokenizer, token)
+                exclude_token_ids.append(token_id)
+                
+                # Create a readable display name for the token
+                if token == '\n':
+                    display_name = '\\n'
+                elif token == '\n\n':
+                    display_name = '\\n\\n'
+                elif token == ' ':
+                    display_name = 'space'
+                elif len(token.strip()) == 0:  # Other whitespace
+                    display_name = f"whitespace-{len(token)}"
+                else:
+                    display_name = token
+                
+                token_display_names.append(display_name)
+            except ValueError as e:
+                print(f"Warning: {e}")
+        
+        # Create two subplots side by side
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8), sharey=sharey)
+        
+        colors = plt.cm.tab10.colors[:len(data['models'])]
+        if bins is None:
+            start, stop, step = data['bin_range']
+            bins = np.arange(start, stop, step)
+        
+        # Dictionary to store statistics about excluded tokens/positions
+        excluded_stats = {}
+        
+        for i, model in enumerate(data['models']):
+            # Get all values and tokens
+            all_values = data['values'][model]
+            all_tokens = self.data['tokens']
+            
+            # Create a mask for positions that have the excluded tokens or positions
+            excluded_mask = np.zeros_like(all_values, dtype=bool)
+            
+            # Check dimensions to avoid index errors
+            token_samples, token_seq_len = all_tokens.shape
+            values_samples, values_seq_len = all_values.shape
+            
+            # Print shape information for debugging
+            print(f"Tokens shape: {all_tokens.shape}, Values shape: {all_values.shape}")
+            
+            # For each sample and position, check if the token is in the exclude list
+            # or if the position should be excluded
+            min_samples = min(token_samples, values_samples)
+            min_seq_len = min(token_seq_len, values_seq_len)
+            
+            # Convert exclude_positions to a set for faster lookup if it exists
+            exclude_positions_set = set(exclude_positions) if exclude_positions is not None else None
+            
+            for sample_idx in range(min_samples):
+                for pos_idx in range(min_seq_len):
+                    # Check if position should be excluded
+                    if exclude_positions_set is not None and pos_idx in exclude_positions_set:
+                        excluded_mask[sample_idx, pos_idx] = True
+                    # Check if token should be excluded
+                    elif all_tokens[sample_idx, pos_idx] in exclude_token_ids:
+                        excluded_mask[sample_idx, pos_idx] = True
+            
+            # Apply the mask to get excluded values
+            excluded_values = all_values[excluded_mask]
+            
+            # Create the inverse mask for the plot (non-excluded tokens/positions)
+            included_mask = ~excluded_mask
+            included_values = all_values[included_mask]
+            
+            # Handle NaN and infinite values
+            valid_excluded_mask = ~(np.isnan(excluded_values) | np.isinf(excluded_values))
+            valid_excluded_values = excluded_values[valid_excluded_mask]
+            
+            valid_included_mask = ~(np.isnan(included_values) | np.isinf(included_values))
+            valid_included_values = included_values[valid_included_mask]
+            
+            # Count invalid values
+            nan_count = np.sum(np.isnan(excluded_values))
+            inf_count = np.sum(np.isinf(excluded_values))
+            
+            if nan_count > 0 or inf_count > 0:
+                print(f"Warning for {model}: Found {nan_count} NaN values and {inf_count} infinite values in excluded tokens/positions")
+            
+            # Plot histograms with step style
+            ax1.hist(valid_included_values, bins=bins, alpha=0.5, label=f'{model}', color=colors[i], histtype='step', linewidth=3.0)
+            ax2.hist(valid_excluded_values, bins=bins, alpha=0.5, label=f'{model}', color=colors[i], histtype='step', linewidth=3.0)
+            
+            # Calculate statistics
+            excluded_stats[model] = {
+                "count": len(excluded_values),
+                "valid_count": len(valid_excluded_values),
+                "nan_count": nan_count,
+                "inf_count": inf_count,
+                "mean": np.mean(valid_excluded_values) if len(valid_excluded_values) > 0 else np.nan,
+                "median": np.median(valid_excluded_values) if len(valid_excluded_values) > 0 else np.nan,
+                "std": np.std(valid_excluded_values) if len(valid_excluded_values) > 0 else np.nan,
+                "min": np.min(valid_excluded_values) if len(valid_excluded_values) > 0 else np.nan,
+                "max": np.max(valid_excluded_values) if len(valid_excluded_values) > 0 else np.nan,
+                "excluded_count": np.sum(excluded_mask),
+                "total_count": excluded_mask.size,
+                "excluded_percentage": (np.sum(excluded_mask) / excluded_mask.size) * 100
+            }
+            
+            # Print statistics about excluded tokens/positions
+            exclusion_description = []
+            if token_display_names:
+                exclusion_description.append(f"tokens ({', '.join(token_display_names)})")
+            if exclude_positions is not None:
+                exclusion_description.append(f"positions {min(exclude_positions_set)} to {max(exclude_positions_set)}")
+            exclusion_str = " and ".join(exclusion_description)
+            
+            print(f"\nStatistics for EXCLUDED {exclusion_str} in {model}:")
+            print(f"  Number of excluded values: {excluded_stats[model]['excluded_count']}")
+            print(f"  Valid values (non-NaN, non-inf): {excluded_stats[model]['valid_count']}")
+            print(f"  Percentage of excluded values: {excluded_stats[model]['excluded_percentage']:.2f}%")
+            
+            if len(valid_excluded_values) > 0:
+                print(f"  Mean: {excluded_stats[model]['mean']:.4f}")
+                print(f"  Median: {excluded_stats[model]['median']:.4f}")
+                print(f"  Std Dev: {excluded_stats[model]['std']:.4f}")
+                print(f"  Min: {excluded_stats[model]['min']:.4f}")
+                print(f"  Max: {excluded_stats[model]['max']:.4f}")
+            else:
+                print("  No valid values to calculate statistics")
+        
+        # Set titles and labels
+        exclusion_description = []
+        if token_display_names:
+            exclusion_description.append(f"Tokens: {', '.join(token_display_names)}")
+        if exclude_positions is not None:
+            exclusion_description.append(f"Positions: {list(exclude_positions_set)}")
+        exclusion_str = " and ".join(exclusion_description)
+        
+        ax1.set_title(f'Distribution of {data["title_prefix"]} for Other Tokens/Positions')
+        if exclude_positions_set is not None and len(exclude_positions_set) > 20:
+            ax2.set_title(f'Distribution of {data["title_prefix"]} for Excluded tokens/positions')
+        else:
+            ax2.set_title(f'Distribution of {data["title_prefix"]} for Excluded {exclusion_str}')
+        
+        ax1.set_xlabel(data['label'])
+        ax2.set_xlabel(data['label'])
+        
+        ax1.set_ylabel('Frequency')
+        ax2.set_ylabel('Frequency')
+        
+        ax1.legend()
+        ax2.legend()
+        
+        ax1.grid(True, alpha=0.3)
+        ax2.grid(True, alpha=0.3)
+        
+        if log_scale:
+            ax1.set_yscale('log')
+            ax2.set_yscale('log')
+        
+        # Add dataset name as a figure suptitle
+        plt.suptitle(f'Dataset: {dataset_name}', fontsize=16)
+        
+        # Adjust layout
+        plt.tight_layout()
+        
+        # Save the figure
+        filename_parts = []
+        if token_display_names:
+            filename_parts.append('tokens_' + '_'.join(token_display_names).replace('\\', ''))
+        if exclude_positions is not None:
+            filename_parts.append('positions_' + '_'.join(map(str, list(exclude_positions_set))))
+        exclusion_filename = '_'.join(filename_parts)
+        log_suffix = "_log" if log_scale else ""
+        output_path = self.output_dir / f"{metric_type}_histogram_comparison_{exclusion_filename}{log_suffix}.png"
+        plt.savefig(output_path, dpi=300, bbox_inches='tight')
+        if visualize:
+            plt.show()
+        plt.close()
+        
+        print(f"Saved {data['label']} histogram comparison to {output_path}")
+        
+        return excluded_stats
+    
     def run_all_analysis(self):
         if self.metadata['dataset'] == 'apollo-owt':
             bins_ce = np.arange(0, 40, 0.5)
@@ -585,47 +844,47 @@ class H5DataAnalyzer:
         self.plot_metric_values_distribution_by_position('ce_diff', positions=[0, 1, 5, 20, 45], log_scale=True, plot_type='histogram', visualize=True, bins=bins_ce_diff)
         self.plot_metric_values_distribution_by_position('jsd', positions=[0, 1, 5, 20, 45], log_scale=True, plot_type='histogram', visualize=True, bins=bins_jsd)
         
-        self.visualize_token_sequences_for_extreme_metric_values_in_html('ce', 'baseline', top_k=10, highest=True)
-        self.visualize_token_sequences_for_extreme_metric_values_in_html('ce', 'finetuned', top_k=10, highest=True)
-        self.visualize_token_sequences_for_extreme_metric_values_in_html('ce', 'noLN', top_k=10, highest=True)
+        # self.visualize_token_sequences_for_extreme_metric_values_in_html('ce', 'baseline', top_k=10, highest=True)
+        # self.visualize_token_sequences_for_extreme_metric_values_in_html('ce', 'finetuned', top_k=10, highest=True)
+        # self.visualize_token_sequences_for_extreme_metric_values_in_html('ce', 'noLN', top_k=10, highest=True)
 
-        self.visualize_token_sequences_for_extreme_metric_values_in_html('ce_diff', 'baseline_vs_finetuned', top_k=10, highest=True)
-        self.visualize_token_sequences_for_extreme_metric_values_in_html('ce_diff', 'baseline_vs_noLN', top_k=10, highest=True)
-        self.visualize_token_sequences_for_extreme_metric_values_in_html('ce_diff', 'finetuned_vs_noLN', top_k=10, highest=True)
+        # self.visualize_token_sequences_for_extreme_metric_values_in_html('ce_diff', 'baseline_vs_finetuned', top_k=10, highest=True)
+        # self.visualize_token_sequences_for_extreme_metric_values_in_html('ce_diff', 'baseline_vs_noLN', top_k=10, highest=True)
+        # self.visualize_token_sequences_for_extreme_metric_values_in_html('ce_diff', 'finetuned_vs_noLN', top_k=10, highest=True)
 
-        self.visualize_token_sequences_for_extreme_metric_values_in_html('ce_diff', 'baseline_vs_finetuned', top_k=10, highest=False)
-        self.visualize_token_sequences_for_extreme_metric_values_in_html('ce_diff', 'baseline_vs_noLN', top_k=10, highest=False)
-        self.visualize_token_sequences_for_extreme_metric_values_in_html('ce_diff', 'finetuned_vs_noLN', top_k=10, highest=False)
+        # self.visualize_token_sequences_for_extreme_metric_values_in_html('ce_diff', 'baseline_vs_finetuned', top_k=10, highest=False)
+        # self.visualize_token_sequences_for_extreme_metric_values_in_html('ce_diff', 'baseline_vs_noLN', top_k=10, highest=False)
+        # self.visualize_token_sequences_for_extreme_metric_values_in_html('ce_diff', 'finetuned_vs_noLN', top_k=10, highest=False)
 
-        self.visualize_token_sequences_for_extreme_metric_values_in_html('jsd', 'baseline_vs_finetuned', top_k=10, highest=True)
-        self.visualize_token_sequences_for_extreme_metric_values_in_html('jsd', 'baseline_vs_noLN', top_k=10, highest=True)
-        self.visualize_token_sequences_for_extreme_metric_values_in_html('jsd', 'finetuned_vs_noLN', top_k=10, highest=True)
+        # self.visualize_token_sequences_for_extreme_metric_values_in_html('jsd', 'baseline_vs_finetuned', top_k=10, highest=True)
+        # self.visualize_token_sequences_for_extreme_metric_values_in_html('jsd', 'baseline_vs_noLN', top_k=10, highest=True)
+        # self.visualize_token_sequences_for_extreme_metric_values_in_html('jsd', 'finetuned_vs_noLN', top_k=10, highest=True)
 
-        self.visualize_token_sequences_for_extreme_metric_values_differences_in_html('jsd', 'baseline_vs_noLN', 'baseline_vs_finetuned', top_k=10, highest=True)
-    
-
+        # self.visualize_token_sequences_for_extreme_metric_values_differences_in_html('jsd', 'baseline_vs_noLN', 'baseline_vs_finetuned', top_k=10, highest=True)
 
 config = {
     'dataset': 'apollo-pile',
     'num_samples': 10000,
-    'sequence_length': 50,
+    'sequence_length': 1024,
 }
-
+tokenizer = GPT2TokenizerFast.from_pretrained('gpt2')
 h5_file_path = f'/workspace/removing-layer-norm/mech_interp/data/inference_logs/dataset_{config["dataset"]}_samples_{config["num_samples"]}_seqlen_{config["sequence_length"]}/inference_results.h5'
 output_dir = f'/workspace/removing-layer-norm/mech_interp/data/inference_logs/dataset_{config["dataset"]}_samples_{config["num_samples"]}_seqlen_{config["sequence_length"]}/analysis_results'
-analyzer = H5DataAnalyzer(h5_file_path, output_dir)
-analyzer.run_all_analysis()
+analyzer = H5DataAnalyzer(h5_file_path, tokenizer, output_dir)
+# analyzer.run_all_analysis()
 
-config = {
-    'dataset': 'apollo-owt',
-    'num_samples': 10000,
-    'sequence_length': 50,
-}
+# %%
+# analyzer.plot_metric_values_distribution('ce', log_scale=True, plot_type='histogram', visualize=True)
+#%%
+excluded_values = analyzer.plot_metric_distribution_excluding_tokens('jsd', exclude_tokens=['\n', '\n\n'], log_scale=True, visualize=True, bins=np.arange(0, 1, 0.01), sharey=True)
+# excluded_values = analyzer.plot_metric_distribution_excluding_tokens('jsd', exclude_tokens=['\n', '\n\n'], log_scale=True, visualize=True, bins=np.arange(0, 90, 1), sharey=True, exclude_positions=np.arange(0, 50))
+# excluded_values = analyzer.plot_metric_distribution_excluding_tokens('ce', exclude_tokens=[], log_scale=True, visualize=True, bins=np.arange(0, 90, 1), sharey=False, exclude_positions=np.arange(0, 50))
+# %%
+excluded_values = analyzer.plot_metric_distribution_excluding_tokens('ce', exclude_tokens=['\n'], log_scale=True, visualize=True, bins=np.arange(0, 90, 1), sharey=False)
+# %%
+excluded_values = analyzer.plot_metric_distribution_excluding_tokens('ce', exclude_tokens=['\n\n'], log_scale=True, visualize=True, bins=np.arange(0, 90, 1), sharey=False)
 
-h5_file_path = f'/workspace/removing-layer-norm/mech_interp/data/inference_logs/dataset_{config["dataset"]}_samples_{config["num_samples"]}_seqlen_{config["sequence_length"]}/inference_results.h5'
-output_dir = f'/workspace/removing-layer-norm/mech_interp/data/inference_logs/dataset_{config["dataset"]}_samples_{config["num_samples"]}_seqlen_{config["sequence_length"]}/analysis_results'
-analyzer = H5DataAnalyzer(h5_file_path, output_dir)
-analyzer.run_all_analysis()
-
+# %%
+analyzer.plot_average_metric_values_by_position('ce', visualize=True, subtract_mean=True)
 
 # %%
