@@ -184,8 +184,8 @@ def main():
             'dataset': dataset,
             'models': ['baseline', 'finetuned', 'noLN'],
             'num_samples': 10000,
-            'sequence_length': 50,
-            'batch_size': 50,
+            'sequence_length': 1024,
+            'batch_size': 5,
             'folder': '/workspace/removing-layer-norm/mech_interp/data/inference_logs/',
         }
         config['folder'] = os.path.join(config['folder'], f"dataset_{config['dataset']}_samples_{config['num_samples']}_seqlen_{config['sequence_length']}")
