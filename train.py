@@ -70,7 +70,7 @@ class FakeLayerNorm(nn.Module):
             self.iteration = 0
             with torch.no_grad():
                 std = input.var(dim=(0, -1))**0.5
-                self.real_average_std = std.mean().detach().item()
+                self.real_average_std = std[1:].mean().detach().item()
                 self.real_bos_std = std[0].detach().item()
 
         if mode == "fake":
