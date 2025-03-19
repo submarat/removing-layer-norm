@@ -52,6 +52,10 @@ class FakeLayerNorm(nn.Module):
         self.average_std = torch.ones(ndim, device=device) * std_dict[layer]
         self.average_std[0] = std_bos_dict[layer]
         self.bos_std = torch.ones(ndim, device=device) * std_bos_dict[layer]
+        self.real_average_std = 1.0
+        self.real_bos_std = 1.0
+        self.iteration = 0
+        self.update_freq = 10
 
     def forward(self, input, std_type="avg", attn_v=False):
         # We want all the enable / disable information to be in this class, but the class is re-used
@@ -59,6 +63,16 @@ class FakeLayerNorm(nn.Module):
         # the V path. Thus we get to have flags `mode` and `attn_v_mode` to enable / disable the
         # LN for the QK and V paths separately.
         mode = self.attn_v_mode if attn_v else self.mode
+
+        self.iteration += 1
+        # Calculate the std of the input
+        if self.iteration % self.update_freq == 0:
+            self.iteration = 0
+            with torch.no_grad():
+                std = input.var(dim=(0, -1))**0.5
+                self.real_average_std = std[1:].mean().detach().item()
+                self.real_bos_std = std[0].detach().item()
+
         if mode == "fake":
             # Which std values to use: We use (1) average std (which is actually a vector of length
             # n_ctx for most of the time*) [a, b, b, ...] where a is the average std for position 1,
@@ -81,7 +95,6 @@ class FakeLayerNorm(nn.Module):
             )
         else:
             raise ValueError(f"Unknown mode {mode}")
-
 
 def load_model(model_name="gpt2", remove_ln=False):
     model = transformers.GPT2LMHeadModel.from_pretrained(
@@ -356,6 +369,45 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config, 
                 ln_remover(state.global_step)
                 ln_remover.log(wandb)
             return control
+    
+    class LogFakeLayerNormState(TrainerCallback):
+        def __ini__(self):
+            pass
+
+        def on_step_begin(self, args, state, control, **kwargs):
+            """ Log to wandb: block number, mode, att_v_mode, average_std, bos_std, average_std[0], average_std[1], bos_std[0], bos_std[1] """
+            if not _USE_WANDB:
+                return control
+
+            for i, block in enumerate(model.transformer.h):
+                wandb.log({
+                    f"block_{i}_ln_1_real_average_std": block.ln_1.real_average_std,
+                    f"block_{i}_ln_1_real_bos_std": block.ln_1.real_bos_std,
+                    f"block_{i}_ln_1_average_std_0": block.ln_1.average_std[0],
+                    f"block_{i}_ln_1_average_std_1": block.ln_1.average_std[1],
+                    f"block_{i}_ln_1_bos_std_0": block.ln_1.bos_std[0],
+                    f"block_{i}_ln_1_bos_std_1": block.ln_1.bos_std[1],
+                })
+
+                wandb.log({
+                    f"block_{i}_ln_2_real_average_std": block.ln_2.real_average_std,
+                    f"block_{i}_ln_2_real_bos_std": block.ln_2.real_bos_std,
+                    f"block_{i}_ln_2_average_std_0": block.ln_2.average_std[0],
+                    f"block_{i}_ln_2_average_std_1": block.ln_2.average_std[1],
+                    f"block_{i}_ln_2_bos_std_0": block.ln_2.bos_std[0],
+                    f"block_{i}_ln_2_bos_std_1": block.ln_2.bos_std[1],
+                })
+
+            wandb.log({
+                f"ln_f_real_average_std": model.transformer.ln_f.real_average_std,
+                f"ln_f_real_bos_std": model.transformer.ln_f.real_bos_std,
+                f"ln_f_average_std_0": model.transformer.ln_f.average_std[0],
+                f"ln_f_average_std_1": model.transformer.ln_f.average_std[1],
+                f"ln_f_bos_std_0": model.transformer.ln_f.bos_std[0],
+                f"ln_f_bos_std_1": model.transformer.ln_f.bos_std[1],
+            })
+
+            return control 
 
     # Get schedule from config
     model_name = config.model_name
@@ -385,6 +437,7 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config, 
 
     callbacks = [
         LNRemoverCallback(ln_removers),
+        LogFakeLayerNormState(),
     ]
 
     # Create multi-dataset dictionary if pile_eval_dataset is provided
