@@ -10,3 +10,5 @@ matplotlib==3.8.2
 seaborn==0.13.0
 transformer_lens==2.14.0
 ipdb
+runpod
+zstandard
