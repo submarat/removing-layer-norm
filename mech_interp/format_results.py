@@ -23,7 +23,7 @@ class FormatInference:
 
     def _process_sequence(self, args):
         """Process a single sequence and return all its subsequence records."""
-        seq_idx, seq_input, ce_losses, ce_diffs, jsd_losses, topk_jsd_losses, tokenizer = args
+        seq_idx, input_idx, seq_input, ce_losses, ce_diffs, jsd_losses, topk_jsd_losses, tokenizer = args
         
         seq_len = len(seq_input)
         records = []
@@ -44,6 +44,7 @@ class FormatInference:
             
             # Create record
             record = {
+                'original_idx': input_idx + seq_idx,
                 'sequence_length': pos + 1,
                 'full_sequence': full_seq,
                 'last_token': last_token,
@@ -69,7 +70,7 @@ class FormatInference:
             
         return records
 
-    def add_batch_data(self, input_seqs, ce_losses, ce_diffs, jsd_losses, topk_jsd_losses):
+    def add_batch_data(self, input_idx, input_seqs, ce_losses, ce_diffs, jsd_losses, topk_jsd_losses):
         """Process batch data using thread pool for parallel sequence processing."""
         batch_size = input_seqs.shape[0]
         
@@ -78,7 +79,8 @@ class FormatInference:
         for seq_idx in range(batch_size):
             # Each task is a tuple of (seq_idx, seq_input, ce_losses, ce_diffs, jsd_losses, topk_jsd_losses, tokenizer)
             task = (
-                seq_idx, 
+                seq_idx,
+                input_idx,
                 input_seqs[seq_idx], 
                 ce_losses, 
                 ce_diffs, 
@@ -104,4 +106,3 @@ class FormatInference:
             df = pd.DataFrame(self.data)
             df.to_parquet(self.output_file, index=False)
             print(f"Saved {len(self.data)} records to {self.output_file}")
-            self.data = []

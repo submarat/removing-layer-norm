@@ -25,7 +25,7 @@ class DataLoader:
                                  streaming=True, split="train")
         else:
             raise ValueError(f"Unknown dataset: {dataset_name}")
-        return dataset.shuffle(seed=42).take(self.num_samples)
+        return dataset.take(self.num_samples)
 
 
     def collate_fn(self, examples):
