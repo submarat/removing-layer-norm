@@ -25,10 +25,12 @@ class JSDivergence(nn.Module):
             # Values >= the threshold are kept, values < threshold are set to -inf
             top_k_mask_p = logits_p >= min_top_k_values_p
             top_k_mask_q = logits_q >= min_top_k_values_q
+            # Find union of both masks
+            top_k_mask = top_k_mask_p | top_k_mask_q
             
             # Apply the masks to create filtered logits tensors
-            filtered_logits_p = torch.where(top_k_mask_p, logits_p, torch.tensor(float('-inf'), device=logits_p.device))
-            filtered_logits_q = torch.where(top_k_mask_q, logits_q, torch.tensor(float('-inf'), device=logits_q.device))
+            filtered_logits_p = torch.where(top_k_mask, logits_p, torch.tensor(float('-inf'), device=logits_p.device))
+            filtered_logits_q = torch.where(top_k_mask, logits_q, torch.tensor(float('-inf'), device=logits_q.device))
 
             # Get probabilities through softmax
             p = F.softmax(filtered_logits_p, dim=-1)
