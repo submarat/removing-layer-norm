@@ -25,7 +25,7 @@ class InferenceConfig:
     save_text: bool = False
     folder: Union[str, Path] = field(default="/workspace/removing-layer-norm/mech_interp/inference_logs/")
     output_file: Optional[str] = None
-    num_workers: int = field(default_factory=lambda: multiprocessing.cpu_count())
+    num_threads: Optional[int] = None
     jsd_topk: int = 50
 
     
@@ -42,8 +42,8 @@ class InferenceConfig:
         # Set the output file path
         self.output_file = f"{self.folder}/inference_results.parquet"
 
-        # Overwrite the number of workers if we have more cpu cores than data in a batch
-        self.num_workers = min(self.batch_size, self.num_workers)
+        if self.num_threads is None:
+            self.num_threads = min(32, multiprocessing.cpu_count() * 2)
 
 
 class ModelManager:
@@ -87,8 +87,13 @@ class InferenceRunner:
                 self.config.batch_size,
                 self.config.max_sequence_length,
                 self.config.num_samples
-                                     )
-        self.results_formatter = FormatInference(self.config.output_file, self.config.save_text)
+                )
+        self.results_formatter = FormatInference(
+                self.config.output_file,
+                save_text=self.config.save_text,
+                num_threads=self.config.num_threads
+
+                )
         self.JSD = JSDivergence()
         self.JSD_TopK = JSDivergence(topk=self.config.jsd_topk)
 
@@ -186,7 +191,6 @@ if __name__ == "__main__":
         num_samples=100,
         max_sequence_length=512,
         batch_size=10,
-        num_workers=5
     )
 
     runner = InferenceRunner(config)
