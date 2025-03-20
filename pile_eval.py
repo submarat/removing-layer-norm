@@ -167,7 +167,7 @@ def convert_for_trainer(processed_examples, tokenizer, cache_dir="processed_data
     cache_path = os.path.join(cache_dir, f"{dataset_name}_trainer_{model_name}_{num_samples}")
     if os.path.exists(cache_path):
         print(f"Loading preprocessed Trainer dataset from {cache_path}")
-        return torch.load(cache_path)
+        return torch.load(cache_path, weights_only=False)
     
     print("Converting processed examples to Trainer-compatible dataset...")
     
