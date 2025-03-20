@@ -175,6 +175,7 @@ class InferenceRunner:
 
         # Add batch data to parquet manager
         self.results_formatter.add_batch_data(
+            batch_idx * self.config.batch_size, # To keep track of original sequence indices
             batch.cpu().numpy(),
             ce_losses,
             ce_diffs,
@@ -188,9 +189,10 @@ if __name__ == "__main__":
     config = InferenceConfig(
         dataset="apollo-pile",
         models=["baseline", "finetuned", "noLN"],
-        num_samples=100,
+        num_samples=10000,
         max_sequence_length=512,
         batch_size=10,
+        save_text=True
     )
 
     runner = InferenceRunner(config)
