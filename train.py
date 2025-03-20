@@ -42,18 +42,20 @@ std_bos_dict = std_dicts["gpt2"]["std_bos_dict"]
 class FakeLayerNorm(nn.Module):
     """LayerNorm using a fixed std instead of the actual standard deviation."""
 
-    def __init__(self, ndim, layer, bias):
+    def __init__(self, n_embd, n_ctx, layer, bias):
         super().__init__()
-        self.weight = nn.Parameter(torch.ones(ndim))
-        self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None
+        self.weight = nn.Parameter(torch.ones(n_embd))
+        self.bias = nn.Parameter(torch.zeros(n_embd)) if bias else None
         # Flag whether the LayerNorm is enabled ("real") or disabled ("fake")
         self.mode = "real"
         self.attn_v_mode = "real"
-        self.average_std = torch.ones(ndim, device=device) * std_dict[layer]
-        self.average_std[0] = std_bos_dict[layer]
-        self.bos_std = torch.ones(ndim, device=device) * std_bos_dict[layer]
-        self.real_average_std = 1.0
-        self.real_bos_std = 1.0
+
+        self.real_average_std, self.real_bos_std = std_dict[layer], std_bos_dict[layer]
+
+        self.average_std = torch.ones(n_ctx, device=device) * self.real_average_std
+        self.average_std[0] = self.real_bos_std
+        self.bos_std = torch.ones(n_ctx, device=device) * self.real_bos_std
+
         self.iteration = 0
         self.update_freq = 10
 
@@ -68,10 +70,7 @@ class FakeLayerNorm(nn.Module):
         # Calculate the std of the input
         if self.iteration % self.update_freq == 0:
             self.iteration = 0
-            with torch.no_grad():
-                std = input.var(dim=(0, -1))**0.5
-                self.real_average_std = std[1:].mean().detach().item()
-                self.real_bos_std = std[0].detach().item()
+            self.real_average_std, self.real_bos_std = self.recompute_average_std(input)
 
         if mode == "fake":
             # Which std values to use: We use (1) average std (which is actually a vector of length
@@ -84,7 +83,7 @@ class FakeLayerNorm(nn.Module):
             assert std_type in ["avg", "bos"]
             std = self.average_std if std_type == "avg" else self.bos_std
             return (
-                (input - input.mean(-1, keepdim=True)) / std * self.weight
+                (input - input.mean(-1, keepdim=True)) / std.view(1, -1, 1) * self.weight
                 + self.bias
                 if self.bias is not None
                 else input * self.weight
@@ -95,6 +94,13 @@ class FakeLayerNorm(nn.Module):
             )
         else:
             raise ValueError(f"Unknown mode {mode}")
+    
+    def recompute_average_std(self, x):
+        with torch.no_grad():
+            std = x.var(dim=(0, -1))**0.5
+            average_std = std.mean().detach().item()
+            bos_std = std[0].detach().item()
+        return average_std, bos_std
 
 def load_model(model_name="gpt2", remove_ln=False):
     model = transformers.GPT2LMHeadModel.from_pretrained(
@@ -108,7 +114,8 @@ def load_model(model_name="gpt2", remove_ln=False):
     def replace_layernorm_with_fake_layernorm(model):
         n_layers = model.config.n_layer
         n_embd = model.transformer.h[0].ln_1.weight.shape[0]
-        
+        n_ctx = model.config.n_ctx
+
         # Replace ln_1 and ln_2 with FakeLayerNorm
         for i in range(n_layers):
             block = model.transformer.h[i]
@@ -120,8 +127,8 @@ def load_model(model_name="gpt2", remove_ln=False):
             ln_2_bias = block.ln_2.bias.clone().detach() if block.ln_2.bias is not None else None
             
             # Replace with FakeLayerNorm
-            block.ln_1 = FakeLayerNorm(ndim=n_embd, layer=f"blocks.{i}.hook_resid_pre", bias=block.ln_1.bias is not None)
-            block.ln_2 = FakeLayerNorm(ndim=n_embd, layer=f"blocks.{i}.hook_resid_mid", bias=block.ln_2.bias is not None)
+            block.ln_1 = FakeLayerNorm(n_embd=n_embd, n_ctx=n_ctx, layer=f"blocks.{i}.hook_resid_pre", bias=block.ln_1.bias is not None)
+            block.ln_2 = FakeLayerNorm(n_embd=n_embd, n_ctx=n_ctx, layer=f"blocks.{i}.hook_resid_mid", bias=block.ln_2.bias is not None)
             
             # Restore weights
             block.ln_1.weight = nn.Parameter(ln_1_weight)
@@ -202,7 +209,8 @@ def load_model(model_name="gpt2", remove_ln=False):
         ln_f_bias = ln_f.bias.clone().detach() if ln_f.bias is not None else None
         
         model.transformer.ln_f = FakeLayerNorm(
-            ndim=n_embd,
+            n_embd=n_embd,
+            n_ctx=n_ctx,
             layer=f"blocks.{n_layers-1}.hook_resid_post",
             bias=ln_f.bias is not None
         )
