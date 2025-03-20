@@ -86,7 +86,7 @@ def make_gpt2_standard_slow():
     
     # Training params
     base_batch_size = 48
-    max_steps = 2000
+    max_steps = 3000
     block_size = 1024
     target_batch_tokens = 2**19
     
@@ -154,7 +154,7 @@ def make_gpt2_medium_slow():
     
     # Training params
     base_batch_size = 11
-    max_steps = 1200
+    max_steps = 4000
     block_size = 1024
     target_batch_tokens = 2**19
     warmup_steps = 10  # Shorter warmup due to accelerated schedule
@@ -165,9 +165,9 @@ def make_gpt2_medium_slow():
     gradient_accumulation_steps = int(desired_batch_size // batch_size)
     
     # Calculate layernorm schedule
-    gap_ln2 = 2
-    gap_ln1qk = 2
-    gap_ln1v = 3
+    gap_ln2 = 20
+    gap_ln1qk = 20
+    gap_ln1v = 30
     gap_lnf = None
     gap_eot = 0
     gap_bos = 0
@@ -263,14 +263,14 @@ def make_gpt2_medium_test():
     
     return FinetuneConfig(**locals())
 
-def make_gpt2_large():
+def make_gpt2_large_slow():
     # Architecture params
     model_name = "gpt2-large"
     n_layers = 36
     
     # Training params
-    base_batch_size = 22
-    max_steps = 1200
+    base_batch_size = 10
+    max_steps = 4000
     block_size = 1024
     target_batch_tokens = 2**19
     
@@ -278,22 +278,22 @@ def make_gpt2_large():
     batch_size = base_batch_size
     desired_batch_size = target_batch_tokens / block_size
     gradient_accumulation_steps = int(desired_batch_size // batch_size)
-    warmup_steps = 10
+    warmup_steps = 50
     
     # Calculate layernorm schedule
-    gap_ln2 = 4
-    gap_ln1qk = 4
-    gap_ln1v = 6
+    gap_ln2 = 20
+    gap_ln1qk = 20
+    gap_ln1v = 30
     gap_lnf = None
     gap_eot = 0
     gap_bos = 0
     
-    start_ln2 = 20
+    start_ln2 = 200
     start_ln1qk = start_ln2 + n_layers * gap_ln2
     start_ln1v = start_ln1qk + n_layers * gap_ln1qk
     start_lnf = start_ln1v + n_layers * gap_ln1v
-    start_eot = start_lnf + 2
-    start_bos = start_eot + 10
+    start_eot = start_lnf + 20
+    start_bos = start_eot + 100
     
     return FinetuneConfig(**locals())
 
@@ -401,10 +401,12 @@ def make_gpt2_xl_test():
 FINETUNE_CONFIGS = {
     "gpt2_standard": make_gpt2_standard(),
     "gpt2_test": make_gpt2_test(),
+    "gpt2_standard_slow": make_gpt2_standard_slow(),
     "gpt2-medium_slow": make_gpt2_medium_slow(),
     "gpt2-medium_fasttune": make_gpt2_medium_fasttune(),
     "gpt2-medium_test": make_gpt2_medium_test(),
-    "gpt2-large": make_gpt2_large(),
+    # "gpt2-large": make_gpt2_large(),
+    "gpt2-large-slow": make_gpt2_large_slow(),
     "gpt2-large_test": make_gpt2_large_test(),
     "gpt2-xl": make_gpt2_xl(),
     "gpt2-xl_test": make_gpt2_xl_test(),

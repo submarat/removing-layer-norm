@@ -527,7 +527,7 @@ def main():
 
     # Training arguments with evaluation settings
     training_args = TrainingArguments(
-        output_dir="./results",
+        output_dir=f"./results/{model_name}",
         bf16=True,
         resume_from_checkpoint=args.resume_from_checkpoint,
         save_safetensors=False,
@@ -541,7 +541,9 @@ def main():
         max_grad_norm=1.0,
         logging_dir="./logs",
         prediction_loss_only=True,
-        lr_scheduler_type="cosine",
+        # lr_scheduler_type="constant_with_warmup",
+        lr_scheduler_type="cosine_with_min_lr",
+        lr_scheduler_kwargs={"min_lr": 0.0004},
         report_to="wandb" if _USE_WANDB else "none",
         run_name=f"{args.config}-{args.mode}",
         logging_steps=1,
