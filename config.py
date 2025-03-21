@@ -21,7 +21,9 @@ class FinetuneConfig(BaseModel):
     warmup_steps: int = 100
     weight_decay: float = 0.01
     learning_rate: float = 6e-4
-    save_steps: int = 50  # Save checkpoint every 100 steps
+    lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
+    lr_scheduler_kwargs: dict = {"min_lr": 3e-4}
+    save_steps: int = 100  # Save checkpoint every 100 steps, for larger models less often
     
     # Evaluation params
     num_eval_samples: int = 1000
@@ -158,7 +160,8 @@ def make_gpt2_medium_slow():
     block_size = 1024
     target_batch_tokens = 2**19
     warmup_steps = 10  # Shorter warmup due to accelerated schedule
-    
+    save_steps = 150 
+
     # Calculate derived training params
     batch_size = base_batch_size
     desired_batch_size = target_batch_tokens / block_size
@@ -206,7 +209,8 @@ def make_gpt2_medium_fasttune():
     block_size = 1024
     target_batch_tokens = 2**19
     warmup_steps = 10  # Shorter warmup due to accelerated schedule
-    
+    save_steps = 150 
+
     # Calculate derived training params
     batch_size = base_batch_size
     desired_batch_size = target_batch_tokens / block_size
@@ -273,6 +277,7 @@ def make_gpt2_large():
     max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
+    save_steps = 200
     
     # Calculate derived training params
     batch_size = base_batch_size
@@ -342,6 +347,7 @@ def make_gpt2_xl():
     block_size = 1024
     target_batch_tokens = 2**19
     warmup_steps = 10
+    save_steps = 200
     
     # Calculate derived training params
     batch_size = base_batch_size

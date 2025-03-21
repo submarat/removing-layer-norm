@@ -2,6 +2,7 @@ import os
 
 import argparse
 import datasets
+import datetime
 import numpy as np
 import torch
 import torch.nn as nn
@@ -526,8 +527,10 @@ def main():
     )
 
     # Training arguments with evaluation settings
+    output_dir = f"results/{model_name}/{datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}"
+    os.makedirs(output_dir)
     training_args = TrainingArguments(
-        output_dir="./results",
+        output_dir=output_dir,
         bf16=True,
         resume_from_checkpoint=args.resume_from_checkpoint,
         save_safetensors=False,
@@ -541,7 +544,8 @@ def main():
         max_grad_norm=1.0,
         logging_dir="./logs",
         prediction_loss_only=True,
-        lr_scheduler_type="cosine",
+        lr_scheduler_type=config.lr_scheduler_type,
+        lr_scheduler_kwargs=config.lr_scheduler_kwargs,
         report_to="wandb" if _USE_WANDB else "none",
         run_name=f"{args.config}-{args.mode}",
         logging_steps=1,
