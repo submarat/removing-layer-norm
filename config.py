@@ -27,6 +27,7 @@ class FinetuneConfig(BaseModel):
     
     # Evaluation params
     num_eval_samples: int = 1000
+    eval_steps: int = 100
     
     # Derived training params
     batch_size: int

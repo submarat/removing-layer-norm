@@ -14,7 +14,7 @@ Options:
     -h --help                       Show this help message
     -m MODEL --model MODEL          Model checkpoint path or model id [REQUIRED]
     -f FORMAT --format FORMAT       Model format: nanogpt/transformers [default: transformers]
-    -d DATASET --dataset DATASET    Dataset variant: pile-10k/pile-apollo/pile-uncopyrighted [default: pile-10k]
+    -d DATASET --dataset DATASET    Dataset variant: pile-10k/pile-apollo/pile-uncopyrighted [default: pile-apollo]
     -n NUM --num-samples NUM        Number of samples to evaluate [default: 20000]
     -b BATCH_SIZE --batch-size BATCH_SIZE  Batch size for evaluation [default: 8]
     --model-name MODEL_NAME         Base model name [default: gpt2]

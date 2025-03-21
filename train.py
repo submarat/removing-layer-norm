@@ -2,7 +2,6 @@ import os
 
 import argparse
 import datasets
-import datetime
 import numpy as np
 import torch
 import torch.nn as nn
@@ -10,6 +9,7 @@ import torch.nn.functional as F
 import tqdm
 import transformers
 import wandb
+from datetime import datetime
 from config import FINETUNE_CONFIGS
 from prepare_dataset import prepare_dataset
 from torch.utils.data import Dataset
@@ -264,7 +264,7 @@ def finetune_with_ln(model, training_args, tokenized, data_collator, config, pil
     if pile_eval_dataset is not None:
         eval_datasets = {
             # "openwebtext": tokenized["test"],
-            "pile10k": pile_eval_dataset
+            "pile": pile_eval_dataset
         }
     else:
         eval_datasets = tokenized["test"]
@@ -445,7 +445,7 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config, 
     if pile_eval_dataset is not None:
         eval_datasets = {
             # "openwebtext": tokenized["test"],
-            "pile10k": pile_eval_dataset
+            "pile": pile_eval_dataset
         }
     else:
         eval_datasets = tokenized["test"]
@@ -512,11 +512,11 @@ def main():
     # Initialize model
     model = load_model(model_name, remove_ln=args.mode == "without_ln")
     
-    # Initialize Pile-10k dataset once at the beginning
-    print("Preparing Pile-10k evaluation dataset...")
+    # Initialize Pile-apollo dataset once at the beginning
+    print("Preparing Pile-apollo evaluation dataset...")
 
     processed_examples, pile_tokenizer = preprocess_pile_dataset(
-        "pile-10k", model_name, num_samples=config.num_eval_samples
+        "pile-apollo", model_name, num_samples=config.num_eval_samples
     )
     
     pile_eval_dataset = convert_for_trainer(
@@ -559,7 +559,7 @@ def main():
         save_total_limit=12,
         eval_accumulation_steps=1,
         eval_strategy="steps",
-        eval_steps=config.save_steps,
+        eval_steps=config.eval_steps,
         load_best_model_at_end=False,
     )
 
