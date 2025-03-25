@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from load_models import load_baseline, load_finetuned_model, load_nln_model
+from load_models import ModelFactory
 from load_dataset import DataLoader
 from format_results import FormatInference 
 from metrics import JSDivergence
@@ -22,6 +22,8 @@ class InferenceConfig:
     num_samples: int
     max_sequence_length: int
     batch_size: int
+    model_dir: str = '/workspace/removing-layer-norm/mech_interp/models'
+    prepend_bos: bool = False
     save_text: bool = False
     folder: Union[str, Path] = field(default="/workspace/removing-layer-norm/mech_interp/inference_logs/")
     output_file: Optional[str] = None
@@ -33,7 +35,8 @@ class InferenceConfig:
         # Set up derived paths after initialization to correctly assign self.output_file
         self.folder = os.path.join(
             self.folder, 
-            f"dataset_{self.dataset}_samples_{self.num_samples}_seqlen_{self.max_sequence_length}"
+            f"dataset_{self.dataset}_samples_{self.num_samples}_" + \
+            f"seqlen_{self.max_sequence_length}_prepend_{self.prepend_bos}"
         )
         
         # Ensure the directory exists
@@ -46,47 +49,22 @@ class InferenceConfig:
             self.num_threads = min(32, multiprocessing.cpu_count() * 2)
 
 
-class ModelManager:
-    def __init__(self, model_names, device):
-        """
-        Initialize the ModelManager with specified models.
-        
-        Args:
-            model_names: List of model names to load ('baseline', 'finetuned', 'noLN')
-            device: The device to load models on ('cpu', 'cuda', or torch.device)
-        """
-        self.device = device if isinstance(device, torch.device) else torch.device(device)
-        self.models: Dict[str, nn.Module] = self._load_models(model_names)
-        self.model_pairs: List[Tuple[str, str]] = list(itertools.combinations(model_names, 2))        
-
-
-    def _load_models(self, model_names):
-        models_dict = {}
-        for name in model_names:
-            if name == 'baseline':
-                models_dict[name] = load_baseline().to(self.device)
-            elif name == 'finetuned':
-                models_dict[name] = load_finetuned_model().to(self.device)
-            elif name == 'noLN':
-                models_dict[name] = load_nln_model().to(self.device)
-            else:
-                raise ValueError(f"Unknown model: {name}")
-            models_dict[name].eval()
-        return models_dict
-
-
 class InferenceRunner:
     def __init__(self, config):
         self.config = config
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         # Initialize various manag
-        self.model_manager = ModelManager(self.config.models, self.device)
+        self.model_manager = ModelFactory(
+                model_names=self.config.models,
+                model_dir=self.config.model_dir,
+                device=self.device)
         self.dataloader = DataLoader(
-                self.config.dataset,
-                self.config.batch_size,
-                self.config.max_sequence_length,
-                self.config.num_samples
+                dataset_name=self.config.dataset,
+                batch_size=self.config.batch_size,
+                max_context=self.config.max_sequence_length,
+                num_samples=self.config.num_samples,
+                prepend_bos=self.config.prepend_bos
                 )
         self.results_formatter = FormatInference(
                 self.config.output_file,
@@ -189,10 +167,10 @@ if __name__ == "__main__":
     config = InferenceConfig(
         dataset="apollo-pile",
         models=["baseline", "finetuned", "noLN"],
-        num_samples=10000,
+        num_samples=5000,
         max_sequence_length=512,
         batch_size=10,
-        save_text=True
+        prepend_bos=True
     )
 
     runner = InferenceRunner(config)
