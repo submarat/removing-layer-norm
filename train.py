@@ -9,6 +9,7 @@ import torch.nn.functional as F
 import tqdm
 import transformers
 import wandb
+from datetime import datetime
 from config import FINETUNE_CONFIGS
 from prepare_dataset import prepare_dataset
 from torch.utils.data import Dataset
@@ -263,7 +264,7 @@ def finetune_with_ln(model, training_args, tokenized, data_collator, config, pil
     if pile_eval_dataset is not None:
         eval_datasets = {
             # "openwebtext": tokenized["test"],
-            "pile10k": pile_eval_dataset
+            "pile": pile_eval_dataset
         }
     else:
         eval_datasets = tokenized["test"]
@@ -444,7 +445,7 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config, 
     if pile_eval_dataset is not None:
         eval_datasets = {
             # "openwebtext": tokenized["test"],
-            "pile10k": pile_eval_dataset
+            "pile": pile_eval_dataset
         }
     else:
         eval_datasets = tokenized["test"]
@@ -511,11 +512,11 @@ def main():
     # Initialize model
     model = load_model(model_name, remove_ln=args.mode == "without_ln")
     
-    # Initialize Pile-10k dataset once at the beginning
-    print("Preparing Pile-10k evaluation dataset...")
+    # Initialize Pile-apollo dataset once at the beginning
+    print("Preparing Pile-apollo evaluation dataset...")
 
     processed_examples, pile_tokenizer = preprocess_pile_dataset(
-        "pile-10k", model_name, num_samples=config.num_eval_samples
+        "pile-apollo", model_name, num_samples=config.num_eval_samples
     )
     
     pile_eval_dataset = convert_for_trainer(
@@ -526,8 +527,10 @@ def main():
     )
 
     # Training arguments with evaluation settings
+    output_dir = f"results/{model_name}/{datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}"
+    os.makedirs(output_dir)
     training_args = TrainingArguments(
-        output_dir="./results",
+        output_dir=output_dir,
         bf16=True,
         resume_from_checkpoint=args.resume_from_checkpoint,
         save_safetensors=False,
@@ -541,7 +544,8 @@ def main():
         max_grad_norm=1.0,
         logging_dir="./logs",
         prediction_loss_only=True,
-        lr_scheduler_type="cosine",
+        lr_scheduler_type=config.lr_scheduler_type,
+        lr_scheduler_kwargs=config.lr_scheduler_kwargs,
         report_to="wandb" if _USE_WANDB else "none",
         run_name=f"{args.config}-{args.mode}",
         logging_steps=1,
@@ -555,7 +559,7 @@ def main():
         save_total_limit=12,
         eval_accumulation_steps=1,
         eval_strategy="steps",
-        eval_steps=config.save_steps,
+        eval_steps=config.eval_steps,
         load_best_model_at_end=False,
     )
 
