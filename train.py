@@ -72,7 +72,7 @@ class FakeLayerNorm(nn.Module):
         self.bos_std = self.bos_std.detach().requires_grad_(False)
 
         self.iteration = 0
-        self.update_freq = 10
+        self.update_freq = 1
 
     def forward(self, input, std_type="avg", attn_v=False):
         # We want all the enable / disable information to be in this class, but the class is re-used
