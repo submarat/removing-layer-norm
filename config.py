@@ -133,14 +133,14 @@ def make_gpt2_test():
     # Calculate layernorm schedule
     gap_ln2 = 0
     gap_ln1qk = 0
-    gap_ln1v = 0
+    gap_ln1v = 1
     gap_lnf = None
     gap_eot = 0
     gap_bos = 0
     
     start_ln2 = 2  # Start earlier for testing
     start_ln1qk = 0
-    start_ln1v = 0
+    start_ln1v = 1
     start_lnf = 0
     start_eot = 0
     start_bos = 0
