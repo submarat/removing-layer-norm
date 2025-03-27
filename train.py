@@ -569,17 +569,18 @@ def main():
     
     # Initialize Pile-apollo dataset once at the beginning
     print("Preparing Pile-apollo evaluation dataset...")
-
-    processed_examples, pile_tokenizer = preprocess_pile_dataset(
-        "pile-apollo", model_name, num_samples=config.num_eval_samples
-    )
-    
-    pile_eval_dataset = convert_for_trainer(
-        processed_examples, 
-        pile_tokenizer,
-        model_name=model_name,
-        num_samples=config.num_eval_samples
-    )
+    pile_eval_dataset = None
+    if os.environ.get("EVAL", "0") == "1":
+        processed_examples, pile_tokenizer = preprocess_pile_dataset(
+            "pile-apollo", model_name, num_samples=config.num_eval_samples
+        )
+        
+        pile_eval_dataset = convert_for_trainer(
+            processed_examples, 
+            pile_tokenizer,
+            model_name=model_name,
+            num_samples=config.num_eval_samples
+        )
 
     # Training arguments with evaluation settings
     output_dir = f"results/{model_name}/{datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}"
