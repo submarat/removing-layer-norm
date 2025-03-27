@@ -52,7 +52,11 @@ class FakeLayerNorm(nn.Module):
 
         self.real_average_std, self.real_bos_std = std_dict[layer], std_bos_dict[layer]
 
-        self.average_std = torch.ones(n_ctx, device=device) * self.real_average_std
+        if os.environ.get("EXP_CORRECT_BOS", "0") == "1":
+            self.average_std = torch.ones(n_ctx, device=device) * self.real_average_std
+        else:
+            self.average_std = torch.ones(n_embd, device=device) * self.real_average_std
+
         self.average_std[0] = self.real_bos_std
         self.bos_std = torch.ones(n_ctx, device=device) * self.real_bos_std
 
@@ -80,15 +84,35 @@ class FakeLayerNorm(nn.Module):
             # Note that we could differentiate between EOT and BOS, but I didn't need it here.
             # *at the end (with disable_eot_std) we make the latter be like the former, and with
             # disable_bos_std we make both vectors to be [b, b, b, ...], equivalent to scalars.
+            if os.environ.get("EXP_RECOMPUTE_STD_ON_FAKE", "0") == "1":
+                with torch.no_grad():
+                    self.average_std[1:] = torch.ones_like(self.average_std[1:]) * self.real_average_std
+                    self.average_std[0] = self.real_bos_std
+                    self.bos_std = torch.ones_like(self.bos_std) * self.real_bos_std
+
             assert std_type in ["avg", "bos"]
             std = self.average_std if std_type == "avg" else self.bos_std
-            return (
-                (input - input.mean(-1, keepdim=True)) / std.view(1, -1, 1) * self.weight
-                + self.bias
-                if self.bias is not None
-                else input * self.weight
-            )
+            if os.environ.get("EXP_CORRECT_BOS", "0") == "1":
+                return (
+                    (input - input.mean(-1, keepdim=True)) / std.view(1, -1, 1) * self.weight
+                    + self.bias
+                    if self.bias is not None
+                    else input * self.weight
+                )
+            else:
+                return (
+                    (input - input.mean(-1, keepdim=True)) / std * self.weight
+                    + self.bias
+                    if self.bias is not None
+                    else input * self.weight
+                )
         elif mode == "real":
+            if os.environ.get("EXP_RECOMPUTE_STD_ON_REAL", "0") == "1":
+                with torch.no_grad():
+                    self.average_std[1:] = torch.ones_like(self.average_std[1:]) * self.real_average_std
+                    self.average_std[0] = self.real_bos_std
+                    self.bos_std = torch.ones_like(self.bos_std) * self.real_bos_std
+
             return F.layer_norm(
                 input, self.weight.shape, self.weight, self.bias, 1e-5
             )
