@@ -61,12 +61,14 @@ class FakeLayerNorm(nn.Module):
         self.real_average_std, self.real_bos_std = std_dict[layer], std_bos_dict[layer]
 
         if os.environ.get("EXP_CORRECT_BOS", "0") == "1":
-            self.average_std = torch.ones(n_ctx, device=device) * self.real_average_std
+            std_dim = n_ctx
         else:
-            self.average_std = torch.ones(n_embd, device=device) * self.real_average_std
+            std_dim = n_embd
+            
+        self.average_std = torch.ones(std_dim, device=device) * self.real_average_std
+        self.bos_std = torch.ones(std_dim, device=device) * self.real_bos_std
 
         self.average_std[0] = self.real_bos_std
-        self.bos_std = torch.ones(n_ctx, device=device) * self.real_bos_std
 
         # Explicitly detach these tensors and set requires_grad=False
         self.average_std = self.average_std.detach().requires_grad_(False)
