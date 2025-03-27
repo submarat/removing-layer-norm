@@ -1,3 +1,10 @@
+"""
+Feature flags:
+
+EXP_CORRECT_BOS: Use correct BOS special treatment
+EXP_RECOMPUTE_STD_ON_FAKE: Recompute std when FakeLayerNorm is fake - will recompute std on every forward pass
+EXP_RECOMPUTE_STD_ON_REAL: Recompute std when FakeLayerNorm is real - will freeze std when FakeLayerNorm goes fake
+"""
 import os
 
 import argparse
