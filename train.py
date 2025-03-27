@@ -67,6 +67,10 @@ class FakeLayerNorm(nn.Module):
         self.average_std[0] = self.real_bos_std
         self.bos_std = torch.ones(n_ctx, device=device) * self.real_bos_std
 
+        # Explicitly detach these tensors and set requires_grad=False
+        self.average_std = self.average_std.detach().requires_grad_(False)
+        self.bos_std = self.bos_std.detach().requires_grad_(False)
+
         self.iteration = 0
         self.update_freq = 10
 
@@ -93,9 +97,14 @@ class FakeLayerNorm(nn.Module):
             # disable_bos_std we make both vectors to be [b, b, b, ...], equivalent to scalars.
             if os.environ.get("EXP_RECOMPUTE_STD_ON_FAKE", "0") == "1":
                 with torch.no_grad():
-                    self.average_std[1:] = torch.ones_like(self.average_std[1:]) * self.real_average_std
-                    self.average_std[0] = self.real_bos_std
-                    self.bos_std = torch.ones_like(self.bos_std) * self.real_bos_std
+                    # Create new tensors instead of modifying in-place
+                    new_average_std = self.average_std.clone()
+                    new_average_std[1:] = torch.ones_like(new_average_std[1:]) * self.real_average_std
+                    new_average_std[0] = self.real_bos_std
+                    self.average_std = new_average_std.detach().requires_grad_(False)
+                    
+                    new_bos_std = torch.ones_like(self.bos_std) * self.real_bos_std
+                    self.bos_std = new_bos_std.detach().requires_grad_(False)
 
             assert std_type in ["avg", "bos"]
             std = self.average_std if std_type == "avg" else self.bos_std
@@ -116,9 +125,14 @@ class FakeLayerNorm(nn.Module):
         elif mode == "real":
             if os.environ.get("EXP_RECOMPUTE_STD_ON_REAL", "0") == "1":
                 with torch.no_grad():
-                    self.average_std[1:] = torch.ones_like(self.average_std[1:]) * self.real_average_std
-                    self.average_std[0] = self.real_bos_std
-                    self.bos_std = torch.ones_like(self.bos_std) * self.real_bos_std
+                    # Create new tensors instead of modifying in-place
+                    new_average_std = self.average_std.clone()
+                    new_average_std[1:] = torch.ones_like(new_average_std[1:]) * self.real_average_std
+                    new_average_std[0] = self.real_bos_std
+                    self.average_std = new_average_std.detach().requires_grad_(False)
+                    
+                    new_bos_std = torch.ones_like(self.bos_std) * self.real_bos_std
+                    self.bos_std = new_bos_std.detach().requires_grad_(False)
 
             return F.layer_norm(
                 input, self.weight.shape, self.weight, self.bias, 1e-5
