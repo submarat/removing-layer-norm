@@ -134,21 +134,58 @@ def make_gpt2_test():
     gradient_accumulation_steps = int(desired_batch_size // batch_size)
     
     # Calculate layernorm schedule
-    gap_ln2 = 1
-    gap_ln1qk = 1
+    gap_ln2 = 0
+    gap_ln1qk = 0
     gap_ln1v = 1
     gap_lnf = None
     gap_eot = 0
     gap_bos = 0
     
     start_ln2 = 2  # Start earlier for testing
-    start_ln1qk = start_ln2 + n_layers * gap_ln2
-    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
-    start_lnf = start_ln1v + n_layers * gap_ln1v
-    start_eot = start_lnf + 2
-    start_bos = start_eot + 1  # Shorter gap for testing
+    start_ln1qk = 0
+    start_ln1v = 1
+    start_lnf = 0
+    start_eot = 0
+    start_bos = 0
     
     return FinetuneConfig(**locals())
+
+
+def make_gpt2_test_all_zeros():
+    # Architecture params
+    model_name = "gpt2"
+    n_layers = 12
+    
+    # Training params - minimal values for testing
+    base_batch_size = 1
+    max_steps = 50
+    block_size = 128
+    target_batch_tokens = 2**10
+    warmup_steps = 2
+    save_steps = 10
+    
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    
+    # Calculate layernorm schedule
+    gap_ln2 = 0
+    gap_ln1qk = 0
+    gap_ln1v = 0
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+    
+    start_ln2 = 2  # Start earlier for testing
+    start_ln1qk = 0
+    start_ln1v = 0
+    start_lnf = 0
+    start_eot = 0
+    start_bos = 0
+    
+    return FinetuneConfig(**locals())
+
 
 def make_gpt2_medium_slow():
     # Architecture params
@@ -408,6 +445,7 @@ def make_gpt2_xl_test():
 FINETUNE_CONFIGS = {
     "gpt2_standard": make_gpt2_standard(),
     "gpt2_test": make_gpt2_test(),
+    "gpt2_test_all_zeros": make_gpt2_test_all_zeros(),
     "gpt2-medium_slow": make_gpt2_medium_slow(),
     "gpt2-medium_fasttune": make_gpt2_medium_fasttune(),
     "gpt2-medium_test": make_gpt2_medium_test(),
