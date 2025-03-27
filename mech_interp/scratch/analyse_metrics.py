@@ -297,11 +297,7 @@ class MetricsSummary:
         )
         
         # Add diagonal line for reference
-        max_val = max(
-            self.df['jsd_baseline_vs_finetuned'].max(),
-            self.df['jsd_baseline_vs_noLN'].max()
-        )
-        axes[0].plot([0, max_val], [0, max_val], 'k--', alpha=0.5)
+        axes[0].plot([0, 1], [0, 1], 'k--', alpha=0.5)
         
         # topk_JSD scatterplot
         sc2 = axes[1].scatter(
@@ -315,11 +311,7 @@ class MetricsSummary:
         )
         
         # Add diagonal line for reference
-        max_val = max(
-            self.df['topk_jsd_baseline_vs_finetuned'].max(),
-            self.df['topk_jsd_baseline_vs_noLN'].max()
-        )
-        axes[1].plot([0, max_val], [0, max_val], 'k--', alpha=0.5)
+        axes[1].plot([0, 1], [0, 1], 'k--', alpha=0.5)
         
         # Set titles and labels
         axes[0].set_title('Jensen-Shannon Divergence Comparison', fontsize=16)
