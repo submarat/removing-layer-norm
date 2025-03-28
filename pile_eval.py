@@ -32,6 +32,10 @@ def preprocess_pile_dataset(dataset_name, model_name, num_samples=5000, cache_di
         dataset = load_dataset("apollo-research/monology-pile-uncopyrighted-tokenizer-gpt2", streaming=False, split="train")
         if num_samples < len(dataset):
             dataset = dataset.select(range(num_samples))
+    elif dataset_name == "pile-apollo-luca":
+        dataset = load_dataset("lucabaroni/apollo-pile-filtered-10k", streaming=False, split="train")
+        if num_samples < len(dataset):
+            dataset = dataset.select(range(num_samples))
     elif dataset_name == "pile-uncopyrighted":
         dataset = load_dataset("monology/pile-uncopyrighted", streaming=False, split="train")
         if num_samples < len(dataset):
@@ -48,7 +52,7 @@ def preprocess_pile_dataset(dataset_name, model_name, num_samples=5000, cache_di
     all_tokens = []
     
     # Process dataset without batching to avoid issues with variable-length chunks
-    if dataset_name == "pile-apollo":
+    if dataset_name == "pile-apollo" or dataset_name == "pile-apollo-luca":
         # For pre-tokenized datasets
         for example in tqdm(dataset, desc="Processing"):
             all_tokens.extend(example["input_ids"])
@@ -144,11 +148,14 @@ def evaluate_model_on_pile(model, processed_examples, tokenizer, batch_size=8, d
                 
                 # For HF models, get more accurate per-token loss
                 batch_loss = outputs.loss.item() * batch_input_ids.numel()
+
+                # TODO: Fix this as a feature to mask out EOT tokens. 
+                # Don't count tokens at EOT positions, needs fixing, 
+                # Commented out code currenlty only adapts count and not yet loss.
+                # eot_mask = (batch_input_ids == tokenizer.eos_token_id)
+                # batch_tokens = (~eot_mask).sum().item()
+                batch_tokens = batch_input_ids.numel()
                 
-                # Don't count tokens at EOT positions
-                eot_mask = (batch_input_ids == tokenizer.eos_token_id)
-                batch_tokens = (~eot_mask).sum().item()
-            
             total_loss += batch_loss
             total_tokens += batch_tokens
             
