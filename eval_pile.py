@@ -13,9 +13,9 @@ Usage:
 Options:
     -h --help                       Show this help message
     -m MODEL --model MODEL          Model checkpoint path or model id [REQUIRED]
-    -f FORMAT --format FORMAT       Model format: nanogpt/transformers [default: transformers]
-    -d DATASET --dataset DATASET    Dataset variant: pile-10k/pile-apollo/pile-uncopyrighted [default: pile-apollo]
-    -n NUM --num-samples NUM        Number of samples to evaluate [default: 20000]
+    -f FORMAT --format FORMAT       Model format: nanogpt/transformers/noLN_HF_model [default: transformers]
+    -d DATASET --dataset DATASET    Dataset variant: pile-10k/pile-apollo/pile-apollo-luca/pile-uncopyrighted [default: pile-apollo]
+    -n NUM --num-samples NUM        Number of samples to evaluate [default: 10000]
     -b BATCH_SIZE --batch-size BATCH_SIZE  Batch size for evaluation [default: 8]
     --model-name MODEL_NAME         Base model name [default: gpt2]
     --slay-ln                       Remove LayerNorm from model [default: False]
@@ -168,13 +168,16 @@ def main():
         model = load_pt_file(model_path, model_name, slay_ln=slay_ln)
     elif format_type == 'transformers':
         model = load_hf_model(model_path, model_name, slay_ln=slay_ln)
+    elif format_type == 'noLN_HF_model':
+        print(f"model name {model_name}")
+        print(f"model path {model_path}")
+        model = load_nln_hf_model(model_name=model_name, name=model_path)
     else:
         raise ValueError(f"Unknown format type: {format_type}")
 
     model = model.to(device)
     
-    #if slay_ln:
-    #    model = load_nln_hf_model(model=model, model_name=model_name)
+
 
     # Using shared preprocessing function
     processed_examples, tokenizer = preprocess_pile_dataset(dataset_name, model_name, num_samples)
