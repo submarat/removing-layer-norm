@@ -19,8 +19,11 @@ class ResidualNorms:
     def __init__(self,
                  data_path: str,
                  model_dir: str = "../models",
-                 sample_size: Optional[int] = None,
-                 random_seed: int = 42):
+                 num_samples: Optional[int] = None,
+                 random_seed: int = 42,
+                 last_token_only: bool = False,
+                 agg: bool = False,
+                 device: Optional[str] = None):
 
         """
         Initialize the analyzer with data and prepare models.
@@ -31,12 +34,14 @@ class ResidualNorms:
         """
         # Load data from parquet file
         self.df = pd.read_parquet(data_path)
-        self.get_aggregate_metrics()
+        self.last_token_only = last_token_only
+        if agg:
+            self.get_aggregate_metrics()
 
-        if sample_size:
+        if num_samples:
             # Subsample dataframe for analysis
             np.random.seed(random_seed)
-            sample_indices = np.random.choice(len(self.df), size=sample_size, replace=False)
+            sample_indices = np.random.choice(len(self.df), size=num_samples, replace=False)
             self.df = self.df.iloc[sample_indices].reset_index(drop=True)
             print(f"Sampled {len(self.df)} examples for analysis.")
         
@@ -133,22 +138,23 @@ class ResidualNorms:
             # Process each model
             for model_name in self.model_names:
                 if model_name not in results:
-                    results[model_name] = {'l2_norms': {}}
+                    results[model_name] = {}
                 
                 model = self.model_factory.models[model_name]
                 hook_names = self.get_hook_names(model)
                 
                 # Initialize results containers if needed
                 for hook_name in hook_names:
-                    if hook_name not in results[model_name]['l2_norms']:
-                        results[model_name]['l2_norms'][hook_name] = []
+                    if hook_name not in results[model_name]:
+                        results[model_name][hook_name] = []
                 
                 # Define the hook function to capture norms for the entire batch
                 def capture_norms(act, hook):
+                    if self.last_token_only:
+                        act = act[:, -1:, :] # -1: keeps the dims
                     l2_norm = torch.norm(act, p=2, dim=-1)
-                    
                     hook_name = hook.name
-                    results[model_name]['l2_norms'][hook_name].append(l2_norm.detach().cpu())
+                    results[model_name][hook_name].append(l2_norm.detach().cpu())
                     return act
                 
                 # Run the model with hooks for the entire batch
@@ -157,11 +163,8 @@ class ResidualNorms:
                         inputs,
                         fwd_hooks=[(name, capture_norms) for name in hook_names]
                     )
-        
         # Store results
         self.results = results
-        
-        return results   
 
     def plot_norms(self, save_path=None):
         """
@@ -175,7 +178,10 @@ class ResidualNorms:
             return
         
         # Create a 1x2 grid: columns for first token and other tokens
-        fig, axes = plt.subplots(1, 2, figsize=(20, 8))
+        if self.last_token_only:
+            fig, axes = plt.subplots(1, 1, figsize=(8, 8))
+        else:
+            fig, axes = plt.subplots(1, 2, figsize=(20, 8))
         
         # Define simplified hook labels for x-axis
         hook_mapping = {
@@ -185,19 +191,12 @@ class ResidualNorms:
         
         # Add transformer block mappings
         for i in range(12):  # Assuming 12 layers for GPT-2 small
-            hook_mapping[f'blocks.{i}.hook_resid_mid'] = f'Transformer{i}_mid'
-            hook_mapping[f'blocks.{i}.hook_resid_post'] = f'Transformer{i}'
+            hook_mapping[f'blocks.{i}.hook_resid_mid'] = f'Resid_mid_{i}'
+            hook_mapping[f'blocks.{i}.hook_resid_post'] = f'Resid_post_{i}'
         
-        
-        # Determine the common hooks across all models for consistent plotting
-        common_hooks = []
-        for hook_type in ['hook_embed', 'blocks.']:
-            for model_name in self.model_names:
-                model_hooks = list(self.results[model_name]['l2_norms'].keys())
-                matching_hooks = [h for h in model_hooks if hook_type in h]
-                for h in matching_hooks:
-                    if h not in common_hooks:
-                        common_hooks.append(h)
+        # Extract all common hook names
+        first_model_name = self.model_names[0]
+        common_hooks = list(self.results[first_model_name].keys())
         
         # Sort hooks to ensure logical progression
         common_hooks.sort(key=lambda x: (
@@ -215,27 +214,24 @@ class ResidualNorms:
                 if key in hook:
                     x_labels.append(value)
                     break
-            else:
-                # Fallback if no mapping found
-                parts = hook.split('.')
-                if len(parts) >= 3:
-                    x_labels.append(f"T{parts[1]}_{parts[2].split('_')[-1]}")
-                else:
-                    x_labels.append(hook.split('_')[-1])
-        
-        metric_key = 'l2_norms'
-        metric_title = 'L2 Norm'
-        positions = [('first', 'First Token Position'), ('others', 'Other Token Positions')]
+
+        if self.last_token_only:
+            positions = [('first', 'Last Token Norm')]
+        else:
+            positions = [('first', 'First Token Norm'), ('others', 'Other Token Norms')]
 
         # First, calculate global min and max values for consistent y-axis scaling
         global_min = float('inf')
         global_max = float('-inf')
         
         for pos_idx, (pos_key, pos_title) in enumerate(positions):
-            ax = axes[pos_idx]
+            if self.last_token_only:
+                ax = axes
+            else:
+                ax = axes[pos_idx]
             
             for model_name in self.model_names:
-                model_data = self.results[model_name][metric_key]
+                model_data = self.results[model_name]
                 
                 # Collect mean and std for each hook point
                 means = []
@@ -275,8 +271,8 @@ class ResidualNorms:
             
             # Set labels and title
             ax.set_xlabel('Layer')
-            ax.set_ylabel(metric_title)
-            ax.set_title(f'{metric_title} - {pos_title}')
+            ax.set_ylabel('L2 Norn')
+            ax.set_title(f'L2 Norm - {pos_title}')
             ax.set_xticks(np.arange(len(x_labels)))
             ax.set_xticklabels(x_labels, rotation=45, ha='right')
             ax.grid(True, linestyle='--', alpha=0.7)
@@ -302,6 +298,9 @@ class ResidualNorms:
             output_path: Path to save the video
             fps: Frames per second for the video
         """
+        if self.last_token_only:
+            return f"Cannot analyse positional residual stream variations, last_token_only=True"
+
         # Get all hook names in order
         model = self.model_factory.models[self.model_names[0]]
         hook_names = self.get_hook_names(model)
@@ -317,7 +316,7 @@ class ResidualNorms:
         
         # Prepare data and scale for each model
         for model_name in self.model_names:
-            model_data = self.results[model_name]['l2_norms']
+            model_data = self.results[model_name]
             
             for hook in hook_names:
                 if hook in model_data:
@@ -380,8 +379,8 @@ class ResidualNorms:
             ax.set_title(f"Residual L2 Norms Across Token Positions - {hook_titles[hook]}")
             
             for i, model_name in enumerate(self.model_names):
-                if hook in self.results[model_name]['l2_norms']:
-                    all_values = torch.cat(self.results[model_name]['l2_norms'][hook], dim=0)
+                if hook in self.results[model_name]:
+                    all_values = torch.cat(self.results[model_name][hook], dim=0)
                     mean_values = all_values.mean(dim=0).numpy()
                     std_values = all_values.std(dim=0).numpy()
                     x = np.arange(len(mean_values))
@@ -416,12 +415,15 @@ class ResidualNorms:
 
 if __name__ == '__main__':
     data_path = '/workspace/removing-layer-norm/mech_interp/inference_logs/dataset_apollo-pile_samples_5000_seqlen_512_prepend_False/inference_results.parquet'
-    #data_path = 'divergences/divergent.parquet'
+    #data_path = 'divergences/convergent.parquet'
     # Initialize the analyzer with your dataset
     analyzer = ResidualNorms(
         data_path=data_path,  # Path to your parquet file
         model_dir="../models",                   # Directory with your models
-        random_seed=42                           # For reproducible sampling
+        random_seed=42,                          # For reproducible sampling
+        last_token_only=False,
+        agg=True,
+        #num_samples=20000
     )
     
     output_dir = 'norms'
@@ -430,7 +432,7 @@ if __name__ == '__main__':
 
     
     # Run the analysis to collect norms at all hook points
-    analyzer.run_analysis(batch_size=8)  # Process 8 examples at a time
+    analyzer.run_analysis(batch_size=1)  # Process 8 examples at a time
     
     # Generate the layer norm plots
     fig = analyzer.plot_norms(os.path.join(output_dir, 'norms.png'))

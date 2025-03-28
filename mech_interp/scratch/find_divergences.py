@@ -355,18 +355,19 @@ if __name__ == "__main__":
     data_path = "/workspace/removing-layer-norm/mech_interp/inference_logs/dataset_apollo-pile_samples_5000_seqlen_512_prepend_False/inference_results.parquet"
     output_dir = "divergences"
     n_examples = 5
+    agg = False
     
     # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)
     
     # Create analyzer (loads data and initializes tokenizer)
-    analyzer = DivergenceAnalyzer(data_path, min_seq_length=50, agg=True)
+    analyzer = DivergenceAnalyzer(data_path, min_seq_length=50, agg=agg)
     
     # Find interesting examples (high divergence)
     print("\nFinding examples where noLN diverges but baseline and finetuned are similar...")
     high_divergence = analyzer.find_interesting_examples(
         x_max_threshold=1.0,    # Max JSD for baseline vs finetuned
-        y_min_threshold=0.05,    # Min JSD for baseline vs noLN
+        y_min_threshold=0.2,    # Min JSD for baseline vs noLN
         min_ratio_threshold=3.0  # Min ratio difference
     )
     high_divergence.to_parquet((os.path.join(output_dir, 'divergent.parquet')))
