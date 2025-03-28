@@ -169,8 +169,6 @@ def main():
     elif format_type == 'transformers':
         model = load_hf_model(model_path, model_name, slay_ln=slay_ln)
     elif format_type == 'noLN_HF_model':
-        print(f"model name {model_name}")
-        print(f"model path {model_path}")
         model = load_nln_hf_model(model_name=model_name, name=model_path)
     else:
         raise ValueError(f"Unknown format type: {format_type}")
