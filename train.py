@@ -43,14 +43,10 @@ torch.manual_seed(1337)
 
 _USE_WANDB = True
 
-# Default to gpt2 std_dicts
-std_dict = std_dicts["gpt2"]["std_dict"]
-std_bos_dict = std_dicts["gpt2"]["std_bos_dict"]
-
 class FakeLayerNorm(nn.Module):
     """LayerNorm using a fixed std instead of the actual standard deviation."""
 
-    def __init__(self, n_embd, n_ctx, layer, bias):
+    def __init__(self, n_embd, n_ctx, layer, bias, init_average_std, init_bos_std):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(n_embd))
         self.bias = nn.Parameter(torch.zeros(n_embd)) if bias else None
@@ -58,7 +54,7 @@ class FakeLayerNorm(nn.Module):
         self.is_fake = False
         self.attn_v_is_fake = False
 
-        self.real_average_std, self.real_bos_std = std_dict[layer], std_bos_dict[layer]
+        self.real_average_std, self.real_bos_std = init_average_std, init_bos_std
 
         if os.environ.get("EXP_CORRECT_BOS", "0") == "1":
             std_dim = n_ctx
@@ -164,7 +160,7 @@ def load_model(model_name="gpt2", remove_ln=False):
         ),
     )
 
-    def replace_layernorm_with_fake_layernorm(model):
+    def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict):
         n_layers = model.config.n_layer
         n_embd = model.transformer.h[0].ln_1.weight.shape[0]
         n_ctx = model.config.n_ctx
@@ -180,8 +176,23 @@ def load_model(model_name="gpt2", remove_ln=False):
             ln_2_bias = block.ln_2.bias.clone().detach() if block.ln_2.bias is not None else None
             
             # Replace with FakeLayerNorm
-            block.ln_1 = FakeLayerNorm(n_embd=n_embd, n_ctx=n_ctx, layer=f"blocks.{i}.hook_resid_pre", bias=block.ln_1.bias is not None)
-            block.ln_2 = FakeLayerNorm(n_embd=n_embd, n_ctx=n_ctx, layer=f"blocks.{i}.hook_resid_mid", bias=block.ln_2.bias is not None)
+            layer = f"blocks.{i}.hook_resid_pre"
+            block.ln_1 = FakeLayerNorm(
+                n_embd=n_embd,
+                n_ctx=n_ctx,
+                layer=layer,
+                bias=block.ln_1.bias is not None,
+                init_average_std=std_dict[layer],
+                init_bos_std=std_bos_dict[layer])
+
+            layer = f"blocks.{i}.hook_resid_mid"
+            block.ln_2 = FakeLayerNorm(
+                n_embd=n_embd,
+                n_ctx=n_ctx,
+                layer=layer,
+                bias=block.ln_2.bias is not None,
+                init_average_std=std_dict[layer],
+                init_bos_std=std_bos_dict[layer])
             
             # Restore weights
             block.ln_1.weight = nn.Parameter(ln_1_weight)
@@ -261,11 +272,14 @@ def load_model(model_name="gpt2", remove_ln=False):
         ln_f_weight = ln_f.weight.clone().detach()
         ln_f_bias = ln_f.bias.clone().detach() if ln_f.bias is not None else None
         
+        layer = f"blocks.{n_layers-1}.hook_resid_post"
         model.transformer.ln_f = FakeLayerNorm(
             n_embd=n_embd,
             n_ctx=n_ctx,
-            layer=f"blocks.{n_layers-1}.hook_resid_post",
-            bias=ln_f.bias is not None
+            layer=layer,
+            bias=ln_f.bias is not None,
+            init_average_std=std_dict[layer],
+            init_bos_std=std_bos_dict[layer]
         )
         model.transformer.ln_f.weight = nn.Parameter(ln_f_weight)
         if ln_f_bias is not None:
@@ -314,7 +328,10 @@ def load_model(model_name="gpt2", remove_ln=False):
 
     if remove_ln:
         # Replace all LayerNorm instances with FakeLayerNorm
-        replace_layernorm_with_fake_layernorm(model)
+        std_dict = std_dicts[model_name]["std_dict"]
+        std_bos_dict = std_dicts[model_name]["std_bos_dict"]
+
+        replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict)
     
     return model
 
@@ -561,11 +578,6 @@ def main():
     config = FINETUNE_CONFIGS[args.config]
     model_name = config.model_name
 
-    # Update std_dict and std_bos_dict if model is not gpt2
-    global std_dict, std_bos_dict
-    std_dict = std_dicts[model_name]["std_dict"]
-    std_bos_dict = std_dicts[model_name]["std_bos_dict"]
-    
     # Prepare datasets
     tokenized, data_collator = prepare_dataset(model_name)
     
