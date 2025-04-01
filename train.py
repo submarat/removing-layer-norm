@@ -609,7 +609,7 @@ def main():
         dataloader_prefetch_factor=2,
         dataloader_persistent_workers=True,
         save_steps=config.save_steps,
-        save_total_limit=10,
+        save_total_limit=20,
         eval_accumulation_steps=1,
         eval_strategy="steps",
         eval_steps=config.eval_steps,

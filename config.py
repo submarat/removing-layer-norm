@@ -316,7 +316,7 @@ def make_gpt2_large1():
     max_steps = 2500
     block_size = 1024
     target_batch_tokens = 2**20
-    save_steps = 250
+    save_steps = 125
     
     # Calculate derived training params
     batch_size = base_batch_size
@@ -387,7 +387,7 @@ def make_gpt2_large3():
     max_steps = 2500
     block_size = 1024
     target_batch_tokens = 2**20
-    save_steps = 250
+    save_steps = 125
     
     # Calculate derived training params
     batch_size = base_batch_size
