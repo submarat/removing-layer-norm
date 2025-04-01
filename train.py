@@ -594,7 +594,7 @@ def main():
         warmup_steps=config.warmup_steps,
         weight_decay=config.weight_decay,
         learning_rate=config.learning_rate,
-        max_grad_norm=0.02,
+        max_grad_norm=0.01,
         logging_dir="./logs",
         prediction_loss_only=True,
         lr_scheduler_type=config.lr_scheduler_type,
