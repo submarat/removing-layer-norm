@@ -55,8 +55,8 @@ class FakeLayerNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(n_embd))
         self.bias = nn.Parameter(torch.zeros(n_embd)) if bias else None
         # Flag whether the LayerNorm is enabled ("real") or disabled ("fake")
-        self.mode = "real"
-        self.attn_v_mode = "real"
+        self.is_fake = False
+        self.attn_v_is_fake = False
 
         self.real_average_std, self.real_bos_std = std_dict[layer], std_bos_dict[layer]
 
@@ -80,9 +80,9 @@ class FakeLayerNorm(nn.Module):
     def forward(self, input, std_type="avg", attn_v=False):
         # We want all the enable / disable information to be in this class, but the class is re-used
         # for both the QK and V paths. Thus we add the attn_v flag to the call that is True only for
-        # the V path. Thus we get to have flags `mode` and `attn_v_mode` to enable / disable the
+        # the V path. Thus we get to have flags `is_fake` and `attn_v_is_fake` to enable / disable the
         # LN for the QK and V paths separately.
-        mode = self.attn_v_mode if attn_v else self.mode
+        is_fake = self.attn_v_is_fake if attn_v else self.is_fake
 
         self.iteration += 1
         # Calculate the std of the input
@@ -90,7 +90,7 @@ class FakeLayerNorm(nn.Module):
             self.iteration = 0
             self.real_average_std, self.real_bos_std = self.recompute_average_std(input)
 
-        if mode == "fake":
+        if is_fake:
             # Which std values to use: We use (1) average std (which is actually a vector of length
             # n_ctx for most of the time*) [a, b, b, ...] where a is the average std for position 1,
             # and b is the average std for all other positions. We also have the option to use (2)
@@ -100,14 +100,7 @@ class FakeLayerNorm(nn.Module):
             # disable_bos_std we make both vectors to be [b, b, b, ...], equivalent to scalars.
             if os.environ.get("EXP_RECOMPUTE_STD_ON_FAKE", "0") == "1":
                 with torch.no_grad():
-                    # Create new tensors instead of modifying in-place
-                    new_average_std = self.average_std.clone()
-                    new_average_std[1:] = torch.ones_like(new_average_std[1:]) * self.real_average_std
-                    new_average_std[0] = self.real_bos_std
-                    self.average_std = new_average_std.detach().requires_grad_(False)
-                    
-                    new_bos_std = torch.ones_like(self.bos_std) * self.real_bos_std
-                    self.bos_std = new_bos_std.detach().requires_grad_(False)
+                    self.sync_std()
 
             assert std_type in ["avg", "bos"]
             std = self.average_std if std_type == "avg" else self.bos_std
@@ -125,23 +118,14 @@ class FakeLayerNorm(nn.Module):
                     if self.bias is not None
                     else input * self.weight
                 )
-        elif mode == "real":
+        else:
             if os.environ.get("EXP_RECOMPUTE_STD_ON_REAL", "0") == "1":
                 with torch.no_grad():
-                    # Create new tensors instead of modifying in-place
-                    new_average_std = self.average_std.clone()
-                    new_average_std[1:] = torch.ones_like(new_average_std[1:]) * self.real_average_std
-                    new_average_std[0] = self.real_bos_std
-                    self.average_std = new_average_std.detach().requires_grad_(False)
-                    
-                    new_bos_std = torch.ones_like(self.bos_std) * self.real_bos_std
-                    self.bos_std = new_bos_std.detach().requires_grad_(False)
+                    self.sync_std()
 
             return F.layer_norm(
                 input, self.weight.shape, self.weight, self.bias, 1e-5
             )
-        else:
-            raise ValueError(f"Unknown mode {mode}")
     
     def recompute_average_std(self, x):
         with torch.no_grad():
@@ -149,6 +133,27 @@ class FakeLayerNorm(nn.Module):
             average_std = std.mean().detach().item()
             bos_std = std[0].detach().item()
         return average_std, bos_std
+    
+    def sync_std(self):
+        """Sync the average and bos std values (that are used in the forward pass) with the real std values."""
+        with torch.no_grad():
+            # Create new tensors instead of modifying in-place because we don't want to track gradients for these
+            # This is conditional on the recomputation mode
+            if self.bos_special_treatment:
+                new_average_std = self.average_std.clone()
+                new_average_std[1:] = torch.ones_like(new_average_std[1:]) * self.real_average_std
+                new_average_std[0] = self.real_bos_std
+                self.average_std = new_average_std.detach().requires_grad_(False)
+            else:
+                self.average_std = torch.ones_like(self.average_std) * self.real_average_std
+            
+            # This will always enable BOS special treatment
+            if self.bos_special_treatment:
+                new_bos_std = torch.ones_like(self.bos_std) * self.real_bos_std
+            else:
+                new_bos_std = torch.ones_like(self.bos_std) * self.real_average_std
+            self.bos_std = new_bos_std.detach().requires_grad_(False)
+
 
 def load_model(model_name="gpt2", remove_ln=False):
     model = transformers.GPT2LMHeadModel.from_pretrained(
@@ -340,19 +345,19 @@ def finetune_with_ln(model, training_args, tokenized, data_collator, config, pil
 def finetune_without_ln(model, training_args, tokenized, data_collator, config, pile_eval_dataset=None):
     """Finetune model without layer normalization"""
     def disable_ln_2(block_index):
-        model.transformer.h[block_index].ln_2.mode = "fake"
+        model.transformer.h[block_index].ln_2.is_fake = True
         print(f"disabled ln_2 for block {block_index}")
 
     def disable_ln_1qk(block_index):
-        model.transformer.h[block_index].ln_1.mode = "fake"
+        model.transformer.h[block_index].ln_1.is_fake = True
         print(f"disabled ln_1 for block {block_index}")
 
     def disable_ln_1v(block_index):
-        model.transformer.h[block_index].ln_1.attn_v_mode = "fake"
+        model.transformer.h[block_index].ln_1.attn_v_is_fake = True
         print(f"disabled ln_1v for block {block_index}")
 
     def disable_ln_f():
-        model.transformer.ln_f.mode = "fake"
+        model.transformer.ln_f.is_fake = True
         print("disabled ln_f")
 
     def disable_eot_std(block_index):
