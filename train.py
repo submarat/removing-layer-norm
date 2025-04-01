@@ -89,7 +89,7 @@ class FakeLayerNorm(nn.Module):
 
         if is_fake:
             # Which std values to use: We use (1) average std (which is actually a vector of length
-            # n_ctx for most of the time*) [a, b, b, ...] where a is the average std for position 1,
+            # n_ctx for most of the time*) [a, b, b, ...] where a is the average std for position 0,
             # and b is the average std for all other positions. We also have the option to use (2)
             # the bos std [a, a, a, ...] for all positions, which we do if the input token is EOT.
             # Note that we could differentiate between EOT and BOS, but I didn't need it here.
