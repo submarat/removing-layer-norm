@@ -33,6 +33,7 @@ from std_dicts import std_dicts
 from pydantic import BaseModel, Field
 from typing import Dict, Optional, Callable, Any
 from pile_eval import preprocess_pile_dataset, evaluate_model_on_pile, convert_for_trainer
+from devtools import pprint
 
 # TODO: support multi-GPU. If multiple GPUs are available, this will select the first one.
 device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
@@ -335,32 +336,9 @@ def load_model(model_name="gpt2", remove_ln=False):
     
     return model
 
-def finetune_with_ln(model, training_args, tokenized, data_collator, config, pile_eval_dataset=None):
-    """Finetune model with layer normalization"""
-    # Create multi-dataset dictionary if pile_eval_dataset is provided
-    if pile_eval_dataset is not None:
-        eval_datasets = {
-            # "openwebtext": tokenized["test"],
-            "pile": pile_eval_dataset
-        }
-    else:
-        eval_datasets = tokenized["test"]
-    
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=tokenized["train"],
-        eval_dataset=eval_datasets,
-        data_collator=data_collator,
-    )
 
-    trainer.train(
-        resume_from_checkpoint=training_args.resume_from_checkpoint
-    )
-
-
-def finetune_without_ln(model, training_args, tokenized, data_collator, config, pile_eval_dataset=None):
-    """Finetune model without layer normalization"""
+def finetune(model, training_args, tokenized, data_collator, config, pile_eval_dataset=None, remove_ln=False):
+    """Finetune model with or without layer normalization"""
     def disable_ln_2(block_index):
         model.transformer.h[block_index].ln_2.is_fake = True
         print(f"disabled ln_2 for block {block_index}")
@@ -442,6 +420,7 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config, 
             self.ln_removers = ln_removers
 
         def on_step_begin(self, args, state, control, **kwargs):
+            print(f"on_step_begin: {state.global_step}")
             # Iterate over the ln_removers
             for ln_remover in self.ln_removers:
                 ln_remover(state.global_step)
@@ -514,9 +493,10 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config, 
             print(f"Warning: Failed to extract step from checkpoint: {e}")
 
     callbacks = [
-        LNRemoverCallback(ln_removers),
         LogFakeLayerNormState(),
     ]
+    if remove_ln:
+        callbacks.append(LNRemoverCallback(ln_removers))
 
     # Create multi-dataset dictionary if pile_eval_dataset is provided
     if pile_eval_dataset is not None:
@@ -547,13 +527,13 @@ def main():
     parser.add_argument(
         "--mode",
         choices=["with_ln", "without_ln"],
-        required=True,
+        default="without_ln",
         help="Finetuning mode",
     )
     parser.add_argument(
         "--config",
         choices=list(FINETUNE_CONFIGS.keys()),
-        required=True,
+        default="gpt2_test",
         help="Training configuration to use",
     )
     parser.add_argument(
@@ -580,9 +560,6 @@ def main():
 
     # Prepare datasets
     tokenized, data_collator = prepare_dataset(model_name)
-    
-    # Initialize model
-    model = load_model(model_name, remove_ln=args.mode == "without_ln")
     
     # Initialize Pile-apollo dataset once at the beginning
     print("Preparing Pile-apollo evaluation dataset...")
@@ -636,19 +613,27 @@ def main():
         load_best_model_at_end=False,
     )
 
+    # Initialize model
+    model = load_model(model_name, remove_ln=args.mode == "without_ln")
+
+    print("Begin training")
+    print(model)
+    print(training_args)
+    pprint(config)
+
     # Pass the pile_eval_dataset to the appropriate training function
-    if args.mode == "with_ln":
-        finetune_with_ln(model, training_args, tokenized, data_collator, config, pile_eval_dataset)
-        if args.save:
-            model.save_pretrained("model-with-ln")
-            tokenizer.save_pretrained("model-with-ln")
-    elif args.mode == "without_ln":
-        finetune_without_ln(model, training_args, tokenized, data_collator, config, pile_eval_dataset)
-        if args.save:
-            model.save_pretrained("model-without-ln")
-            tokenizer.save_pretrained("model-without-ln")
-    else:
-        raise ValueError(f"Unknown mode {args.mode}")
+    finetune(
+        model,
+        training_args,
+        tokenized,
+        data_collator,
+        config,
+        pile_eval_dataset,
+        remove_ln=args.mode == "without_ln"
+    )
+    if args.save:
+        model.save_pretrained("model-without-ln")
+        tokenizer.save_pretrained("model-without-ln")
     
 
 if __name__ == "__main__":
