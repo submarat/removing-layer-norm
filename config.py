@@ -348,10 +348,10 @@ def make_gpt2_large2():
     
     # Training params
     base_batch_size = 13
-    max_steps = 3500
+    max_steps = 2500
     block_size = 1024
     target_batch_tokens = 2**19
-    save_steps = 250
+    save_steps = 200
     
     # Calculate derived training params
     batch_size = base_batch_size
@@ -360,12 +360,12 @@ def make_gpt2_large2():
     warmup_steps = 50
     
     # Calculate layernorm schedule
-    gap_ln2 = 4
-    gap_ln1qk = 4
-    gap_ln1v = 45
+    gap_ln2 = 5
+    gap_ln1qk = 5
+    gap_ln1v = 10
     gap_lnf = None
     gap_eot = 2
-    gap_bos = 3
+    gap_bos = 2
     
     start_ln2 = 60
     start_ln1qk = start_ln2 + n_layers * gap_ln2
