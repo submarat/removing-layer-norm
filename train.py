@@ -150,6 +150,19 @@ class FakeLayerNorm(nn.Module):
             else:
                 new_bos_std = torch.ones_like(self.bos_std) * self.real_average_std
             self.bos_std = new_bos_std.detach().requires_grad_(False)
+    
+    def disable_eos_special_treatment(self):
+        # Disable EOT special treatment, note that bos_std[0] will be set to average_std[1]
+        # which is not always the same as bos_std[1]
+        self.bos_std = self.average_std
+    
+    def disable_bos_special_treatment(self):
+        # Disable BOS special treatment
+        self.bos_special_treatment = False
+        # Special treatment of position 0 is now disabled
+        self.average_std[0] = self.average_std[1]
+        # Same for bos_std
+        self.bos_std[0] = self.bos_std[1]
 
 
 def load_model(model_name="gpt2", remove_ln=False):
@@ -356,18 +369,11 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
         print("disabled ln_f")
 
     def disable_eot_std(block_index):
-        model.transformer.h[block_index].ln_1.bos_std = model.transformer.h[
-            block_index
-        ].ln_1.average_std
+        model.transformer.h[block_index].ln_1.disable_eos_special_treatment()
         print(f"disabled eot std for block {block_index}")
 
     def disable_bos_std(block_index):
-        model.transformer.h[block_index].ln_1.average_std[0] = model.transformer.h[
-            block_index
-        ].ln_1.average_std[1]
-        model.transformer.h[block_index].ln_1.bos_std[0] = model.transformer.h[
-            block_index
-        ].ln_1.bos_std[1]
+        model.transformer.h[block_index].ln_1.disable_bos_special_treatment()
         print(f"disabled bos std for block {block_index}")
 
     class LNRemover:
