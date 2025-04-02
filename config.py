@@ -340,6 +340,42 @@ def make_gpt2_large():
     
     return FinetuneConfig(**locals())
 
+
+def make_gpt2_large1():
+    # Architecture params
+    model_name = "gpt2-large"
+    n_layers = 36
+    
+    # Training params
+    base_batch_size = 13
+    max_steps = 2500
+    block_size = 1024
+    target_batch_tokens = 2**20
+    save_steps = 125
+    
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    warmup_steps = 50
+    
+    # Calculate layernorm schedule
+    gap_ln2 = 6
+    gap_ln1qk = 6
+    gap_ln1v = 12
+    gap_lnf = None
+    gap_eot = 1
+    gap_bos = 2
+    
+    start_ln2 = 60
+    start_ln1qk = start_ln2 + n_layers * gap_ln2
+    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
+    start_lnf = start_ln1v + n_layers * gap_ln1v
+    start_eot = start_lnf + 20
+    start_bos = start_eot + 100
+    
+    return FinetuneConfig(**locals())
+
 def make_gpt2_large_test():
     # Architecture params
     model_name = "gpt2-large"
@@ -450,6 +486,7 @@ FINETUNE_CONFIGS = {
     "gpt2-medium_fasttune": make_gpt2_medium_fasttune(),
     "gpt2-medium_test": make_gpt2_medium_test(),
     "gpt2-large": make_gpt2_large(),
+    "gpt2-large1": make_gpt2_large1(),
     "gpt2-large_test": make_gpt2_large_test(),
     "gpt2-xl": make_gpt2_xl(),
     "gpt2-xl_test": make_gpt2_xl_test(),
