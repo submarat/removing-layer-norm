@@ -51,28 +51,66 @@ class FakeLayerNorm(nn.Module):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(n_embd))
         self.bias = nn.Parameter(torch.zeros(n_embd)) if bias else None
+        
         # Flag whether the LayerNorm is enabled ("real") or disabled ("fake")
         self.is_fake = False
         self.attn_v_is_fake = False
+        self.layer = layer
+        self.n_embd = n_embd
+        self.n_ctx = n_ctx
+        self.bos_special_treatment = True
 
-        self.real_average_std, self.real_bos_std = init_average_std, init_bos_std
+        self.real_average_std = init_average_std
+        self.real_bos_std = init_bos_std
 
         if os.environ.get("EXP_CORRECT_BOS", "0") == "1":
             std_dim = n_ctx
         else:
             std_dim = n_embd
             
-        self.average_std = torch.ones(std_dim, device=device) * self.real_average_std
-        self.bos_std = torch.ones(std_dim, device=device) * self.real_bos_std
-
-        self.average_std[0] = self.real_bos_std
-
-        # Explicitly detach these tensors and set requires_grad=False
-        self.average_std = self.average_std.detach().requires_grad_(False)
-        self.bos_std = self.bos_std.detach().requires_grad_(False)
+        # Register non-parameter tensors as buffers so they're saved in state_dict
+        self.register_buffer("average_std", torch.ones(std_dim, device=device) * init_average_std)
+        self.register_buffer("bos_std", torch.ones(std_dim, device=device) * init_bos_std)
+        
+        # Special handling for position 0
+        self.average_std[0] = init_bos_std
 
         self.iteration = 0
         self.update_freq = 1
+    
+    def _save_to_state_dict(self, destination, prefix, keep_vars):
+        # Call the parent method to save parameters and buffers
+        super()._save_to_state_dict(destination, prefix, keep_vars)
+        
+        # Add custom attributes to state dict
+        destination[prefix + 'is_fake'] = torch.tensor(self.is_fake)
+        destination[prefix + 'attn_v_is_fake'] = torch.tensor(self.attn_v_is_fake)
+        destination[prefix + 'real_average_std'] = torch.tensor(self.real_average_std)
+        destination[prefix + 'real_bos_std'] = torch.tensor(self.real_bos_std)
+        destination[prefix + 'bos_special_treatment'] = torch.tensor(self.bos_special_treatment)
+        
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
+        # Load custom attributes from state dict
+        for key, attr in [
+            ('is_fake', 'is_fake'),
+            ('attn_v_is_fake', 'attn_v_is_fake'),
+            ('real_average_std', 'real_average_std'),
+            ('real_bos_std', 'real_bos_std'),
+            ('bos_special_treatment', 'bos_special_treatment'),
+        ]:
+            full_key = prefix + key
+            if full_key in state_dict:
+                value = state_dict[full_key]
+                if isinstance(value, torch.Tensor):
+                    value = value.item() if value.numel() == 1 else value
+                setattr(self, attr, value)
+                # Remove from state_dict to avoid unexpected key warnings
+                del state_dict[full_key]
+            elif strict:
+                missing_keys.append(full_key)
+        
+        # Call the parent method to load parameters and buffers
+        super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
 
     def forward(self, input, std_type="avg", attn_v=False):
         # We want all the enable / disable information to be in this class, but the class is re-used
@@ -159,10 +197,10 @@ class FakeLayerNorm(nn.Module):
     def disable_bos_special_treatment(self):
         # Disable BOS special treatment
         self.bos_special_treatment = False
-        # Special treatment of position 0 is now disabled
-        self.average_std[0] = self.average_std[1]
-        # Same for bos_std
-        self.bos_std[0] = self.bos_std[1]
+        with torch.no_grad():
+            # Special treatment of position 0 is now disabled
+            self.average_std = torch.ones_like(self.average_std) * self.real_average_std
+            self.bos_std = torch.ones_like(self.bos_std) * self.real_average_std
 
 
 def load_model(model_name="gpt2", remove_ln=False):
@@ -179,166 +217,180 @@ def load_model(model_name="gpt2", remove_ln=False):
         n_embd = model.transformer.h[0].ln_1.weight.shape[0]
         n_ctx = model.config.n_ctx
 
+        # Check if model already has FakeLayerNorm
+        has_fake_ln = hasattr(model.transformer.h[0].ln_1, 'is_fake')
+        
         # Replace ln_1 and ln_2 with FakeLayerNorm
         for i in range(n_layers):
             block = model.transformer.h[i]
             
-            # Store original weights
-            ln_1_weight = block.ln_1.weight.clone().detach()
-            ln_1_bias = block.ln_1.bias.clone().detach() if block.ln_1.bias is not None else None
-            ln_2_weight = block.ln_2.weight.clone().detach()
-            ln_2_bias = block.ln_2.bias.clone().detach() if block.ln_2.bias is not None else None
-            
-            # Replace with FakeLayerNorm
-            layer = f"blocks.{i}.hook_resid_pre"
-            block.ln_1 = FakeLayerNorm(
-                n_embd=n_embd,
-                n_ctx=n_ctx,
-                layer=layer,
-                bias=block.ln_1.bias is not None,
-                init_average_std=std_dict[layer],
-                init_bos_std=std_bos_dict[layer])
+            # If model doesn't already have FakeLayerNorm, replace standard LayerNorm with FakeLayerNorm
+            if not has_fake_ln:
+                # Store original weights
+                ln_1_weight = block.ln_1.weight.clone().detach()
+                ln_1_bias = block.ln_1.bias.clone().detach() if block.ln_1.bias is not None else None
+                ln_2_weight = block.ln_2.weight.clone().detach()
+                ln_2_bias = block.ln_2.bias.clone().detach() if block.ln_2.bias is not None else None
+                
+                # Replace with FakeLayerNorm
+                layer = f"blocks.{i}.hook_resid_pre"
+                block.ln_1 = FakeLayerNorm(
+                    n_embd=n_embd,
+                    n_ctx=n_ctx,
+                    layer=layer,
+                    bias=block.ln_1.bias is not None,
+                    init_average_std=std_dict[layer],
+                    init_bos_std=std_bos_dict[layer])
 
-            layer = f"blocks.{i}.hook_resid_mid"
-            block.ln_2 = FakeLayerNorm(
-                n_embd=n_embd,
-                n_ctx=n_ctx,
-                layer=layer,
-                bias=block.ln_2.bias is not None,
-                init_average_std=std_dict[layer],
-                init_bos_std=std_bos_dict[layer])
-            
-            # Restore weights
-            block.ln_1.weight = nn.Parameter(ln_1_weight)
-            if ln_1_bias is not None:
-                block.ln_1.bias = nn.Parameter(ln_1_bias)
-            block.ln_2.weight = nn.Parameter(ln_2_weight)
-            if ln_2_bias is not None:
-                block.ln_2.bias = nn.Parameter(ln_2_bias)
+                layer = f"blocks.{i}.hook_resid_mid"
+                block.ln_2 = FakeLayerNorm(
+                    n_embd=n_embd,
+                    n_ctx=n_ctx,
+                    layer=layer,
+                    bias=block.ln_2.bias is not None,
+                    init_average_std=std_dict[layer],
+                    init_bos_std=std_bos_dict[layer])
+                
+                # Restore weights
+                block.ln_1.weight = nn.Parameter(ln_1_weight)
+                if ln_1_bias is not None:
+                    block.ln_1.bias = nn.Parameter(ln_1_bias)
+                block.ln_2.weight = nn.Parameter(ln_2_weight)
+                if ln_2_bias is not None:
+                    block.ln_2.bias = nn.Parameter(ln_2_bias)
             
             # Monkey patch the attention forward to handle separate ln1_qk and ln1_v
-            def make_attn_forward(old_forward):
-                def new_forward(self, x_qk, x_v):
-                    B, T, C = x_qk.size()
+            # Only do this if we haven't already patched this model
+            if not has_fake_ln or not hasattr(block.attn, '_patched_for_fake_ln'):
+                def make_attn_forward(old_forward):
+                    def new_forward(self, x_qk, x_v):
+                        B, T, C = x_qk.size()
 
-                    # Calculate q,k from x_qk and v from x_v
-                    # Correct matrix multiplication order and reshape
-                    qkv_qk = x_qk.reshape(B*T, C) @ self.c_attn.weight[:, :2*C]  # For Q and K
-                    v = x_v.reshape(B*T, C) @ self.c_attn.weight[:, 2*C:]  # For V
-                    
-                    # Split qkv into q and k
-                    q, k = qkv_qk.split(C, dim=1)
-                    
-                    if self.c_attn.bias is not None:
-                        q = q + self.c_attn.bias[:C]
-                        k = k + self.c_attn.bias[C:2*C]
-                        v = v + self.c_attn.bias[2*C:]
+                        # Calculate q,k from x_qk and v from x_v
+                        # Correct matrix multiplication order and reshape
+                        qkv_qk = x_qk.reshape(B*T, C) @ self.c_attn.weight[:, :2*C]  # For Q and K
+                        v = x_v.reshape(B*T, C) @ self.c_attn.weight[:, 2*C:]  # For V
+                        
+                        # Split qkv into q and k
+                        q, k = qkv_qk.split(C, dim=1)
+                        
+                        if self.c_attn.bias is not None:
+                            q = q + self.c_attn.bias[:C]
+                            k = k + self.c_attn.bias[C:2*C]
+                            v = v + self.c_attn.bias[2*C:]
 
-                    # Reshape
-                    q = q.view(B, T, self.num_heads, C//self.num_heads).transpose(1, 2)
-                    k = k.view(B, T, self.num_heads, C//self.num_heads).transpose(1, 2)
-                    v = v.view(B, T, self.num_heads, C//self.num_heads).transpose(1, 2)
+                        # Reshape
+                        q = q.view(B, T, self.num_heads, C//self.num_heads).transpose(1, 2)
+                        k = k.view(B, T, self.num_heads, C//self.num_heads).transpose(1, 2)
+                        v = v.view(B, T, self.num_heads, C//self.num_heads).transpose(1, 2)
 
-                    # Causal self-attention
-                    y = F.scaled_dot_product_attention(
-                        q, k, v,
-                        dropout_p=self.attn_dropout.p,
-                        is_causal=True
-                    )
-                    y = y.transpose(1, 2).contiguous().view(B, T, C)
+                        # Causal self-attention
+                        y = F.scaled_dot_product_attention(
+                            q, k, v,
+                            dropout_p=self.attn_dropout.p,
+                            is_causal=True
+                        )
+                        y = y.transpose(1, 2).contiguous().view(B, T, C)
 
-                    # Output projection
-                    y = self.c_proj(y)
-                    y = self.resid_dropout(y)
-                    return y
+                        # Output projection
+                        y = self.c_proj(y)
+                        y = self.resid_dropout(y)
+                        return y
 
-                return types.MethodType(new_forward, block.attn)
+                    return types.MethodType(new_forward, block.attn)
 
-            block.attn.forward = make_attn_forward(block.attn.forward)
+                block.attn.forward = make_attn_forward(block.attn.forward)
+                block.attn._patched_for_fake_ln = True  # Mark as patched
             
             # Monkey patch the forward method of the block
-            def make_forward(old_forward):
-                def new_forward(self, x, *args, **kwargs):
-                    # Get EOT mask from the input
-                    eot_mask = kwargs.pop('eot_mask', None)
-                    
-                    # Calculate LN'd x for Q and K
-                    x_qk = self.ln_1(x)
-                    # Calculate LN'd x for V
-                    x_v = self.ln_1(x, attn_v=True)
-                    
-                    if eot_mask is not None:
-                        x_v_eot = self.ln_1(x, std_type='bos', attn_v=True)
-                        x_v[eot_mask] = x_v_eot[eot_mask]
-                        del x_v_eot
-                    
-                    # Modify attention call to use both x_qk and x_v
-                    attn_output = self.attn(x_qk, x_v)
-                    x = x + attn_output
-                    x = x + self.mlp(self.ln_2(x))
-                    return x
-                return types.MethodType(new_forward, block)
-            
-            block.forward = make_forward(block.forward)
+            # Only do this if we haven't already patched this model
+            if not has_fake_ln or not hasattr(block, '_patched_for_fake_ln'):
+                def make_forward(old_forward):
+                    def new_forward(self, x, *args, **kwargs):
+                        # Get EOT mask from the input
+                        eot_mask = kwargs.pop('eot_mask', None)
+                        
+                        # Calculate LN'd x for Q and K
+                        x_qk = self.ln_1(x)
+                        # Calculate LN'd x for V
+                        x_v = self.ln_1(x, attn_v=True)
+                        
+                        if eot_mask is not None:
+                            x_v_eot = self.ln_1(x, std_type='bos', attn_v=True)
+                            x_v[eot_mask] = x_v_eot[eot_mask]
+                            del x_v_eot
+                        
+                        # Modify attention call to use both x_qk and x_v
+                        attn_output = self.attn(x_qk, x_v)
+                        x = x + attn_output
+                        x = x + self.mlp(self.ln_2(x))
+                        return x
+                    return types.MethodType(new_forward, block)
+                
+                block.forward = make_forward(block.forward)
+                block._patched_for_fake_ln = True  # Mark as patched
 
-        # Replace ln_f with FakeLayerNorm
-        ln_f = model.transformer.ln_f
-        ln_f_weight = ln_f.weight.clone().detach()
-        ln_f_bias = ln_f.bias.clone().detach() if ln_f.bias is not None else None
-        
-        layer = f"blocks.{n_layers-1}.hook_resid_post"
-        model.transformer.ln_f = FakeLayerNorm(
-            n_embd=n_embd,
-            n_ctx=n_ctx,
-            layer=layer,
-            bias=ln_f.bias is not None,
-            init_average_std=std_dict[layer],
-            init_bos_std=std_bos_dict[layer]
-        )
-        model.transformer.ln_f.weight = nn.Parameter(ln_f_weight)
-        if ln_f_bias is not None:
-            model.transformer.ln_f.bias = nn.Parameter(ln_f_bias)
+        # Replace ln_f with FakeLayerNorm if not already FakeLayerNorm
+        if not has_fake_ln:
+            ln_f = model.transformer.ln_f
+            ln_f_weight = ln_f.weight.clone().detach()
+            ln_f_bias = ln_f.bias.clone().detach() if ln_f.bias is not None else None
+            
+            layer = f"blocks.{n_layers-1}.hook_resid_post"
+            model.transformer.ln_f = FakeLayerNorm(
+                n_embd=n_embd,
+                n_ctx=n_ctx,
+                layer=layer,
+                bias=ln_f.bias is not None,
+                init_average_std=std_dict[layer],
+                init_bos_std=std_bos_dict[layer]
+            )
+            model.transformer.ln_f.weight = nn.Parameter(ln_f_weight)
+            if ln_f_bias is not None:
+                model.transformer.ln_f.bias = nn.Parameter(ln_f_bias)
 
         # Monkey patch the transformer's forward to include eot_mask
-        def make_transformer_forward(old_forward):
-            def new_forward(self, *args, **kwargs):
-                # Extract input_ids from either kwargs or first positional arg
-                input_ids = kwargs.get('input_ids', args[0] if args else None)
-                
-                # Create eot_mask if we have input_ids
-                eot_mask = None
-                if input_ids is not None:
-                    eot_mask = input_ids == 50256
-                
-                # If args contains positional arguments that match kwargs, we should use kwargs only
-                if args and isinstance(args[0], torch.Tensor):  # First arg is likely input_ids
-                    kwargs['input_ids'] = args[0]
-                    args = args[1:]  # Remove the first argument
-                
-                # Get embeddings
-                hidden_states = self.wte(kwargs['input_ids'])
-                position_ids = torch.arange(0, hidden_states.size(1), dtype=torch.long, device=hidden_states.device)
-                hidden_states = hidden_states + self.wpe(position_ids)
-                hidden_states = self.drop(hidden_states)
+        if not has_fake_ln or not hasattr(model.transformer, '_patched_for_fake_ln'):
+            def make_transformer_forward(old_forward):
+                def new_forward(self, *args, **kwargs):
+                    # Extract input_ids from either kwargs or first positional arg
+                    input_ids = kwargs.get('input_ids', args[0] if args else None)
+                    
+                    # Create eot_mask if we have input_ids
+                    eot_mask = None
+                    if input_ids is not None:
+                        eot_mask = input_ids == 50256
+                    
+                    # If args contains positional arguments that match kwargs, we should use kwargs only
+                    if args and isinstance(args[0], torch.Tensor):  # First arg is likely input_ids
+                        kwargs['input_ids'] = args[0]
+                        args = args[1:]  # Remove the first argument
+                    
+                    # Get embeddings
+                    hidden_states = self.wte(kwargs['input_ids'])
+                    position_ids = torch.arange(0, hidden_states.size(1), dtype=torch.long, device=hidden_states.device)
+                    hidden_states = hidden_states + self.wpe(position_ids)
+                    hidden_states = self.drop(hidden_states)
 
-                # Forward through blocks with eot_mask
-                for block in self.h:
-                    hidden_states = block(hidden_states, eot_mask=eot_mask)
-                
-                hidden_states = self.ln_f(hidden_states)
+                    # Forward through blocks with eot_mask
+                    for block in self.h:
+                        hidden_states = block(hidden_states, eot_mask=eot_mask)
+                    
+                    hidden_states = self.ln_f(hidden_states)
 
-                # Create BaseModelOutputWithPastAndCrossAttentions object
-                return transformers.modeling_outputs.BaseModelOutputWithPastAndCrossAttentions(
-                    last_hidden_state=hidden_states,
-                    past_key_values=None,
-                    hidden_states=None,
-                    attentions=None,
-                    cross_attentions=None,
-                )
+                    # Create BaseModelOutputWithPastAndCrossAttentions object
+                    return transformers.modeling_outputs.BaseModelOutputWithPastAndCrossAttentions(
+                        last_hidden_state=hidden_states,
+                        past_key_values=None,
+                        hidden_states=None,
+                        attentions=None,
+                        cross_attentions=None,
+                    )
 
-            return types.MethodType(new_forward, model.transformer)
-        
-        model.transformer.forward = make_transformer_forward(model.transformer.forward)
+                return types.MethodType(new_forward, model.transformer)
+            
+            model.transformer.forward = make_transformer_forward(model.transformer.forward)
+            model.transformer._patched_for_fake_ln = True  # Mark as patched
 
     if remove_ln:
         # Replace all LayerNorm instances with FakeLayerNorm
@@ -386,21 +438,29 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
             self.start_step = start_step
             self.layer_gap_steps = layer_gap_steps
             self.function = function
+            self.applied_steps = set()  # Track which steps we've already applied
 
         def __call__(self, step):
+            # Skip if we've already applied this step
+            if step in self.applied_steps:
+                return
+                
             if self.layer_gap_steps is None:
                 if step == self.start_step:
                     self.function()
                     self.log_event(step)
+                    self.applied_steps.add(step)
             elif self.layer_gap_steps == 0:
                 if step == self.start_step:
                     [self.function(i) for i in range(self.n_layers)]
                     self.log_event(step)
-            elif (step - self.start_step) % self.layer_gap_steps == 0:
+                    self.applied_steps.add(step)
+            elif step >= self.start_step and (step - self.start_step) % self.layer_gap_steps == 0:
                 layer_index = (step - self.start_step) // self.layer_gap_steps
                 if 0 <= layer_index < self.n_layers:
                     self.function(layer_index)
                     self.log_event(step, layer_index)
+                    self.applied_steps.add(step)
             else:
                 pass
 
@@ -489,14 +549,34 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
     if training_args.resume_from_checkpoint:
         try:
             checkpoint_path = training_args.resume_from_checkpoint
-            resume_step = int(checkpoint_path.split("-")[-1])
+            
+            # Extract step from checkpoint path
+            if "-" in checkpoint_path:
+                resume_step = int(checkpoint_path.split("-")[-1])
+            else:
+                # If checkpoint_path is a directory, look for checkpoint files
+                import glob
+                checkpoint_files = glob.glob(f"{checkpoint_path}/checkpoint-*")
+                if checkpoint_files:
+                    # Get the latest checkpoint
+                    latest_checkpoint = max(checkpoint_files, key=lambda x: int(x.split("-")[-1]))
+                    resume_step = int(latest_checkpoint.split("-")[-1])
+                else:
+                    # Default to 0 if no step found
+                    resume_step = 0
+            
             print(f"\nRetroactively applying LN removals up to step {resume_step}")
+            
+            # Apply all removals in chronological order
             for i in range(resume_step + 1):
                 for ln_remover in ln_removers:
                     ln_remover(i)
+                    
             print("Finished applying retroactive LN removals\n")
         except Exception as e:
-            print(f"Warning: Failed to extract step from checkpoint: {e}")
+            print(f"Warning: Failed to handle checkpoint: {e}")
+            import traceback
+            traceback.print_exc()
 
     callbacks = [
         LogFakeLayerNormState(),
@@ -563,6 +643,9 @@ def main():
     # Get model name from config
     config = FINETUNE_CONFIGS[args.config]
     model_name = config.model_name
+
+    # Load tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     # Prepare datasets
     tokenized, data_collator = prepare_dataset(model_name)
@@ -638,8 +721,12 @@ def main():
         remove_ln=args.mode == "without_ln"
     )
     if args.save:
-        model.save_pretrained("model-without-ln")
-        tokenizer.save_pretrained("model-without-ln")
+        # Create a save directory with datetime
+        save_dir = f"saved-models/{model_name}-{args.mode}-{datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}"
+        os.makedirs(save_dir, exist_ok=True)
+        model.save_pretrained(save_dir)
+        tokenizer.save_pretrained(save_dir)
+        print(f"Model and tokenizer saved to {save_dir}")
     
 
 if __name__ == "__main__":
