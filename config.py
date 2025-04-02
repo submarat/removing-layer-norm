@@ -197,7 +197,7 @@ def make_gpt2_medium_slow():
     max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
-    warmup_steps = 10  # Shorter warmup due to accelerated schedule
+    warmup_steps = 40  # Shorter warmup due to accelerated schedule
     save_steps = 150 
 
     # Calculate derived training params
@@ -206,28 +206,14 @@ def make_gpt2_medium_slow():
     gradient_accumulation_steps = int(desired_batch_size // batch_size)
     
     # Calculate layernorm schedule
-    gap_ln2 = 2
-    gap_ln1qk = 2
-    gap_ln1v = 3
+    gap_ln2 = 6
+    gap_ln1qk = 6
+    gap_ln1v = 12
     gap_lnf = None
     gap_eot = 0
-    gap_bos = 0
+    gap_bos = 2
     
-    start_ln2 = 20
-    start_ln1qk = start_ln2 + n_layers * gap_ln2
-    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
-    start_lnf = start_ln1v + n_layers * gap_ln1v
-    start_eot = start_lnf + 2
-    start_bos = start_eot + 10
-    
-    gap_ln2 = 10
-    gap_ln1qk = 10
-    gap_ln1v = 15
-    gap_lnf = None
-    gap_eot = 0
-    gap_bos = 0
-    
-    start_ln2 = 200
+    start_ln2 = 60
     start_ln1qk = start_ln2 + n_layers * gap_ln2
     start_ln1v = start_ln1qk + n_layers * gap_ln1qk
     start_lnf = start_ln1v + n_layers * gap_ln1v
