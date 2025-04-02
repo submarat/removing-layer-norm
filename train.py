@@ -199,8 +199,9 @@ class FakeLayerNorm(nn.Module):
         self.bos_special_treatment = False
         with torch.no_grad():
             # Special treatment of position 0 is now disabled
-            self.average_std = torch.ones_like(self.average_std) * self.real_average_std
-            self.bos_std = torch.ones_like(self.bos_std) * self.real_average_std
+            self.average_std[0] = self.average_std[1]
+            # If EOS mask happens to apply to position 0, should also set bos_std[0] to average
+            self.bos_std[0] = self.bos_std[1]
 
 
 def load_model(model_name="gpt2", remove_ln=False):
