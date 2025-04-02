@@ -78,6 +78,24 @@ class FakeLayerNorm(nn.Module):
         self.iteration = 0
         self.update_freq = 1
     
+    def __repr__(self):
+        """Return a string representation of the FakeLayerNorm's current state."""
+        mode = "fake" if self.is_fake else "real"
+        attn_v_mode = "fake" if self.attn_v_is_fake else "real"
+        bos_treatment = "enabled" if self.bos_special_treatment else "disabled"
+        
+        # Get short name from layer for cleaner output
+        layer_name = self.layer.split('.')[-1] if hasattr(self, 'layer') and self.layer else "unknown"
+        
+        # Sample a few values from the std tensors for debugging
+        avg_std_sample = f"[{self.average_std[0].item():.4f}, {self.average_std[1].item():.4f}, ...]"
+        bos_std_sample = f"[{self.bos_std[0].item():.4f}, {self.bos_std[1].item():.4f}, ...]"
+        
+        return (f"FakeLayerNorm(layer={layer_name}, mode={mode}, attn_v_mode={attn_v_mode}, "
+                f"real_avg_std={self.real_average_std:.4f}, real_bos_std={self.real_bos_std:.4f}, "
+                f"bos_treatment={bos_treatment}, "
+                f"avg_std={avg_std_sample}, bos_std={bos_std_sample})")
+    
     def _save_to_state_dict(self, destination, prefix, keep_vars):
         # Call the parent method to save parameters and buffers
         super()._save_to_state_dict(destination, prefix, keep_vars)
@@ -414,6 +432,22 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
     def disable_bos_std(block_index):
         model.transformer.h[block_index].ln_1.disable_bos_special_treatment()
         print(f"disabled bos std for block {block_index}")
+    
+    # Log the initial state of all FakeLayerNorm instances
+    print("\n===== FakeLayerNorm Initial States =====")
+    print(f"Environment settings:")
+    print(f"  EXP_CORRECT_BOS: {os.environ.get('EXP_CORRECT_BOS', '0')}")
+    print(f"  EXP_RECOMPUTE_STD_ON_FAKE: {os.environ.get('EXP_RECOMPUTE_STD_ON_FAKE', '0')}")
+    print(f"  EXP_RECOMPUTE_STD_ON_REAL: {os.environ.get('EXP_RECOMPUTE_STD_ON_REAL', '0')}")
+    
+    for i, block in enumerate(model.transformer.h):
+        print(f"\nBlock {i}:")
+        print(f"  ln_1: {block.ln_1}")
+        print(f"  ln_2: {block.ln_2}")
+    
+    print(f"\nFinal ln_f:")
+    print(f"  {model.transformer.ln_f}")
+    print("========================================\n")
 
     class LNRemover:
         """
@@ -524,38 +558,6 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
         LNRemover(training_config.start_bos, training_config.gap_bos, disable_bos_std),
     ]
 
-    # If resuming, apply all removals that should have happened up to resume_step
-    if training_args.resume_from_checkpoint:
-        try:
-            checkpoint_path = training_args.resume_from_checkpoint
-            
-            # Extract step from checkpoint path
-            if "-" in checkpoint_path:
-                resume_step = int(checkpoint_path.split("-")[-1])
-            else:
-                # If checkpoint_path is a directory, look for checkpoint files
-                import glob
-                checkpoint_files = glob.glob(f"{checkpoint_path}/checkpoint-*")
-                if checkpoint_files:
-                    # Get the latest checkpoint
-                    latest_checkpoint = max(checkpoint_files, key=lambda x: int(x.split("-")[-1]))
-                    resume_step = int(latest_checkpoint.split("-")[-1])
-                else:
-                    # Default to 0 if no step found
-                    resume_step = 0
-            
-            print(f"\nRetroactively applying LN removals up to step {resume_step}")
-            
-            # Apply all removals in chronological order
-            for i in range(resume_step + 1):
-                for ln_remover in ln_removers:
-                    ln_remover(i)
-                    
-            print("Finished applying retroactive LN removals\n")
-        except Exception as e:
-            print(f"Warning: Failed to handle checkpoint: {e}")
-            import traceback
-            traceback.print_exc()
 
     callbacks = [
         LogFakeLayerNormState(),
