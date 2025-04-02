@@ -52,16 +52,17 @@ class FakeLayerNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(n_embd))
         self.bias = nn.Parameter(torch.zeros(n_embd)) if bias else None
         
-        # Flag whether the LayerNorm is enabled ("real") or disabled ("fake")
-        self.is_fake = False
-        self.attn_v_is_fake = False
+        # Store layer information
         self.layer = layer
         self.n_embd = n_embd
         self.n_ctx = n_ctx
-        self.bos_special_treatment = True
-
-        self.real_average_std = init_average_std
-        self.real_bos_std = init_bos_std
+        
+        # Register all flags as buffers so they're automatically included in state_dict
+        self.register_buffer("_is_fake", torch.tensor(False))
+        self.register_buffer("_attn_v_is_fake", torch.tensor(False))
+        self.register_buffer("_bos_special_treatment", torch.tensor(True))
+        self.register_buffer("_real_average_std", torch.tensor(float(init_average_std)))
+        self.register_buffer("_real_bos_std", torch.tensor(float(init_bos_std)))
 
         if os.environ.get("EXP_CORRECT_BOS", "0") == "1":
             std_dim = n_ctx
@@ -78,10 +79,67 @@ class FakeLayerNorm(nn.Module):
         self.iteration = 0
         self.update_freq = 1
     
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
+        # Call parent method to load most of the state
+        super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
+        
+        # Remove successfully loaded buffer keys from missing_keys
+        is_fake_key = prefix + "_is_fake"
+        attn_v_is_fake_key = prefix + "_attn_v_is_fake"
+        bos_special_treatment_key = prefix + "_bos_special_treatment"
+        
+        for key in [is_fake_key, attn_v_is_fake_key, bos_special_treatment_key]:
+            if key in missing_keys:
+                missing_keys.remove(key)
+    
+    # Properties to maintain the existing API while using buffers
+    @property
+    def is_fake(self):
+        return bool(self._is_fake.item())
+    
+    @is_fake.setter
+    def is_fake(self, value):
+        self._is_fake.fill_(bool(value))
+    
+    @property
+    def attn_v_is_fake(self):
+        return bool(self._attn_v_is_fake.item())
+    
+    @attn_v_is_fake.setter
+    def attn_v_is_fake(self, value):
+        self._attn_v_is_fake.fill_(bool(value))
+    
+    @property
+    def bos_special_treatment(self):
+        return bool(self._bos_special_treatment.item())
+    
+    @bos_special_treatment.setter
+    def bos_special_treatment(self, value):
+        self._bos_special_treatment.fill_(bool(value))
+    
+    @property
+    def real_average_std(self):
+        return float(self._real_average_std.item())
+    
+    @real_average_std.setter
+    def real_average_std(self, value):
+        self._real_average_std.fill_(float(value))
+    
+    @property
+    def real_bos_std(self):
+        return float(self._real_bos_std.item())
+    
+    @real_bos_std.setter
+    def real_bos_std(self, value):
+        self._real_bos_std.fill_(float(value))
+    
     def __repr__(self):
         """Return a string representation of the FakeLayerNorm's current state."""
-        mode = "fake" if self.is_fake else "real"
-        attn_v_mode = "fake" if self.attn_v_is_fake else "real"
+        # Force re-read of the tensor values to ensure we have the latest state
+        is_fake_value = bool(self._is_fake.item())
+        attn_v_is_fake_value = bool(self._attn_v_is_fake.item())
+        mode = "fake" if is_fake_value else "real"
+        attn_v_mode = "fake" if attn_v_is_fake_value else "real"
         bos_treatment = "enabled" if self.bos_special_treatment else "disabled"
         
         # Get short name from layer for cleaner output
@@ -96,40 +154,6 @@ class FakeLayerNorm(nn.Module):
                 f"bos_treatment={bos_treatment}, "
                 f"avg_std={avg_std_sample}, bos_std={bos_std_sample})")
     
-    def _save_to_state_dict(self, destination, prefix, keep_vars):
-        # Call the parent method to save parameters and buffers
-        super()._save_to_state_dict(destination, prefix, keep_vars)
-        
-        # Add custom attributes to state dict
-        destination[prefix + 'is_fake'] = torch.tensor(self.is_fake)
-        destination[prefix + 'attn_v_is_fake'] = torch.tensor(self.attn_v_is_fake)
-        destination[prefix + 'real_average_std'] = torch.tensor(self.real_average_std)
-        destination[prefix + 'real_bos_std'] = torch.tensor(self.real_bos_std)
-        destination[prefix + 'bos_special_treatment'] = torch.tensor(self.bos_special_treatment)
-        
-    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
-        # Load custom attributes from state dict
-        for key, attr in [
-            ('is_fake', 'is_fake'),
-            ('attn_v_is_fake', 'attn_v_is_fake'),
-            ('real_average_std', 'real_average_std'),
-            ('real_bos_std', 'real_bos_std'),
-            ('bos_special_treatment', 'bos_special_treatment'),
-        ]:
-            full_key = prefix + key
-            if full_key in state_dict:
-                value = state_dict[full_key]
-                if isinstance(value, torch.Tensor):
-                    value = value.item() if value.numel() == 1 else value
-                setattr(self, attr, value)
-                # Remove from state_dict to avoid unexpected key warnings
-                del state_dict[full_key]
-            elif strict:
-                missing_keys.append(full_key)
-        
-        # Call the parent method to load parameters and buffers
-        super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
-
     def forward(self, input, std_type="avg", attn_v=False):
         # We want all the enable / disable information to be in this class, but the class is re-used
         # for both the QK and V paths. Thus we add the attn_v flag to the call that is True only for
@@ -544,7 +568,35 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
             })
 
             return control 
-
+    
+    class CheckFakeLayerNormStateAfterLoading(TrainerCallback):
+        def on_train_begin(self, args, state, control, **kwargs):
+            """Print FakeLayerNorm states after checkpoint is loaded, just before training begins"""
+            model = kwargs.get('model')
+            if model is None:
+                return control
+            
+            print("\n===== FakeLayerNorm States After Checkpoint Loading =====")
+            print(f"Environment settings:")
+            print(f"  EXP_CORRECT_BOS: {os.environ.get('EXP_CORRECT_BOS', '0')}")
+            print(f"  EXP_RECOMPUTE_STD_ON_FAKE: {os.environ.get('EXP_RECOMPUTE_STD_ON_FAKE', '0')}")
+            print(f"  EXP_RECOMPUTE_STD_ON_REAL: {os.environ.get('EXP_RECOMPUTE_STD_ON_REAL', '0')}")
+            
+            print("\nChecking if layers are fake after loading checkpoint:")
+            for i, block in enumerate(model.transformer.h):
+                print(f"Block {i}:")
+                print(f"  ln_1.is_fake: {block.ln_1.is_fake}")
+                print(f"  ln_1.attn_v_is_fake: {block.ln_1.attn_v_is_fake}")
+                print(f"  ln_1.bos_special_treatment: {block.ln_1.bos_special_treatment}")
+                print(f"  ln_2.is_fake: {block.ln_2.is_fake}")
+                print(f"  ln_2.bos_special_treatment: {block.ln_2.bos_special_treatment}")
+            
+            print(f"\nFinal ln_f.is_fake: {model.transformer.ln_f.is_fake}")
+            print(f"Final ln_f.bos_special_treatment: {model.transformer.ln_f.bos_special_treatment}")
+            print("========================================\n")
+            
+            return control
+    
     # Get schedule from config
     model_name = config.model_name
     training_config = config
@@ -561,6 +613,7 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
 
     callbacks = [
         LogFakeLayerNormState(),
+        CheckFakeLayerNormStateAfterLoading(),
     ]
     if remove_ln:
         callbacks.append(LNRemoverCallback(ln_removers))
@@ -649,6 +702,12 @@ def main():
     # Training arguments with evaluation settings
     output_dir = f"results/{model_name}/{datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}"
     os.makedirs(output_dir)
+    
+    # TEMPORARY: Override max_steps for faster testing
+    original_max_steps = config.max_steps
+    config.max_steps = 42  # Temporary override for testing
+    print(f"TEMPORARY OVERRIDE: Setting max_steps to 42 (was {original_max_steps})")
+    
     training_args = TrainingArguments(
         output_dir=output_dir,
         bf16=True,
@@ -685,7 +744,7 @@ def main():
 
     # Initialize model
     model = load_model(model_name, remove_ln=args.mode == "without_ln")
-
+    
     print("Begin training")
     print(model)
     print(training_args)
