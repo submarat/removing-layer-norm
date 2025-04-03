@@ -492,7 +492,7 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
                 if step == self.start_step:
                     [self.function(i) for i in range(self.n_layers)]
                     self.log_event(step)
-            elif step >= self.start_step and (step - self.start_step) % self.layer_gap_steps == 0:
+            elif (step - self.start_step) % self.layer_gap_steps == 0:
                 layer_index = (step - self.start_step) // self.layer_gap_steps
                 if 0 <= layer_index < self.n_layers:
                     self.function(layer_index)
