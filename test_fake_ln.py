@@ -6,12 +6,16 @@ def test_fake_ln():
     ln = FakeLayerNorm(n_embd=4, n_ctx=2, layer="blocks.0.hook_resid_pre", bias=True, init_average_std=0.2, init_bos_std=2.0)
 
     # Test initialization - using property access for scalar values
-    assert abs(ln.real_average_std - 0.2) < 1e-5, f"Expected real_average_std to be 0.2, got {ln.real_average_std}"
-    assert abs(ln.real_bos_std - 2.0) < 1e-5, f"Expected real_bos_std to be 2.0, got {ln.real_bos_std}"
+    assert abs(ln.real_average_std_prop - 0.2) < 1e-5, f"Expected real_average_std_prop to be 0.2, got {ln.real_average_std_prop}"
+    assert abs(ln.real_bos_std_prop - 2.0) < 1e-5, f"Expected real_bos_std_prop to be 2.0, got {ln.real_bos_std_prop}"
+    
+    # Test that buffer values can be accessed directly
+    assert abs(float(ln.real_average_std.item()) - 0.2) < 1e-5, f"Expected real_average_std buffer to be 0.2, got {ln.real_average_std.item()}"
+    assert abs(float(ln.real_bos_std.item()) - 2.0) < 1e-5, f"Expected real_bos_std buffer to be 2.0, got {ln.real_bos_std.item()}"
     
     # Test that the underlying buffer values are correct
-    assert torch.allclose(ln._real_average_std, torch.tensor(0.2, device=ln._real_average_std.device))
-    assert torch.allclose(ln._real_bos_std, torch.tensor(2.0, device=ln._real_bos_std.device))
+    assert torch.allclose(ln.real_average_std, torch.tensor(0.2, device=ln.real_average_std.device))
+    assert torch.allclose(ln.real_bos_std, torch.tensor(2.0, device=ln.real_bos_std.device))
     
     # Get expected values based on initialization
     expected_avg_std = torch.ones(4, device=ln.average_std.device) * 0.2
@@ -22,21 +26,25 @@ def test_fake_ln():
     assert torch.allclose(ln.average_std, expected_avg_std), f"Expected average_std to be {expected_avg_std}, got {ln.average_std}"
     assert torch.allclose(ln.bos_std, expected_bos_std), f"Expected bos_std to be {expected_bos_std}, got {ln.bos_std}"
     
-    # Test flag property getters and setters
-    assert ln.is_fake == False, f"Expected is_fake to be False, got {ln.is_fake}"
-    ln.is_fake = True
-    assert ln.is_fake == True, f"Expected is_fake to be True after setting, got {ln.is_fake}"
-    assert ln._is_fake.item() == True, f"Expected _is_fake buffer to be True, got {ln._is_fake.item()}"
+    # Test flag property getters and setters using the new flag properties
+    assert ln.is_fake_prop == False, f"Expected is_fake_prop to be False, got {ln.is_fake_prop}"
+    ln.is_fake_prop = True
+    assert ln.is_fake_prop == True, f"Expected is_fake_prop to be True after setting, got {ln.is_fake_prop}"
+    assert ln.is_fake.item() == True, f"Expected is_fake buffer to be True, got {ln.is_fake.item()}"
     
-    assert ln.attn_v_is_fake == False, f"Expected attn_v_is_fake to be False, got {ln.attn_v_is_fake}"
-    ln.attn_v_is_fake = True
-    assert ln.attn_v_is_fake == True, f"Expected attn_v_is_fake to be True after setting, got {ln.attn_v_is_fake}"
-    assert ln._attn_v_is_fake.item() == True, f"Expected _attn_v_is_fake buffer to be True, got {ln._attn_v_is_fake.item()}"
+    # Test setting buffer values directly
+    ln.is_fake.fill_(False)
+    assert ln.is_fake_prop == False, f"Expected is_fake_prop to be False after setting buffer, got {ln.is_fake_prop}"
     
-    assert ln.bos_special_treatment == True, f"Expected bos_special_treatment to be True, got {ln.bos_special_treatment}"
-    ln.bos_special_treatment = False
-    assert ln.bos_special_treatment == False, f"Expected bos_special_treatment to be False after setting, got {ln.bos_special_treatment}"
-    assert ln._bos_special_treatment.item() == False, f"Expected _bos_special_treatment buffer to be False, got {ln._bos_special_treatment.item()}"
+    assert ln.attn_v_is_fake_prop == False, f"Expected attn_v_is_fake_prop to be False, got {ln.attn_v_is_fake_prop}"
+    ln.attn_v_is_fake_prop = True
+    assert ln.attn_v_is_fake_prop == True, f"Expected attn_v_is_fake_prop to be True after setting, got {ln.attn_v_is_fake_prop}"
+    assert ln.attn_v_is_fake.item() == True, f"Expected attn_v_is_fake buffer to be True, got {ln.attn_v_is_fake.item()}"
+    
+    assert ln.bos_special_treatment_prop == True, f"Expected bos_special_treatment_prop to be True, got {ln.bos_special_treatment_prop}"
+    ln.bos_special_treatment_prop = False
+    assert ln.bos_special_treatment_prop == False, f"Expected bos_special_treatment_prop to be False after setting, got {ln.bos_special_treatment_prop}"
+    assert ln.bos_special_treatment.item() == False, f"Expected bos_special_treatment buffer to be False, got {ln.bos_special_treatment.item()}"
     
     print("Basic FakeLayerNorm test passed!")
 
@@ -66,11 +74,11 @@ def test_serialization():
 
         print("Setting custom values for FakeLayerNorm attributes...")
         # Modify attributes using property setters (which update the underlying buffers)
-        block0_ln1.is_fake = True
-        block0_ln1.attn_v_is_fake = True
-        block0_ln1.real_average_std = 0.5
-        block0_ln1.real_bos_std = 2.5
-        block0_ln1.bos_special_treatment = False
+        block0_ln1.is_fake_prop = True
+        block0_ln1.attn_v_is_fake_prop = True
+        block0_ln1.real_average_std_prop = 0.5
+        block0_ln1.real_bos_std_prop = 2.5
+        block0_ln1.bos_special_treatment_prop = False
         
         # Change some tensor values
         with torch.no_grad():
@@ -79,20 +87,20 @@ def test_serialization():
             block0_ln1.bos_std = torch.ones_like(block0_ln1.bos_std) * 2.7
 
         # Also modify ln_2
-        block0_ln2.is_fake = False
-        block0_ln2.real_average_std = 0.7
+        block0_ln2.is_fake_prop = False
+        block0_ln2.real_average_std_prop = 0.7
         
         # And final ln
-        final_ln.is_fake = True
-        final_ln.real_bos_std = 3.0
+        final_ln.is_fake_prop = True
+        final_ln.real_bos_std_prop = 3.0
 
         # Print initial values - read from properties 
-        print(f"Original ln_1 values: is_fake={block0_ln1.is_fake}, attn_v_is_fake={block0_ln1.attn_v_is_fake}")
-        print(f"Original ln_1 bos_special_treatment={block0_ln1.bos_special_treatment}")
-        print(f"Original ln_1 std values: real_avg={block0_ln1.real_average_std}, real_bos={block0_ln1.real_bos_std}")
+        print(f"Original ln_1 values: is_fake_prop={block0_ln1.is_fake_prop}, attn_v_is_fake_prop={block0_ln1.attn_v_is_fake_prop}")
+        print(f"Original ln_1 bos_special_treatment_prop={block0_ln1.bos_special_treatment_prop}")
+        print(f"Original ln_1 std values: real_avg={block0_ln1.real_average_std_prop}, real_bos={block0_ln1.real_bos_std_prop}")
         print(f"Original ln_1 average_std[0]={block0_ln1.average_std[0].item()}, average_std[1]={block0_ln1.average_std[1].item()}")
         print(f"Original ln_1 bos_std[0]={block0_ln1.bos_std[0].item()}, bos_std[1]={block0_ln1.bos_std[1].item()}")
-        print(f"Original ln_2 values: is_fake={block0_ln2.is_fake}, real_average_std={block0_ln2.real_average_std}")
+        print(f"Original ln_2 values: is_fake_prop={block0_ln2.is_fake_prop}, real_average_std={block0_ln2.real_average_std_prop}")
         
         # Save the model using standard PyTorch save
         print(f"Saving model to {temp_dir}/test_model...")
@@ -121,7 +129,7 @@ def test_serialization():
         buffer_keys = []
         for key in [k for k in state_dict.keys() if "ln_1" in k]:
             print(f"  {key}")
-            if "_is_fake" in key or "_real_average_std" in key or "average_std" in key:
+            if "is_fake" in key or "real_average_std" in key or "average_std" in key:
                 buffer_keys.append(key)
         
         if not buffer_keys:
@@ -138,20 +146,20 @@ def test_serialization():
         loaded_final_ln = loaded_model.transformer.ln_f
         
         # Print loaded values - using properties to access the underlying buffers
-        print(f"Loaded ln_1 values: is_fake={loaded_block0_ln1.is_fake}, attn_v_is_fake={loaded_block0_ln1.attn_v_is_fake}")
-        print(f"Loaded ln_1 bos_special_treatment={loaded_block0_ln1.bos_special_treatment}")
-        print(f"Loaded ln_1 std values: real_avg={loaded_block0_ln1.real_average_std}, real_bos={loaded_block0_ln1.real_bos_std}")
+        print(f"Loaded ln_1 values: is_fake_prop={loaded_block0_ln1.is_fake_prop}, attn_v_is_fake_prop={loaded_block0_ln1.attn_v_is_fake_prop}")
+        print(f"Loaded ln_1 bos_special_treatment_prop={loaded_block0_ln1.bos_special_treatment_prop}")
+        print(f"Loaded ln_1 std values: real_avg={loaded_block0_ln1.real_average_std_prop}, real_bos={loaded_block0_ln1.real_bos_std_prop}")
         print(f"Loaded ln_1 average_std[0]={loaded_block0_ln1.average_std[0].item()}, average_std[1]={loaded_block0_ln1.average_std[1].item()}")
         print(f"Loaded ln_1 bos_std[0]={loaded_block0_ln1.bos_std[0].item()}, bos_std[1]={loaded_block0_ln1.bos_std[1].item()}")
-        print(f"Loaded ln_2 values: is_fake={loaded_block0_ln2.is_fake}, real_average_std={loaded_block0_ln2.real_average_std}")
+        print(f"Loaded ln_2 values: is_fake_prop={loaded_block0_ln2.is_fake_prop}, real_average_std={loaded_block0_ln2.real_average_std_prop}")
 
         # Check if attributes are preserved for ln_1
         print("Verifying ln_1 attributes...")
-        assert loaded_block0_ln1.is_fake == block0_ln1.is_fake, "is_fake not preserved"
-        assert loaded_block0_ln1.attn_v_is_fake == block0_ln1.attn_v_is_fake, "attn_v_is_fake not preserved"
-        assert loaded_block0_ln1.bos_special_treatment == block0_ln1.bos_special_treatment, "bos_special_treatment not preserved"
-        assert abs(loaded_block0_ln1.real_average_std - block0_ln1.real_average_std) < 1e-5, "real_average_std not preserved"
-        assert abs(loaded_block0_ln1.real_bos_std - block0_ln1.real_bos_std) < 1e-5, "real_bos_std not preserved"
+        assert loaded_block0_ln1.is_fake_prop == block0_ln1.is_fake_prop, "is_fake_prop not preserved"
+        assert loaded_block0_ln1.attn_v_is_fake_prop == block0_ln1.attn_v_is_fake_prop, "attn_v_is_fake_prop not preserved"
+        assert loaded_block0_ln1.bos_special_treatment_prop == block0_ln1.bos_special_treatment_prop, "bos_special_treatment_prop not preserved"
+        assert abs(loaded_block0_ln1.real_average_std_prop - block0_ln1.real_average_std_prop) < 1e-5, "real_average_std_prop not preserved"
+        assert abs(loaded_block0_ln1.real_bos_std_prop - block0_ln1.real_bos_std_prop) < 1e-5, "real_bos_std_prop not preserved"
         
         # Compare tensor values using item() to avoid device issues
         assert abs(loaded_block0_ln1.average_std[0].item() - block0_ln1.average_std[0].item()) < 1e-5, "average_std[0] not preserved"
@@ -161,13 +169,13 @@ def test_serialization():
 
         # Check ln_2
         print("Verifying ln_2 attributes...")
-        assert loaded_block0_ln2.is_fake == block0_ln2.is_fake, "ln_2 is_fake not preserved"
-        assert abs(loaded_block0_ln2.real_average_std - block0_ln2.real_average_std) < 1e-5, "ln_2 real_average_std not preserved"
+        assert loaded_block0_ln2.is_fake_prop == block0_ln2.is_fake_prop, "ln_2 is_fake_prop not preserved"
+        assert abs(loaded_block0_ln2.real_average_std_prop - block0_ln2.real_average_std_prop) < 1e-5, "ln_2 real_average_std_prop not preserved"
 
         # Check final ln
         print("Verifying final ln attributes...")
-        assert loaded_final_ln.is_fake == final_ln.is_fake, "final ln is_fake not preserved"
-        assert abs(loaded_final_ln.real_bos_std - final_ln.real_bos_std) < 1e-5, "final ln real_bos_std not preserved"
+        assert loaded_final_ln.is_fake_prop == final_ln.is_fake_prop, "final ln is_fake_prop not preserved"
+        assert abs(loaded_final_ln.real_bos_std_prop - final_ln.real_bos_std_prop) < 1e-5, "final ln real_bos_std_prop not preserved"
 
         print("FakeLayerNorm serialization test passed!")
 
