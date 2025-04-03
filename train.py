@@ -33,6 +33,7 @@ from std_dicts import std_dicts
 from pydantic import BaseModel, Field
 from typing import Dict, Optional, Callable, Any
 from pile_eval import preprocess_pile_dataset, evaluate_model_on_pile, convert_for_trainer
+from devtools import pprint
 
 # TODO: support multi-GPU. If multiple GPUs are available, this will select the first one.
 device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
@@ -43,22 +44,18 @@ torch.manual_seed(1337)
 
 _USE_WANDB = True
 
-# Default to gpt2 std_dicts
-std_dict = std_dicts["gpt2"]["std_dict"]
-std_bos_dict = std_dicts["gpt2"]["std_bos_dict"]
-
 class FakeLayerNorm(nn.Module):
     """LayerNorm using a fixed std instead of the actual standard deviation."""
 
-    def __init__(self, n_embd, n_ctx, layer, bias):
+    def __init__(self, n_embd, n_ctx, layer, bias, init_average_std, init_bos_std):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(n_embd))
         self.bias = nn.Parameter(torch.zeros(n_embd)) if bias else None
         # Flag whether the LayerNorm is enabled ("real") or disabled ("fake")
-        self.mode = "real"
-        self.attn_v_mode = "real"
+        self.is_fake = False
+        self.attn_v_is_fake = False
 
-        self.real_average_std, self.real_bos_std = std_dict[layer], std_bos_dict[layer]
+        self.real_average_std, self.real_bos_std = init_average_std, init_bos_std
 
         if os.environ.get("EXP_CORRECT_BOS", "0") == "1":
             std_dim = n_ctx
@@ -80,9 +77,9 @@ class FakeLayerNorm(nn.Module):
     def forward(self, input, std_type="avg", attn_v=False):
         # We want all the enable / disable information to be in this class, but the class is re-used
         # for both the QK and V paths. Thus we add the attn_v flag to the call that is True only for
-        # the V path. Thus we get to have flags `mode` and `attn_v_mode` to enable / disable the
+        # the V path. Thus we get to have flags `is_fake` and `attn_v_is_fake` to enable / disable the
         # LN for the QK and V paths separately.
-        mode = self.attn_v_mode if attn_v else self.mode
+        is_fake = self.attn_v_is_fake if attn_v else self.is_fake
 
         self.iteration += 1
         # Calculate the std of the input
@@ -90,9 +87,9 @@ class FakeLayerNorm(nn.Module):
             self.iteration = 0
             self.real_average_std, self.real_bos_std = self.recompute_average_std(input)
 
-        if mode == "fake":
+        if is_fake:
             # Which std values to use: We use (1) average std (which is actually a vector of length
-            # n_ctx for most of the time*) [a, b, b, ...] where a is the average std for position 1,
+            # n_ctx for most of the time*) [a, b, b, ...] where a is the average std for position 0,
             # and b is the average std for all other positions. We also have the option to use (2)
             # the bos std [a, a, a, ...] for all positions, which we do if the input token is EOT.
             # Note that we could differentiate between EOT and BOS, but I didn't need it here.
@@ -100,14 +97,7 @@ class FakeLayerNorm(nn.Module):
             # disable_bos_std we make both vectors to be [b, b, b, ...], equivalent to scalars.
             if os.environ.get("EXP_RECOMPUTE_STD_ON_FAKE", "0") == "1":
                 with torch.no_grad():
-                    # Create new tensors instead of modifying in-place
-                    new_average_std = self.average_std.clone()
-                    new_average_std[1:] = torch.ones_like(new_average_std[1:]) * self.real_average_std
-                    new_average_std[0] = self.real_bos_std
-                    self.average_std = new_average_std.detach().requires_grad_(False)
-                    
-                    new_bos_std = torch.ones_like(self.bos_std) * self.real_bos_std
-                    self.bos_std = new_bos_std.detach().requires_grad_(False)
+                    self.sync_std()
 
             assert std_type in ["avg", "bos"]
             std = self.average_std if std_type == "avg" else self.bos_std
@@ -125,23 +115,14 @@ class FakeLayerNorm(nn.Module):
                     if self.bias is not None
                     else input * self.weight
                 )
-        elif mode == "real":
+        else:
             if os.environ.get("EXP_RECOMPUTE_STD_ON_REAL", "0") == "1":
                 with torch.no_grad():
-                    # Create new tensors instead of modifying in-place
-                    new_average_std = self.average_std.clone()
-                    new_average_std[1:] = torch.ones_like(new_average_std[1:]) * self.real_average_std
-                    new_average_std[0] = self.real_bos_std
-                    self.average_std = new_average_std.detach().requires_grad_(False)
-                    
-                    new_bos_std = torch.ones_like(self.bos_std) * self.real_bos_std
-                    self.bos_std = new_bos_std.detach().requires_grad_(False)
+                    self.sync_std()
 
             return F.layer_norm(
                 input, self.weight.shape, self.weight, self.bias, 1e-5
             )
-        else:
-            raise ValueError(f"Unknown mode {mode}")
     
     def recompute_average_std(self, x):
         with torch.no_grad():
@@ -149,6 +130,40 @@ class FakeLayerNorm(nn.Module):
             average_std = std.mean().detach().item()
             bos_std = std[0].detach().item()
         return average_std, bos_std
+    
+    def sync_std(self):
+        """Sync the average and bos std values (that are used in the forward pass) with the real std values."""
+        with torch.no_grad():
+            # Create new tensors instead of modifying in-place because we don't want to track gradients for these
+            # This is conditional on the recomputation mode
+            if self.bos_special_treatment:
+                new_average_std = self.average_std.clone()
+                new_average_std[1:] = torch.ones_like(new_average_std[1:]) * self.real_average_std
+                new_average_std[0] = self.real_bos_std
+                self.average_std = new_average_std.detach().requires_grad_(False)
+            else:
+                self.average_std = torch.ones_like(self.average_std) * self.real_average_std
+            
+            # This will always enable BOS special treatment
+            if self.bos_special_treatment:
+                new_bos_std = torch.ones_like(self.bos_std) * self.real_bos_std
+            else:
+                new_bos_std = torch.ones_like(self.bos_std) * self.real_average_std
+            self.bos_std = new_bos_std.detach().requires_grad_(False)
+    
+    def disable_eos_special_treatment(self):
+        # Disable EOT special treatment, note that bos_std[0] will be set to average_std[1]
+        # which is not always the same as bos_std[1]
+        self.bos_std = self.average_std
+    
+    def disable_bos_special_treatment(self):
+        # Disable BOS special treatment
+        self.bos_special_treatment = False
+        # Special treatment of position 0 is now disabled
+        self.average_std[0] = self.average_std[1]
+        # Same for bos_std
+        self.bos_std[0] = self.bos_std[1]
+
 
 def load_model(model_name="gpt2", remove_ln=False):
     model = transformers.GPT2LMHeadModel.from_pretrained(
@@ -159,7 +174,7 @@ def load_model(model_name="gpt2", remove_ln=False):
         ),
     )
 
-    def replace_layernorm_with_fake_layernorm(model):
+    def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict):
         n_layers = model.config.n_layer
         n_embd = model.transformer.h[0].ln_1.weight.shape[0]
         n_ctx = model.config.n_ctx
@@ -175,8 +190,23 @@ def load_model(model_name="gpt2", remove_ln=False):
             ln_2_bias = block.ln_2.bias.clone().detach() if block.ln_2.bias is not None else None
             
             # Replace with FakeLayerNorm
-            block.ln_1 = FakeLayerNorm(n_embd=n_embd, n_ctx=n_ctx, layer=f"blocks.{i}.hook_resid_pre", bias=block.ln_1.bias is not None)
-            block.ln_2 = FakeLayerNorm(n_embd=n_embd, n_ctx=n_ctx, layer=f"blocks.{i}.hook_resid_mid", bias=block.ln_2.bias is not None)
+            layer = f"blocks.{i}.hook_resid_pre"
+            block.ln_1 = FakeLayerNorm(
+                n_embd=n_embd,
+                n_ctx=n_ctx,
+                layer=layer,
+                bias=block.ln_1.bias is not None,
+                init_average_std=std_dict[layer],
+                init_bos_std=std_bos_dict[layer])
+
+            layer = f"blocks.{i}.hook_resid_mid"
+            block.ln_2 = FakeLayerNorm(
+                n_embd=n_embd,
+                n_ctx=n_ctx,
+                layer=layer,
+                bias=block.ln_2.bias is not None,
+                init_average_std=std_dict[layer],
+                init_bos_std=std_bos_dict[layer])
             
             # Restore weights
             block.ln_1.weight = nn.Parameter(ln_1_weight)
@@ -256,11 +286,14 @@ def load_model(model_name="gpt2", remove_ln=False):
         ln_f_weight = ln_f.weight.clone().detach()
         ln_f_bias = ln_f.bias.clone().detach() if ln_f.bias is not None else None
         
+        layer = f"blocks.{n_layers-1}.hook_resid_post"
         model.transformer.ln_f = FakeLayerNorm(
             n_embd=n_embd,
             n_ctx=n_ctx,
-            layer=f"blocks.{n_layers-1}.hook_resid_post",
-            bias=ln_f.bias is not None
+            layer=layer,
+            bias=ln_f.bias is not None,
+            init_average_std=std_dict[layer],
+            init_bos_std=std_bos_dict[layer]
         )
         model.transformer.ln_f.weight = nn.Parameter(ln_f_weight)
         if ln_f_bias is not None:
@@ -309,65 +342,38 @@ def load_model(model_name="gpt2", remove_ln=False):
 
     if remove_ln:
         # Replace all LayerNorm instances with FakeLayerNorm
-        replace_layernorm_with_fake_layernorm(model)
+        std_dict = std_dicts[model_name]["std_dict"]
+        std_bos_dict = std_dicts[model_name]["std_bos_dict"]
+
+        replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict)
     
     return model
 
-def finetune_with_ln(model, training_args, tokenized, data_collator, config, pile_eval_dataset=None):
-    """Finetune model with layer normalization"""
-    # Create multi-dataset dictionary if pile_eval_dataset is provided
-    if pile_eval_dataset is not None:
-        eval_datasets = {
-            # "openwebtext": tokenized["test"],
-            "pile": pile_eval_dataset
-        }
-    else:
-        eval_datasets = tokenized["test"]
-    
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=tokenized["train"],
-        eval_dataset=eval_datasets,
-        data_collator=data_collator,
-    )
 
-    trainer.train(
-        resume_from_checkpoint=training_args.resume_from_checkpoint
-    )
-
-
-def finetune_without_ln(model, training_args, tokenized, data_collator, config, pile_eval_dataset=None):
-    """Finetune model without layer normalization"""
+def finetune(model, training_args, tokenized, data_collator, config, pile_eval_dataset=None, remove_ln=False):
+    """Finetune model with or without layer normalization"""
     def disable_ln_2(block_index):
-        model.transformer.h[block_index].ln_2.mode = "fake"
+        model.transformer.h[block_index].ln_2.is_fake = True
         print(f"disabled ln_2 for block {block_index}")
 
     def disable_ln_1qk(block_index):
-        model.transformer.h[block_index].ln_1.mode = "fake"
+        model.transformer.h[block_index].ln_1.is_fake = True
         print(f"disabled ln_1 for block {block_index}")
 
     def disable_ln_1v(block_index):
-        model.transformer.h[block_index].ln_1.attn_v_mode = "fake"
+        model.transformer.h[block_index].ln_1.attn_v_is_fake = True
         print(f"disabled ln_1v for block {block_index}")
 
     def disable_ln_f():
-        model.transformer.ln_f.mode = "fake"
+        model.transformer.ln_f.is_fake = True
         print("disabled ln_f")
 
     def disable_eot_std(block_index):
-        model.transformer.h[block_index].ln_1.bos_std = model.transformer.h[
-            block_index
-        ].ln_1.average_std
+        model.transformer.h[block_index].ln_1.disable_eos_special_treatment()
         print(f"disabled eot std for block {block_index}")
 
     def disable_bos_std(block_index):
-        model.transformer.h[block_index].ln_1.average_std[0] = model.transformer.h[
-            block_index
-        ].ln_1.average_std[1]
-        model.transformer.h[block_index].ln_1.bos_std[0] = model.transformer.h[
-            block_index
-        ].ln_1.bos_std[1]
+        model.transformer.h[block_index].ln_1.disable_bos_special_treatment()
         print(f"disabled bos std for block {block_index}")
 
     class LNRemover:
@@ -420,6 +426,7 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config, 
             self.ln_removers = ln_removers
 
         def on_step_begin(self, args, state, control, **kwargs):
+            print(f"on_step_begin: {state.global_step}")
             # Iterate over the ln_removers
             for ln_remover in self.ln_removers:
                 ln_remover(state.global_step)
@@ -492,9 +499,10 @@ def finetune_without_ln(model, training_args, tokenized, data_collator, config, 
             print(f"Warning: Failed to extract step from checkpoint: {e}")
 
     callbacks = [
-        LNRemoverCallback(ln_removers),
         LogFakeLayerNormState(),
     ]
+    if remove_ln:
+        callbacks.append(LNRemoverCallback(ln_removers))
 
     # Create multi-dataset dictionary if pile_eval_dataset is provided
     if pile_eval_dataset is not None:
@@ -525,13 +533,13 @@ def main():
     parser.add_argument(
         "--mode",
         choices=["with_ln", "without_ln"],
-        required=True,
+        default="without_ln",
         help="Finetuning mode",
     )
     parser.add_argument(
         "--config",
         choices=list(FINETUNE_CONFIGS.keys()),
-        required=True,
+        default="gpt2_test",
         help="Training configuration to use",
     )
     parser.add_argument(
@@ -556,16 +564,8 @@ def main():
     config = FINETUNE_CONFIGS[args.config]
     model_name = config.model_name
 
-    # Update std_dict and std_bos_dict if model is not gpt2
-    global std_dict, std_bos_dict
-    std_dict = std_dicts[model_name]["std_dict"]
-    std_bos_dict = std_dicts[model_name]["std_bos_dict"]
-    
     # Prepare datasets
     tokenized, data_collator = prepare_dataset(model_name)
-    
-    # Initialize model
-    model = load_model(model_name, remove_ln=args.mode == "without_ln")
     
     # Initialize Pile-apollo dataset once at the beginning
     print("Preparing Pile-apollo evaluation dataset...")
@@ -619,19 +619,27 @@ def main():
         load_best_model_at_end=False,
     )
 
+    # Initialize model
+    model = load_model(model_name, remove_ln=args.mode == "without_ln")
+
+    print("Begin training")
+    print(model)
+    print(training_args)
+    pprint(config)
+
     # Pass the pile_eval_dataset to the appropriate training function
-    if args.mode == "with_ln":
-        finetune_with_ln(model, training_args, tokenized, data_collator, config, pile_eval_dataset)
-        if args.save:
-            model.save_pretrained("model-with-ln")
-            tokenizer.save_pretrained("model-with-ln")
-    elif args.mode == "without_ln":
-        finetune_without_ln(model, training_args, tokenized, data_collator, config, pile_eval_dataset)
-        if args.save:
-            model.save_pretrained("model-without-ln")
-            tokenizer.save_pretrained("model-without-ln")
-    else:
-        raise ValueError(f"Unknown mode {args.mode}")
+    finetune(
+        model,
+        training_args,
+        tokenized,
+        data_collator,
+        config,
+        pile_eval_dataset,
+        remove_ln=args.mode == "without_ln"
+    )
+    if args.save:
+        model.save_pretrained("model-without-ln")
+        tokenizer.save_pretrained("model-without-ln")
     
 
 if __name__ == "__main__":
