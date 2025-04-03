@@ -58,11 +58,12 @@ class FakeLayerNorm(nn.Module):
         self.n_ctx = n_ctx
         
         # Register all flags as buffers so they're automatically included in state_dict
-        self.register_buffer("_is_fake", torch.tensor(False))
-        self.register_buffer("_attn_v_is_fake", torch.tensor(False))
-        self.register_buffer("_bos_special_treatment", torch.tensor(True))
-        self.register_buffer("_real_average_std", torch.tensor(float(init_average_std)))
-        self.register_buffer("_real_bos_std", torch.tensor(float(init_bos_std)))
+        # Using naming without underscore to be compatible with old checkpoints
+        self.register_buffer("is_fake", torch.tensor(False))
+        self.register_buffer("attn_v_is_fake", torch.tensor(False))
+        self.register_buffer("bos_special_treatment", torch.tensor(True))
+        self.register_buffer("real_average_std", torch.tensor(float(init_average_std)))
+        self.register_buffer("real_bos_std", torch.tensor(float(init_bos_std)))
 
         if os.environ.get("EXP_CORRECT_BOS", "0") == "1":
             std_dim = n_ctx
@@ -84,63 +85,59 @@ class FakeLayerNorm(nn.Module):
         super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
         
         # Remove successfully loaded buffer keys from missing_keys
-        is_fake_key = prefix + "_is_fake"
-        attn_v_is_fake_key = prefix + "_attn_v_is_fake"
-        bos_special_treatment_key = prefix + "_bos_special_treatment"
-        
-        for key in [is_fake_key, attn_v_is_fake_key, bos_special_treatment_key]:
+        for key in [prefix + "is_fake", prefix + "attn_v_is_fake", prefix + "bos_special_treatment"]:
             if key in missing_keys:
                 missing_keys.remove(key)
     
-    # Properties to maintain the existing API while using buffers
+    # Properties with _prop suffix to avoid name conflicts with buffers
     @property
-    def is_fake(self):
-        return bool(self._is_fake.item())
+    def is_fake_prop(self):
+        return bool(self.is_fake.item())
     
-    @is_fake.setter
-    def is_fake(self, value):
-        self._is_fake.fill_(bool(value))
-    
-    @property
-    def attn_v_is_fake(self):
-        return bool(self._attn_v_is_fake.item())
-    
-    @attn_v_is_fake.setter
-    def attn_v_is_fake(self, value):
-        self._attn_v_is_fake.fill_(bool(value))
+    @is_fake_prop.setter
+    def is_fake_prop(self, value):
+        self.is_fake.fill_(bool(value))
     
     @property
-    def bos_special_treatment(self):
-        return bool(self._bos_special_treatment.item())
+    def attn_v_is_fake_prop(self):
+        return bool(self.attn_v_is_fake.item())
     
-    @bos_special_treatment.setter
-    def bos_special_treatment(self, value):
-        self._bos_special_treatment.fill_(bool(value))
-    
-    @property
-    def real_average_std(self):
-        return float(self._real_average_std.item())
-    
-    @real_average_std.setter
-    def real_average_std(self, value):
-        self._real_average_std.fill_(float(value))
+    @attn_v_is_fake_prop.setter
+    def attn_v_is_fake_prop(self, value):
+        self.attn_v_is_fake.fill_(bool(value))
     
     @property
-    def real_bos_std(self):
-        return float(self._real_bos_std.item())
+    def bos_special_treatment_prop(self):
+        return bool(self.bos_special_treatment.item())
     
-    @real_bos_std.setter
-    def real_bos_std(self, value):
-        self._real_bos_std.fill_(float(value))
+    @bos_special_treatment_prop.setter
+    def bos_special_treatment_prop(self, value):
+        self.bos_special_treatment.fill_(bool(value))
+    
+    @property
+    def real_average_std_prop(self):
+        return float(self.real_average_std.item())
+    
+    @real_average_std_prop.setter
+    def real_average_std_prop(self, value):
+        self.real_average_std.fill_(float(value))
+    
+    @property
+    def real_bos_std_prop(self):
+        return float(self.real_bos_std.item())
+    
+    @real_bos_std_prop.setter
+    def real_bos_std_prop(self, value):
+        self.real_bos_std.fill_(float(value))
     
     def __repr__(self):
         """Return a string representation of the FakeLayerNorm's current state."""
         # Force re-read of the tensor values to ensure we have the latest state
-        is_fake_value = bool(self._is_fake.item())
-        attn_v_is_fake_value = bool(self._attn_v_is_fake.item())
+        is_fake_value = bool(self.is_fake.item())
+        attn_v_is_fake_value = bool(self.attn_v_is_fake.item())
         mode = "fake" if is_fake_value else "real"
         attn_v_mode = "fake" if attn_v_is_fake_value else "real"
-        bos_treatment = "enabled" if self.bos_special_treatment else "disabled"
+        bos_treatment = "enabled" if self.bos_special_treatment.item() else "disabled"
         
         # Get short name from layer for cleaner output
         layer_name = self.layer.split('.')[-1] if hasattr(self, 'layer') and self.layer else "unknown"
@@ -150,7 +147,7 @@ class FakeLayerNorm(nn.Module):
         bos_std_sample = f"[{self.bos_std[0].item():.4f}, {self.bos_std[1].item():.4f}, ...]"
         
         return (f"FakeLayerNorm(layer={layer_name}, mode={mode}, attn_v_mode={attn_v_mode}, "
-                f"real_avg_std={self.real_average_std:.4f}, real_bos_std={self.real_bos_std:.4f}, "
+                f"real_avg_std={self.real_average_std.item():.4f}, real_bos_std={self.real_bos_std.item():.4f}, "
                 f"bos_treatment={bos_treatment}, "
                 f"avg_std={avg_std_sample}, bos_std={bos_std_sample})")
     
@@ -159,15 +156,17 @@ class FakeLayerNorm(nn.Module):
         # for both the QK and V paths. Thus we add the attn_v flag to the call that is True only for
         # the V path. Thus we get to have flags `is_fake` and `attn_v_is_fake` to enable / disable the
         # LN for the QK and V paths separately.
-        is_fake = self.attn_v_is_fake if attn_v else self.is_fake
+        is_fake_value = self.attn_v_is_fake.item() if attn_v else self.is_fake.item()
 
         self.iteration += 1
         # Calculate the std of the input
         if self.iteration % self.update_freq == 0:
             self.iteration = 0
-            self.real_average_std, self.real_bos_std = self.recompute_average_std(input)
+            avg_std, bos_std = self.recompute_average_std(input)
+            self.real_average_std.fill_(float(avg_std))
+            self.real_bos_std.fill_(float(bos_std))
 
-        if is_fake:
+        if is_fake_value:
             # Which std values to use: We use (1) average std (which is actually a vector of length
             # n_ctx for most of the time*) [a, b, b, ...] where a is the average std for position 0,
             # and b is the average std for all other positions. We also have the option to use (2)
@@ -216,19 +215,19 @@ class FakeLayerNorm(nn.Module):
         with torch.no_grad():
             # Create new tensors instead of modifying in-place because we don't want to track gradients for these
             # This is conditional on the recomputation mode
-            if self.bos_special_treatment:
+            if self.bos_special_treatment.item():
                 new_average_std = self.average_std.clone()
-                new_average_std[1:] = torch.ones_like(new_average_std[1:]) * self.real_average_std
-                new_average_std[0] = self.real_bos_std
+                new_average_std[1:] = torch.ones_like(new_average_std[1:]) * self.real_average_std.item()
+                new_average_std[0] = self.real_bos_std.item()
                 self.average_std = new_average_std.detach().requires_grad_(False)
             else:
-                self.average_std = torch.ones_like(self.average_std) * self.real_average_std
+                self.average_std = torch.ones_like(self.average_std) * self.real_average_std.item()
             
             # This will always enable BOS special treatment
-            if self.bos_special_treatment:
-                new_bos_std = torch.ones_like(self.bos_std) * self.real_bos_std
+            if self.bos_special_treatment.item():
+                new_bos_std = torch.ones_like(self.bos_std) * self.real_bos_std.item()
             else:
-                new_bos_std = torch.ones_like(self.bos_std) * self.real_average_std
+                new_bos_std = torch.ones_like(self.bos_std) * self.real_average_std.item()
             self.bos_std = new_bos_std.detach().requires_grad_(False)
     
     def disable_eos_special_treatment(self):
@@ -238,7 +237,7 @@ class FakeLayerNorm(nn.Module):
     
     def disable_bos_special_treatment(self):
         # Disable BOS special treatment
-        self.bos_special_treatment = False
+        self.bos_special_treatment.fill_(False)
         with torch.no_grad():
             # Special treatment of position 0 is now disabled
             self.average_std[0] = self.average_std[1]
@@ -434,19 +433,19 @@ def load_model(model_name="gpt2", remove_ln=False):
 def finetune(model, training_args, tokenized, data_collator, config, pile_eval_dataset=None, remove_ln=False):
     """Finetune model with or without layer normalization"""
     def disable_ln_2(block_index):
-        model.transformer.h[block_index].ln_2.is_fake = True
+        model.transformer.h[block_index].ln_2.is_fake_prop = True
         print(f"disabled ln_2 for block {block_index}")
 
     def disable_ln_1qk(block_index):
-        model.transformer.h[block_index].ln_1.is_fake = True
+        model.transformer.h[block_index].ln_1.is_fake_prop = True
         print(f"disabled ln_1 for block {block_index}")
 
     def disable_ln_1v(block_index):
-        model.transformer.h[block_index].ln_1.attn_v_is_fake = True
+        model.transformer.h[block_index].ln_1.attn_v_is_fake_prop = True
         print(f"disabled ln_1v for block {block_index}")
 
     def disable_ln_f():
-        model.transformer.ln_f.is_fake = True
+        model.transformer.ln_f.is_fake_prop = True
         print("disabled ln_f")
 
     def disable_eot_std(block_index):
@@ -541,8 +540,8 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
 
             for i, block in enumerate(model.transformer.h):
                 wandb.log({
-                    f"block_{i}_ln_1_real_average_std": block.ln_1.real_average_std,
-                    f"block_{i}_ln_1_real_bos_std": block.ln_1.real_bos_std,
+                    f"block_{i}_ln_1_real_average_std": block.ln_1.real_average_std_prop,
+                    f"block_{i}_ln_1_real_bos_std": block.ln_1.real_bos_std_prop,
                     f"block_{i}_ln_1_average_std_0": block.ln_1.average_std[0],
                     f"block_{i}_ln_1_average_std_1": block.ln_1.average_std[1],
                     f"block_{i}_ln_1_bos_std_0": block.ln_1.bos_std[0],
@@ -550,8 +549,8 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
                 })
 
                 wandb.log({
-                    f"block_{i}_ln_2_real_average_std": block.ln_2.real_average_std,
-                    f"block_{i}_ln_2_real_bos_std": block.ln_2.real_bos_std,
+                    f"block_{i}_ln_2_real_average_std": block.ln_2.real_average_std_prop,
+                    f"block_{i}_ln_2_real_bos_std": block.ln_2.real_bos_std_prop,
                     f"block_{i}_ln_2_average_std_0": block.ln_2.average_std[0],
                     f"block_{i}_ln_2_average_std_1": block.ln_2.average_std[1],
                     f"block_{i}_ln_2_bos_std_0": block.ln_2.bos_std[0],
@@ -559,8 +558,8 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
                 })
 
             wandb.log({
-                f"ln_f_real_average_std": model.transformer.ln_f.real_average_std,
-                f"ln_f_real_bos_std": model.transformer.ln_f.real_bos_std,
+                f"ln_f_real_average_std": model.transformer.ln_f.real_average_std_prop,
+                f"ln_f_real_bos_std": model.transformer.ln_f.real_bos_std_prop,
                 f"ln_f_average_std_0": model.transformer.ln_f.average_std[0],
                 f"ln_f_average_std_1": model.transformer.ln_f.average_std[1],
                 f"ln_f_bos_std_0": model.transformer.ln_f.bos_std[0],
@@ -585,14 +584,14 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
             print("\nChecking if layers are fake after loading checkpoint:")
             for i, block in enumerate(model.transformer.h):
                 print(f"Block {i}:")
-                print(f"  ln_1.is_fake: {block.ln_1.is_fake}")
-                print(f"  ln_1.attn_v_is_fake: {block.ln_1.attn_v_is_fake}")
-                print(f"  ln_1.bos_special_treatment: {block.ln_1.bos_special_treatment}")
-                print(f"  ln_2.is_fake: {block.ln_2.is_fake}")
-                print(f"  ln_2.bos_special_treatment: {block.ln_2.bos_special_treatment}")
+                print(f"  ln_1.is_fake_prop: {block.ln_1.is_fake_prop}")
+                print(f"  ln_1.attn_v_is_fake_prop: {block.ln_1.attn_v_is_fake_prop}")
+                print(f"  ln_1.bos_special_treatment_prop: {block.ln_1.bos_special_treatment_prop}")
+                print(f"  ln_2.is_fake_prop: {block.ln_2.is_fake_prop}")
+                print(f"  ln_2.bos_special_treatment_prop: {block.ln_2.bos_special_treatment_prop}")
             
-            print(f"\nFinal ln_f.is_fake: {model.transformer.ln_f.is_fake}")
-            print(f"Final ln_f.bos_special_treatment: {model.transformer.ln_f.bos_special_treatment}")
+            print(f"\nFinal ln_f.is_fake_prop: {model.transformer.ln_f.is_fake_prop}")
+            print(f"Final ln_f.bos_special_treatment_prop: {model.transformer.ln_f.bos_special_treatment_prop}")
             print("========================================\n")
             
             return control
