@@ -6,6 +6,8 @@ EXP_RECOMPUTE_STD_ON_FAKE: Recompute std when FakeLayerNorm is fake - will recom
 EXP_RECOMPUTE_STD_ON_REAL: Recompute std when FakeLayerNorm is real - will freeze std when FakeLayerNorm goes fake
 """
 import os
+import signal
+import sys
 
 import argparse
 import datasets
@@ -430,6 +432,40 @@ def load_model(model_name="gpt2", remove_ln=False):
     return model
 
 
+class SignalHandlerCallback(TrainerCallback):
+    """Callback to handle SIGINT (Ctrl+C) by saving a checkpoint before exiting."""
+    def __init__(self, trainer):
+        self.trainer = trainer
+        self.original_handler = None
+        
+    def on_train_begin(self, args, state, control, **kwargs):
+        print("Setting up checkpoint on Ctrl+C handler")
+        self.original_handler = signal.getsignal(signal.SIGINT)
+        signal.signal(signal.SIGINT, self._signal_handler)
+        return control
+    
+    def on_train_end(self, args, state, control, **kwargs):
+        # Restore original signal handler
+        if self.original_handler:
+            signal.signal(signal.SIGINT, self.original_handler)
+        return control
+    
+    def _signal_handler(self, sig, frame):
+        print("\nCtrl+C detected. Saving checkpoint before exiting...")
+        # Create a checkpoint name with timestamp
+        checkpoint_name = f"interrupt-checkpoint-{datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}"
+        checkpoint_path = os.path.join(self.trainer.args.output_dir, checkpoint_name)
+        os.makedirs(checkpoint_path, exist_ok=True)
+        
+        # Save model checkpoint
+        self.trainer.save_model(checkpoint_path)
+        print(f"Checkpoint saved to {checkpoint_path}")
+        
+        # Restore original handler and re-raise the signal
+        if self.original_handler:
+            signal.signal(signal.SIGINT, self.original_handler)
+        sys.exit(130)  # Standard exit code for SIGINT
+
 def finetune(model, training_args, tokenized, data_collator, config, pile_eval_dataset=None, remove_ln=False):
     """Finetune model with or without layer normalization"""
     def disable_ln_2(block_index):
@@ -634,6 +670,10 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
         data_collator=data_collator,
         callbacks=callbacks,
     )
+
+    # Add signal handler callback after trainer is created
+    signal_handler = SignalHandlerCallback(trainer)
+    trainer.add_callback(signal_handler)
 
     trainer.train(
         resume_from_checkpoint=training_args.resume_from_checkpoint
