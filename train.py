@@ -677,9 +677,6 @@ def main():
     config = FINETUNE_CONFIGS[args.config]
     model_name = config.model_name
 
-    # Load tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-
     # Prepare datasets
     tokenized, data_collator = prepare_dataset(model_name)
     
