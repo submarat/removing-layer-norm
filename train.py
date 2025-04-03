@@ -702,11 +702,6 @@ def main():
     output_dir = f"results/{model_name}/{datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}"
     os.makedirs(output_dir)
     
-    # TEMPORARY: Override max_steps for faster testing
-    original_max_steps = config.max_steps
-    config.max_steps = 42  # Temporary override for testing
-    print(f"TEMPORARY OVERRIDE: Setting max_steps to 42 (was {original_max_steps})")
-    
     training_args = TrainingArguments(
         output_dir=output_dir,
         bf16=True,
