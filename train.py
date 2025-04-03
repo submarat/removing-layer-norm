@@ -656,11 +656,6 @@ def main():
         help="Training configuration to use",
     )
     parser.add_argument(
-        "--save",
-        action="store_true",
-        help="Save the model to disk",
-    )
-    parser.add_argument(
         "--resume_from_checkpoint",
         required=False,
         help="Checkpoint to resume from",
@@ -751,13 +746,6 @@ def main():
         pile_eval_dataset,
         remove_ln=args.mode == "without_ln"
     )
-    if args.save:
-        # Create a save directory with datetime
-        save_dir = f"saved-models/{model_name}-{args.mode}-{datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}"
-        os.makedirs(save_dir, exist_ok=True)
-        model.save_pretrained(save_dir)
-        tokenizer.save_pretrained(save_dir)
-        print(f"Model and tokenizer saved to {save_dir}")
     
 
 if __name__ == "__main__":
