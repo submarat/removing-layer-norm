@@ -520,6 +520,7 @@ FINETUNE_CONFIGS = {
     "gpt2-medium_fasttune_aux": make_gpt2_medium_fasttune_aux(),
     "gpt2-medium_test": make_gpt2_medium_test(),
     "gpt2-large": make_gpt2_large(),
+    "gpt2-large_aux": make_gpt2_large_aux(),
     "gpt2-large_test": make_gpt2_large_test(),
     "gpt2-xl": make_gpt2_xl(),
     "gpt2-xl_test": make_gpt2_xl_test(),
