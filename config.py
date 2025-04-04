@@ -16,6 +16,7 @@ class FinetuneConfig(BaseModel):
     # Training params
     base_batch_size: int
     max_steps: int
+    early_stop_step: int = 1_000_000 # i.e. don't stop early by default
     block_size: int = 1024
     target_batch_tokens: int = Field(default=2**19, description="Desired total tokens per batch")
     warmup_steps: int = 100
@@ -79,6 +80,8 @@ def make_gpt2_standard():
     start_lnf = start_ln1v + 12 * gap_ln1v
     start_eot = start_lnf + 2
     start_bos = start_eot + 10
+
+    early_stop_step = start_bos + 40
     
     return FinetuneConfig(**locals())
 
@@ -147,6 +150,8 @@ def make_gpt2_test():
     start_lnf = start_ln1v + n_layers * gap_ln1v
     start_eot = start_lnf + 2
     start_bos = start_eot + 1  # Shorter gap for testing
+
+    early_stop_step = start_bos + 1
     
     return FinetuneConfig(**locals())
 
@@ -268,6 +273,8 @@ def make_gpt2_medium_fasttune():
     start_lnf = start_ln1v + n_layers * gap_ln1v
     start_eot = start_lnf + 2
     start_bos = start_eot + 10
+
+    early_stop_step = start_bos + 10
     
     return FinetuneConfig(**locals())
 
@@ -337,6 +344,8 @@ def make_gpt2_large():
     start_lnf = start_ln1v + n_layers * gap_ln1v
     start_eot = start_lnf + 2
     start_bos = start_eot + 10
+
+    early_stop_step = start_bos + 10
     
     return FinetuneConfig(**locals())
 
@@ -371,6 +380,8 @@ def make_gpt2_large_test():
     start_lnf = start_ln1v + n_layers * gap_ln1v
     start_eot = start_lnf + 2
     start_bos = start_eot + 1  # Shorter gap for testing
+
+    early_stop_step = start_bos + 10
     
     return FinetuneConfig(**locals())
 
