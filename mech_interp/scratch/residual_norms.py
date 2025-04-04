@@ -7,6 +7,7 @@ import matplotlib.animation as animation
 import torch
 from typing import Dict, List, Optional, Union, Literal, Tuple
 from transformer_lens import HookedTransformer
+from tqdm import tqdm
 
 # Add parent directory to path
 parent_dir = os.path.abspath(os.path.join(os.getcwd(), '..'))
@@ -17,7 +18,7 @@ from load_models import ModelFactory
 
 class ResidualNorms:
     def __init__(self,
-                 data_path: str,
+                 data_paths: Union[str, Dict[str, str]],
                  model_dir: str = "../models",
                  num_samples: Optional[int] = None,
                  random_seed: int = 42,
@@ -29,44 +30,89 @@ class ResidualNorms:
         Initialize the analyzer with data and prepare models.
         
         Args:
-            data_path: Path to the parquet file containing text data
+            data_paths: Either a single path to a parquet file or a dictionary mapping dataset names to paths
             model_dir: Directory containing the model files
+            num_samples: Number of samples to use (optional)
+            random_seed: Random seed for reproducibility
+            last_token_only: Whether to analyze only the last token
+            agg: Whether to aggregate metrics across all subsequences
+            device: Device to use for computation (optional)
         """
-        # Load data from parquet file
-        self.df = pd.read_parquet(data_path)
+        # Handle data paths as dictionary or single path
+        if isinstance(data_paths, dict):
+            self.dataset_names = list(data_paths.keys())
+            self.data_paths = data_paths
+            # Initialize multi-dataset mode
+            self.multi_dataset = True
+            self.dfs = {}
+            
+            # Load each dataset
+            for name, path in self.data_paths.items():
+                self.dfs[name] = pd.read_parquet(path)
+                
+                if agg:
+                    self.dfs[name] = self.get_aggregate_metrics(self.dfs[name])
+                
+                if num_samples:
+                    # Subsample dataframe for analysis
+                    np.random.seed(random_seed)
+                    sample_indices = np.random.choice(len(self.dfs[name]), size=num_samples, replace=False)
+                    self.dfs[name] = self.dfs[name].iloc[sample_indices].reset_index(drop=True)
+                    print(f"Dataset {name}: Sampled {len(self.dfs[name])} examples for analysis.")
+        else:
+            # Single dataset mode (backward compatibility)
+            self.multi_dataset = False
+            self.df = pd.read_parquet(data_paths)
+            
+            if agg:
+                self.df = self.get_aggregate_metrics(self.df)
+            
+            if num_samples:
+                # Subsample dataframe for analysis
+                np.random.seed(random_seed)
+                sample_indices = np.random.choice(len(self.df), size=num_samples, replace=False)
+                self.df = self.df.iloc[sample_indices].reset_index(drop=True)
+                print(f"Sampled {len(self.df)} examples for analysis.")
+        
         self.last_token_only = last_token_only
-        if agg:
-            self.get_aggregate_metrics()
-
-        if num_samples:
-            # Subsample dataframe for analysis
-            np.random.seed(random_seed)
-            sample_indices = np.random.choice(len(self.df), size=num_samples, replace=False)
-            self.df = self.df.iloc[sample_indices].reset_index(drop=True)
-            print(f"Sampled {len(self.df)} examples for analysis.")
         
         # Initialize model factory
         self.model_names = ['baseline', 'finetuned', 'noLN']
         self.model_factory = ModelFactory(self.model_names, model_dir=model_dir)
 
-        # Results will be stored here after running analysis
-        self.results = None
-        
         # Set up color schemes for consistent visualization
         self.colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
         self.model_colors = {
             'baseline': self.colors[0],
             'finetuned': self.colors[1],
             'noLN': self.colors[2]
-        }  
+        }
 
-    def get_aggregate_metrics(self):
+        # Initialise results dicts
+        if self.multi_dataset:
+            self.l2_norms = {dataset: {} for dataset in self.dataset_names}
+            self.norm_growth_results = {dataset: {} for dataset in self.dataset_names}
+            self.cosine_sim_results = {dataset: {} for dataset in self.dataset_names}
+            
+            for dataset in self.dataset_names:
+                for model_name in self.model_names:
+                    self.l2_norms[dataset][model_name] = {}
+                    self.norm_growth_results[dataset][model_name] = {}
+                    self.cosine_sim_results[dataset][model_name] = {}
+        else:
+            self.l2_norms = {model_name: {} for model_name in self.model_names}
+            self.norm_growth_results = {model_name: {} for model_name in self.model_names}
+            self.cosine_sim_results = {model_name: {} for model_name in self.model_names}
+
+    def get_aggregate_metrics(self, df):
         """
-        Aggregate metrics accross all subsequences to get overall average results
+        Aggregate metrics across all subsequences to get overall average results
         
+        Args:
+            df: DataFrame to aggregate
+            
         Returns:
-        --------
-        Aggregated df
+            DataFrame: Aggregated DataFrame
         """
         # Define the metrics columns to aggregate
         metric_columns = [
@@ -76,7 +122,7 @@ class ResidualNorms:
             'ce_diff_finetuned_vs_noLN', 'jsd_finetuned_vs_noLN', 'topk_jsd_finetuned_vs_noLN'
         ]
         
-        # Create a temporary function to get the row with the longest sequence for each group
+        # Function to get the row with the longest sequence for each group
         def get_longest_sequence_info(group):
             # Get the index of the row with the maximum sequence_length
             idx_max_length = group['sequence_length'].idxmax()
@@ -87,25 +133,32 @@ class ResidualNorms:
                 'next_token': group.loc[idx_max_length, 'next_token'],
                 'sequence_length': group.loc[idx_max_length, 'sequence_length']
             })
+        
         # Group by original_idx and calculate mean for all metrics
-        # For full_sequence, we'll take the longest one
-        aggregated_metrics = self.df.groupby('original_idx')[metric_columns].mean()
+        aggregated_metrics = df.groupby('original_idx')[metric_columns].mean()
         
         # Find the longest full_sequence and corresponding tokens for each original_idx
-        longest_sequences_info = self.df.groupby('original_idx').apply(get_longest_sequence_info)
+        longest_sequences_info = df.groupby('original_idx').apply(get_longest_sequence_info)
         
         # Combine the aggregated metrics with the longest sequences and their tokens
         aggregated_df = aggregated_metrics.join(longest_sequences_info).reset_index()
         
-        print(f"Original shape: {self.df.shape}")
+        print(f"Original shape: {df.shape}")
         print(f"After aggregation: {aggregated_df.shape}")
         
-        self.df = aggregated_df
+        return aggregated_df
 
-    
     def get_hook_names(self, model):
-        """Get appropriate hook names for a given model."""
-        hook_names = ['hook_embed']  # Raw embeddings
+        """
+        Get appropriate hook names for a given model.
+        
+        Args:
+            model: The model to get hook names for
+            
+        Returns:
+            list: List of hook names
+        """
+        hook_names = ['hook_embed', 'hook_pos_embed']  # Raw embeddings
         
         # Add block-specific hooks
         n_layers = len(model.blocks)
@@ -114,20 +167,141 @@ class ResidualNorms:
             hook_names.append(f'blocks.{i}.hook_resid_post')
         
         return hook_names
-   
-
-    def run_analysis(self, batch_size: int = 8):
+    
+    def _get_hook_pairs_and_labels(self):
         """
-        Run the residual stream analysis on all models.
+        Create logical pairs of hooks for comparison between consecutive layers,
+        and generate readable labels for these pairs.
+        
+        Returns:
+            tuple: (pairs, pair_labels, hooks, hook_labels) where:
+                - pairs is a list of (input_hook, output_hook) tuples
+                - pair_labels is a list of formatted strings for the pairs
+                - hooks is a sorted list of all hook names
+                - hook_labels is a dictionary mapping hook names to their display labels
+        """
+        # Extract all common hook names
+        first_model_name = self.model_names[0]
+        model = self.model_factory.models[first_model_name]
+        hook_names = self.get_hook_names(model)
+        
+        # Sort hooks to ensure logical progression
+        hook_names.sort(key=lambda x: (
+            0 if 'hook_embed' in x and 'pos' not in x else 
+            1 if 'hook_pos_embed' in x else
+            2 if 'blocks' in x else 
+            3,
+            int(x.split('.')[1]) if 'blocks' in x and '.' in x else 0,
+            0 if 'resid_mid' in x else 1 if 'resid_post' in x else 0
+        ))
+        
+        # Create hook label mapping
+        hook_labels = {}
+        for hook in hook_names:
+            if 'hook_embed' in hook and 'pos' not in hook:
+                hook_labels[hook] = 'Embed'
+            elif 'hook_pos_embed' in hook:
+                hook_labels[hook] = 'Pos_Embed'
+            elif 'blocks' in hook:
+                parts = hook.split('.')
+                layer_num = parts[1]
+                if 'resid_mid' in hook:
+                    hook_labels[hook] = f'Resid_mid_{layer_num}'
+                elif 'resid_post' in hook:
+                    hook_labels[hook] = f'Resid_post_{layer_num}'
+            else:
+                hook_labels[hook] = hook.replace('hook_', '')
+        
+        # Create pairs for comparison (input -> output)
+        pairs = []
+        
+        # Explicitly add the Embed -> Pos_Embed pair first
+        if 'hook_embed' in hook_names and 'hook_pos_embed' in hook_names:
+            pairs.append(('hook_embed', 'hook_pos_embed'))
+        
+        # Add other logical pairs
+        for i in range(len(hook_names) - 1):
+            current_hook = hook_names[i]
+            next_hook = hook_names[i+1]
+            
+            # Skip if we've already added embed->pos_embed
+            if current_hook == 'hook_embed' and next_hook == 'hook_pos_embed':
+                continue
+            
+            # Add pos_embed -> first layer's resid_mid
+            if 'hook_pos_embed' in current_hook and 'blocks.0.hook_resid_mid' in next_hook:
+                pairs.append((current_hook, next_hook))
+            
+            # Add standard block transitions
+            elif 'blocks' in current_hook and 'blocks' in next_hook:
+                current_parts = current_hook.split('.')
+                next_parts = next_hook.split('.')
+                
+                # Same layer: resid_mid -> resid_post
+                if current_parts[1] == next_parts[1] and 'resid_mid' in current_hook and 'resid_post' in next_hook:
+                    pairs.append((current_hook, next_hook))
+                
+                # Adjacent layers: resid_post -> next resid_mid
+                elif int(next_parts[1]) == int(current_parts[1]) + 1 and 'resid_post' in current_hook and 'resid_mid' in next_hook:
+                    pairs.append((current_hook, next_hook))
+        
+        # Generate pair labels using hook labels
+        pair_labels = []
+        for input_hook, output_hook in pairs:
+            pair_labels.append(f"{hook_labels[output_hook]}")
+        
+        return pairs, pair_labels, hook_names, hook_labels
+
+    def run_analysis(self, batch_size: int = 1):
+        """
+        Run the residual stream analysis on all models for all datasets.
         
         Args:
             batch_size: Number of examples to process at once
         """
-        results = {}
+        # Get pairs for norm growth and cosine similarity calculations
+        pairs, _, _, _ = self._get_hook_pairs_and_labels()
+        
+        print(f"Created {len(pairs)} hook pairs for comparison")
+        for i, (input_hook, output_hook) in enumerate(pairs):
+            print(f"  Pair {i}: {input_hook} -> {output_hook}")
+        
+        if self.multi_dataset:
+            # Process each dataset
+            for dataset_name in self.dataset_names:
+                print(f"\nProcessing dataset: {dataset_name}")
+                self._run_dataset_analysis(dataset_name, self.dfs[dataset_name], pairs, batch_size)
+        else:
+            # Process the single dataset (backwards compatibility)
+            self._run_dataset_analysis(None, self.df, pairs, batch_size)
+    
+    def _run_dataset_analysis(self, dataset_name, df, pairs, batch_size):
+        """
+        Run analysis for a single dataset
+        
+        Args:
+            dataset_name: Name of the dataset (or None for single dataset mode)
+            df: DataFrame containing the dataset
+            pairs: Hook pairs to analyze
+            batch_size: Batch size for processing
+        """
+        # Initialize results structure based on mode
+        if dataset_name is not None:  # Multi-dataset mode
+            for model_name in self.model_names:
+                # Initialize result storage for each pair
+                for i, (input_hook, output_hook) in enumerate(pairs):
+                    self.norm_growth_results[dataset_name][model_name][i] = []
+                    self.cosine_sim_results[dataset_name][model_name][i] = []
+        else:  # Single dataset mode
+            for model_name in self.model_names:
+                # Initialize result storage for each pair
+                for i, (input_hook, output_hook) in enumerate(pairs):
+                    self.norm_growth_results[model_name][i] = []
+                    self.cosine_sim_results[model_name][i] = []
         
         # Process data in batches
-        for i in range(0, len(self.df), batch_size):
-            batch_df = self.df.iloc[i:i+batch_size]
+        for i in tqdm(range(0, len(df), batch_size), desc=f"Running analysis"):
+            batch_df = df.iloc[i:i+batch_size]
             
             # Get token sequences from the dataframe
             sequences = batch_df['full_sequence'].tolist()
@@ -137,149 +311,627 @@ class ResidualNorms:
             
             # Process each model
             for model_name in self.model_names:
-                if model_name not in results:
-                    results[model_name] = {}
+                # Dictionary to store all activations for this batch
+                batch_activations = {}
                 
                 model = self.model_factory.models[model_name]
                 hook_names = self.get_hook_names(model)
                 
                 # Initialize results containers if needed
-                for hook_name in hook_names:
-                    if hook_name not in results[model_name]:
-                        results[model_name][hook_name] = []
+                if dataset_name is not None:  # Multi-dataset mode
+                    results_dict = self.l2_norms[dataset_name][model_name]
+                else:  # Single dataset mode
+                    results_dict = self.l2_norms[model_name]
                 
-                # Define the hook function to capture norms for the entire batch
-                def capture_norms(act, hook):
-                    if self.last_token_only:
-                        act = act[:, -1:, :] # -1: keeps the dims
-                    l2_norm = torch.norm(act, p=2, dim=-1)
+                for hook_name in hook_names:
+                    if hook_name not in results_dict:
+                        results_dict[hook_name] = []
+                
+                # Define the hook function to capture activations only
+                def capture_activations(act, hook):
                     hook_name = hook.name
-                    results[model_name][hook_name].append(l2_norm.detach().cpu())
+                    
+                    if self.last_token_only:
+                        act = act[:, -1:, :]  # -1: keeps the dims
+                    
+                    # Store activation for later metric computation
+                    batch_activations[hook_name] = act.detach().cpu()
+                    
                     return act
                 
                 # Run the model with hooks for the entire batch
                 with torch.no_grad():
                     model.run_with_hooks(
                         inputs,
-                        fwd_hooks=[(name, capture_norms) for name in hook_names]
+                        fwd_hooks=[(name, capture_activations) for name in hook_names]
                     )
-        # Store results
-        self.results = results
-
+                
+                # After all hooks have fired, compute all metrics 
+                
+                # First calculate and store L2 norms for each hook
+                for hook_name, activation in batch_activations.items():
+                    l2_norm = torch.norm(activation, p=2, dim=-1)
+                    results_dict[hook_name].append(l2_norm)
+                
+                # Then compute paired metrics
+                for pair_idx, (input_hook, output_hook) in enumerate(pairs):
+                    # Check if both input and output activations are available
+                    if input_hook in batch_activations and output_hook in batch_activations:
+                        input_act = batch_activations[input_hook]
+                        output_act = batch_activations[output_hook]
+                        
+                        # Compute L2 norm growth
+                        input_norm = torch.norm(input_act, p=2, dim=-1)
+                        output_norm = torch.norm(output_act, p=2, dim=-1)
+                        norm_ratio = output_norm / input_norm
+                        
+                        # Store results based on mode
+                        if dataset_name is not None:  # Multi-dataset mode
+                            self.norm_growth_results[dataset_name][model_name][pair_idx].append(norm_ratio)
+                        else:  # Single dataset mode
+                            self.norm_growth_results[model_name][pair_idx].append(norm_ratio)
+                        
+                        # Compute cosine similarity
+                        # Need to reshape for batch and position-wise calculation
+                        batch_size, seq_len, hidden_dim = input_act.shape
+                        
+                        # Reshape to (batch_size * seq_len, hidden_dim)
+                        input_flat = input_act.reshape(-1, hidden_dim)
+                        output_flat = output_act.reshape(-1, hidden_dim)
+                        
+                        # Compute cosine similarity for all tokens at once
+                        cos_sim = torch.nn.functional.cosine_similarity(input_flat, output_flat, dim=1)
+                        
+                        # Reshape back to (batch_size, seq_len)
+                        cos_sim = cos_sim.reshape(batch_size, seq_len)
+                        
+                        # Store results based on mode
+                        if dataset_name is not None:  # Multi-dataset mode
+                            self.cosine_sim_results[dataset_name][model_name][pair_idx].append(cos_sim)
+                        else:  # Single dataset mode
+                            self.cosine_sim_results[model_name][pair_idx].append(cos_sim)
+    
     def plot_norms(self, save_path=None):
         """
-        Plot layer norms across layers for each model, separating first token position and other positions.
+        Plot layer norms across layers for each model and dataset.
         
         Args:
             save_path: Path to save the plot, or None to display
+            
+        Returns:
+            matplotlib.figure.Figure: The figure object
         """
-        if self.results is None:
-            print("No results available. Please run analysis first.")
-            return
+        # Extract hook labels
+        _, _, hook_names, hook_labels = self._get_hook_pairs_and_labels()
+        x_labels = [hook_labels[hook] for hook in hook_names]
         
-        # Create a 1x2 grid: columns for first token and other tokens
-        if self.last_token_only:
-            fig, axes = plt.subplots(1, 1, figsize=(8, 8))
-        else:
-            fig, axes = plt.subplots(1, 2, figsize=(20, 8))
-        
-        # Define simplified hook labels for x-axis
-        hook_mapping = {
-            'hook_embed': 'Embed',
-            'hook_pos_embed': 'Embed + Pos'
-        }
-        
-        # Add transformer block mappings
-        for i in range(12):  # Assuming 12 layers for GPT-2 small
-            hook_mapping[f'blocks.{i}.hook_resid_mid'] = f'Resid_mid_{i}'
-            hook_mapping[f'blocks.{i}.hook_resid_post'] = f'Resid_post_{i}'
-        
-        # Extract all common hook names
-        first_model_name = self.model_names[0]
-        common_hooks = list(self.results[first_model_name].keys())
-        
-        # Sort hooks to ensure logical progression
-        common_hooks.sort(key=lambda x: (
-            0 if 'embed' in x else 
-            1 if 'blocks' in x else 
-            2,
-            int(x.split('.')[1]) if 'blocks' in x and '.' in x else 0,
-            0 if 'resid_mid' in x else 1 if 'resid_post' in x else 0
-        ))
-        
-        # Get simplified labels for plotting
-        x_labels = []
-        for hook in common_hooks:
-            for key, value in hook_mapping.items():
-                if key in hook:
-                    x_labels.append(value)
-                    break
-
+        # Define positions for analysis
         if self.last_token_only:
             positions = [('first', 'Last Token Norm')]
         else:
             positions = [('first', 'First Token Norm'), ('others', 'Other Token Norms')]
-
-        # First, calculate global min and max values for consistent y-axis scaling
-        global_min = float('inf')
-        global_max = float('-inf')
         
-        for pos_idx, (pos_key, pos_title) in enumerate(positions):
+        if self.multi_dataset:
+            # Create a figure with a subplot for each dataset
+            n_datasets = len(self.dataset_names)
+            n_positions = len(positions)
+            fig, axes = plt.subplots(n_positions, n_datasets, 
+                                     figsize=(6 * n_datasets, 5 * n_positions),
+                                     squeeze=False)
+            
+            # Calculate global min and max for consistent y-axis
+            global_min = float('inf')
+            global_max = float('-inf')
+            
+            for dataset_idx, dataset_name in enumerate(self.dataset_names):
+                for pos_idx, (pos_key, pos_title) in enumerate(positions):
+                    ax = axes[pos_idx, dataset_idx]
+                    
+                    for model_name in self.model_names:
+                        model_data = self.l2_norms[dataset_name][model_name]
+                        
+                        # Collect mean and std for each hook point
+                        means = []
+                        stds = []
+                        
+                        for hook in hook_names:
+                            if hook in model_data:
+                                # Concatenate all batches
+                                all_values = torch.cat(model_data[hook], dim=0)
+                                
+                                # Split by position
+                                if pos_key == 'first':
+                                    # First token position only
+                                    position_values = all_values[:, 0]
+                                else:
+                                    # All other positions
+                                    position_values = all_values[:, 1:].reshape(-1)
+                                
+                                # Compute mean and std
+                                mean = position_values.mean().item()
+                                std = position_values.std().item()
+                                
+                                means.append(mean)
+                                stds.append(std)
+
+                                # Update global min/max
+                                global_min = min(global_min, mean - std)
+                                global_max = max(global_max, mean + std)
+                        
+                        # Plot with shaded uncertainty region
+                        x = np.arange(len(means))
+                        ax.plot(x, means, 'o-', label=model_name, color=self.model_colors[model_name])
+                        ax.fill_between(x, 
+                                       [m - s for m, s in zip(means, stds)],
+                                       [m + s for m, s in zip(means, stds)],
+                                       alpha=0.2, color=self.model_colors[model_name])
+                    
+                    # Set labels and title
+                    ax.set_xlabel('Layer')
+                    ax.set_ylabel('L2 Norm')
+                    ax.set_title(f'{dataset_name} - {pos_title}')
+                    ax.set_xticks(np.arange(len(x_labels)))
+                    ax.set_xticklabels(x_labels, rotation=45, ha='right')
+                    ax.grid(True, linestyle='--', alpha=0.7)
+                    
+                    # Add legend to the first subplot only to avoid redundancy
+                    if dataset_idx == 0 and pos_idx == 0:
+                        ax.legend()
+            
+            # Set consistent y-axis limits for all subplots
+            for ax_row in axes:
+                for ax in ax_row:
+                    ax.set_ylim(global_min * 0.9, global_max * 1.1)
+        
+        else:
+            # Create figure based on last_token_only setting (backward compatibility)
             if self.last_token_only:
-                ax = axes
+                fig, axes = plt.subplots(1, 1, figsize=(8, 8))
+                axes = np.array([[axes]])  # Make it 2D for consistent indexing
             else:
-                ax = axes[pos_idx]
+                fig, axes = plt.subplots(1, 2, figsize=(20, 8))
+                axes = axes.reshape(1, -1)  # Make it 2D for consistent indexing
+
+            # Calculate global min and max values for consistent y-axis scaling
+            global_min = float('inf')
+            global_max = float('-inf')
             
-            for model_name in self.model_names:
-                model_data = self.results[model_name]
+            for pos_idx, (pos_key, pos_title) in enumerate(positions):
+                ax = axes[0, pos_idx]
                 
-                # Collect mean and std for each hook point
-                means = []
-                stds = []
+                for model_name in self.model_names:
+                    model_data = self.l2_norms[model_name]
+                    
+                    # Collect mean and std for each hook point
+                    means = []
+                    stds = []
+                    
+                    for hook in hook_names:
+                        if hook in model_data:
+                            # Concatenate all batches
+                            all_values = torch.cat(model_data[hook], dim=0)
+                            
+                            # Split by position
+                            if pos_key == 'first':
+                                # First token position only
+                                position_values = all_values[:, 0]
+                            else:
+                                # All other positions
+                                position_values = all_values[:, 1:].reshape(-1)
+                            
+                            # Compute mean and std
+                            mean = position_values.mean().item()
+                            std = position_values.std().item()
+                            
+                            means.append(mean)
+                            stds.append(std)
+
+                            # Update global min/max
+                            global_min = min(global_min, mean - std)
+                            global_max = max(global_max, mean + std)
+                    
+                    # Plot with shaded uncertainty region
+                    x = np.arange(len(means))
+                    ax.plot(x, means, 'o-', label=model_name, color=self.model_colors[model_name])
+                    ax.fill_between(x, 
+                                   [m - s for m, s in zip(means, stds)],
+                                   [m + s for m, s in zip(means, stds)],
+                                   alpha=0.2, color=self.model_colors[model_name])
                 
-                for hook in common_hooks:
-                    if hook in model_data:
-                        # Concatenate all batches
-                        all_values = torch.cat(model_data[hook], dim=0)
+                # Set labels and title
+                ax.set_xlabel('Layer')
+                ax.set_ylabel('L2 Norm')
+                ax.set_title(f'{pos_title}')
+                ax.set_xticks(np.arange(len(x_labels)))
+                ax.set_xticklabels(x_labels, rotation=45, ha='right')
+                ax.grid(True, linestyle='--', alpha=0.7)
+                ax.legend()
+
+                # Set consistent y-axis limits for both subplots
+                ax.set_ylim(global_min * 0.9, global_max * 1.1)
+        
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(save_path, dpi=200)
+        else:
+            plt.show()
+        
+        return fig
+    
+    def plot_cosine_similarity(self, save_path=None):
+        """
+        Plot the cosine similarity between consecutive layers.
+    
+        Args:
+            save_path: Path to save the plot, or None to display
+    
+        Returns:
+            matplotlib.figure.Figure: The figure object
+        """
+        # Get pairs and their labels directly
+        pairs, pair_labels, _, _ = self._get_hook_pairs_and_labels()
+        x_labels = pair_labels
+    
+        if self.last_token_only:
+            positions = [('first', 'Last Token Cosine Similarity')]
+        else:
+            positions = [('first', 'First Token Cosine Similarity'), ('others', 'Other Token Cosine Similarity')]
+    
+        if self.multi_dataset:
+            # Create a figure with a subplot for each dataset
+            n_datasets = len(self.dataset_names)
+            n_positions = len(positions)
+            fig, axes = plt.subplots(n_positions, n_datasets, 
+                                     figsize=(6 * n_datasets, 5 * n_positions),
+                                     squeeze=False)
+            
+            for dataset_idx, dataset_name in enumerate(self.dataset_names):
+                for pos_idx, (pos_key, pos_title) in enumerate(positions):
+                    ax = axes[pos_idx, dataset_idx]
+                    
+                    for model_name in self.model_names:
+                        # Collect cosine similarities for each pair
+                        cos_sims_mean = []
+                        cos_sims_std = []
                         
-                        # Split by position
-                        if pos_key == 'first':
-                            # First token position only
-                            position_values = all_values[:, 0]
+                        for pair_idx in range(len(pairs)):
+                            # Check if we have data for this pair
+                            if pair_idx in self.cosine_sim_results[dataset_name][model_name] and self.cosine_sim_results[dataset_name][model_name][pair_idx]:
+                                # Concatenate all batches
+                                all_sims = torch.cat(self.cosine_sim_results[dataset_name][model_name][pair_idx], dim=0)
+                                
+                                # Split by position
+                                if pos_key == 'first':
+                                    # First token position only
+                                    position_sims = all_sims[:, 0]
+                                else:
+                                    # All other positions
+                                    position_sims = all_sims[:, 1:].reshape(-1)
+                                
+                                # Compute mean and std
+                                mean = position_sims.mean().item()
+                                std = position_sims.std().item()
+                            else:
+                                # No data for this pair, use NaN to skip in plot
+                                print(f"Warning: No data for {dataset_name}/{model_name} at pair_idx {pair_idx} ({pairs[pair_idx]})")
+                                mean = float('nan')
+                                std = float('nan')
+                            
+                            cos_sims_mean.append(mean)
+                            cos_sims_std.append(std)
+                        
+                        # Filter out NaN values for plotting
+                        x = []
+                        means = []
+                        stds = []
+                        for i, (mean, std) in enumerate(zip(cos_sims_mean, cos_sims_std)):
+                            if not np.isnan(mean) and not np.isnan(std):
+                                x.append(i)
+                                means.append(mean)
+                                stds.append(std)
+                        
+                        # Plot with shaded uncertainty region
+                        ax.plot(x, means, 'o-', label=model_name, color=self.model_colors[model_name])
+                        ax.fill_between(x,
+                                       [max(0, m - s) for m, s in zip(means, stds)],  # Ensure lower bound >= 0
+                                       [min(1, m + s) for m, s in zip(means, stds)],  # Ensure upper bound <= 1
+                                       alpha=0.2, color=self.model_colors[model_name])
+                    
+                    # Set labels and title
+                    ax.set_xlabel('Layer Output')
+                    ax.set_ylabel('Cosine Similarity')
+                    ax.set_title(f'{dataset_name} - {pos_title}')
+                    
+                    # Set x-ticks
+                    ax.set_xticks(np.arange(len(x_labels)))
+                    ax.set_xticklabels(x_labels, rotation=45, ha='right')
+                    
+                    ax.grid(True, linestyle='--', alpha=0.7)
+                    
+                    # Add legend to the first subplot only
+                    if dataset_idx == 0 and pos_idx == 0:
+                        ax.legend()
+                    
+                    # Set y-axis limits between 0 and 1
+                    ax.set_ylim(0, 1)
+        
+        else:
+            # Create a figure (backward compatibility)
+            if self.last_token_only:
+                fig, axes = plt.subplots(1, 1, figsize=(14, 8))
+                axes = np.array([[axes]])
+            else:
+                fig, axes = plt.subplots(1, 2, figsize=(28, 8))
+                axes = axes.reshape(1, -1)
+            
+            # Compute cosine similarity for each model and pair
+            for pos_idx, (pos_key, pos_title) in enumerate(positions):
+                ax = axes[0, pos_idx]
+                
+                for model_name in self.model_names:
+                    # Collect cosine similarities for each pair
+                    cos_sims_mean = []
+                    cos_sims_std = []
+                    
+                    for pair_idx in range(len(pairs)):
+                        if pair_idx in self.cosine_sim_results[model_name] and self.cosine_sim_results[model_name][pair_idx]:
+                            # Concatenate all batches
+                            all_sims = torch.cat(self.cosine_sim_results[model_name][pair_idx], dim=0)
+                            
+                            # Split by position
+                            if pos_key == 'first':
+                                # First token position only
+                                position_sims = all_sims[:, 0]
+                            else:
+                                # All other positions
+                                position_sims = all_sims[:, 1:].reshape(-1)
+                            
+                            # Compute mean and std
+                            mean = position_sims.mean().item()
+                            std = position_sims.std().item()
                         else:
-                            # All other positions
-                            position_values = all_values[:, 1:].reshape(-1)
+                            # No data for this pair, use NaN to skip in plot
+                            print(f"Warning: No data for {model_name} at pair_idx {pair_idx} ({pairs[pair_idx]})")
+                            mean = float('nan')
+                            std = float('nan')
                         
-                        # Compute mean and std
-                        mean = position_values.mean().item()
-                        std = position_values.std().item()
-                        
-                        means.append(mean)
-                        stds.append(std)
-
-                        # Update global min/max
-                        global_min = min(global_min, mean - std)
-                        global_max = max(global_max, mean + std)
+                        cos_sims_mean.append(mean)
+                        cos_sims_std.append(std)
+                    
+                    # Filter out NaN values for plotting
+                    x = []
+                    means = []
+                    stds = []
+                    for i, (mean, std) in enumerate(zip(cos_sims_mean, cos_sims_std)):
+                        if not np.isnan(mean) and not np.isnan(std):
+                            x.append(i)
+                            means.append(mean)
+                            stds.append(std)
+                    
+                    # Plot with shaded uncertainty region
+                    ax.plot(x, means, 'o-', label=model_name, color=self.model_colors[model_name])
+                    ax.fill_between(x,
+                                   [max(0, m - s) for m, s in zip(means, stds)],  # Ensure lower bound >= 0
+                                   [min(1, m + s) for m, s in zip(means, stds)],  # Ensure upper bound <= 1
+                                   alpha=0.2, color=self.model_colors[model_name])
                 
-                # Plot with shaded uncertainty region
-                x = np.arange(len(means))
-                ax.plot(x, means, 'o-', label=model_name, color=self.model_colors[model_name])
-                ax.fill_between(x, 
-                               [m - s for m, s in zip(means, stds)],
-                               [m + s for m, s in zip(means, stds)],
-                               alpha=0.2, color=self.model_colors[model_name])
-            
-            # Set labels and title
-            ax.set_xlabel('Layer')
-            ax.set_ylabel('L2 Norn')
-            ax.set_title(f'L2 Norm - {pos_title}')
-            ax.set_xticks(np.arange(len(x_labels)))
-            ax.set_xticklabels(x_labels, rotation=45, ha='right')
-            ax.grid(True, linestyle='--', alpha=0.7)
-            ax.legend()
+                # Set labels and title
+                ax.set_xlabel('Layer Output')
+                ax.set_ylabel('Cosine Similarity')
+                ax.set_title(f'{pos_title}')
+                
+                # Set x-ticks
+                ax.set_xticks(np.arange(len(x_labels)))
+                ax.set_xticklabels(x_labels, rotation=45, ha='right')
+                
+                ax.grid(True, linestyle='--', alpha=0.7)
+                ax.legend()
+                
+                # Set y-axis limits between 0 and 1
+                ax.set_ylim(0, 1)
+    
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(save_path, dpi=200)
+        else:
+            plt.show()
+    
+        return fig
 
-            # Set consistent y-axis limits for both subplots
-            ax.set_ylim(global_min * 0.9, global_max * 1.1)
+    def plot_norm_growth(self, save_path=None):
+        """
+        Plot the L2 norm growth ratio between consecutive layers.
+        
+        Args:
+            save_path: Path to save the plot, or None to display
+            
+        Returns:
+            matplotlib.figure.Figure: The figure object
+        """
+        # Get hook pairs and labels
+        pairs, pair_labels, _, _ = self._get_hook_pairs_and_labels()
+        x_labels = pair_labels
+        
+        if self.last_token_only:
+            positions = [('first', 'Last Token Norm Growth')]
+        else:
+            positions = [('first', 'First Token Norm Growth'), ('others', 'Other Token Norm Growth')]
+        
+        if self.multi_dataset:
+            # Create a figure with a subplot for each dataset
+            n_datasets = len(self.dataset_names)
+            n_positions = len(positions)
+            fig, axes = plt.subplots(n_positions, n_datasets,
+                                     figsize=(6 * n_datasets, 5 * n_positions),
+                                     squeeze=False)
+            
+            # Calculate global min and max for consistent y-axis
+            global_min = float('inf')
+            global_max = float('-inf')
+            
+            for dataset_idx, dataset_name in enumerate(self.dataset_names):
+                for pos_idx, (pos_key, pos_title) in enumerate(positions):
+                    ax = axes[pos_idx, dataset_idx]
+                    
+                    for model_name in self.model_names:
+                        # Collect norm growth ratios for each pair
+                        growth_ratios_mean = []
+                        growth_ratios_std = []
+                        
+                        for pair_idx in range(len(pairs)):
+                            # Check if we have data for this pair
+                            if pair_idx in self.norm_growth_results[dataset_name][model_name] and self.norm_growth_results[dataset_name][model_name][pair_idx]:
+                                # Concatenate all batches
+                                all_ratios = torch.cat(self.norm_growth_results[dataset_name][model_name][pair_idx], dim=0)
+                                
+                                # Split by position
+                                if pos_key == 'first':
+                                    # First token position only
+                                    position_ratios = all_ratios[:, 0]
+                                else:
+                                    # All other positions
+                                    position_ratios = all_ratios[:, 1:].reshape(-1)
+                                
+                                # Compute mean and std
+                                mean = position_ratios.mean().item()
+                                std = position_ratios.std().item()
+                            else:
+                                # No data for this pair, use NaN to skip in plot
+                                print(f"Warning: No data for {dataset_name}/{model_name} at pair_idx {pair_idx} ({pairs[pair_idx]})")
+                                mean = float('nan')
+                                std = float('nan')
+                            
+                            growth_ratios_mean.append(mean)
+                            growth_ratios_std.append(std)
+                            
+                            # Update global min/max if we have valid data
+                            if not np.isnan(mean) and not np.isnan(std):
+                                global_min = min(global_min, mean - std)
+                                global_max = max(global_max, mean + std)
+                        
+                        # Filter out NaN values for plotting
+                        x = []
+                        means = []
+                        stds = []
+                        for i, (mean, std) in enumerate(zip(growth_ratios_mean, growth_ratios_std)):
+                            if not np.isnan(mean) and not np.isnan(std):
+                                x.append(i)
+                                means.append(mean)
+                                stds.append(std)
+                        
+                        # Plot with shaded uncertainty region
+                        ax.plot(x, means, 'o-', label=model_name, color=self.model_colors[model_name])
+                        ax.fill_between(x, 
+                                       [m - s for m, s in zip(means, stds)],
+                                       [m + s for m, s in zip(means, stds)],
+                                       alpha=0.2, color=self.model_colors[model_name])
+                    
+                    # Add a horizontal line at y=1 for reference (no growth)
+                    ax.axhline(y=1.0, color='black', linestyle='--', alpha=0.5)
+                    
+                    # Set labels and title
+                    ax.set_xlabel('Layer Transition')
+                    ax.set_ylabel('L2 Norm Growth Ratio (Output/Input)')
+                    ax.set_title(f'{dataset_name} - {pos_title}')
+                    ax.set_xticks(np.arange(len(x_labels)))
+                    ax.set_xticklabels(x_labels, rotation=45, ha='right')
+                    ax.grid(True, linestyle='--', alpha=0.7)
+                    
+                    # Add legend to the first subplot only
+                    if dataset_idx == 0 and pos_idx == 0:
+                        ax.legend()
+            
+            # Set consistent y-axis limits for all subplots
+            # Set consistent y-axis limits if we have valid data
+            if global_min != float('inf') and global_max != float('-inf'):
+                for ax_row in axes:
+                    for ax in ax_row:
+                        ax.set_ylim(max(0.5, global_min * 0.9), min(2.0, global_max * 1.1))
+        
+        else:
+            # Backward compatibility for single dataset
+            # Create a figure
+            if self.last_token_only:
+                fig, axes = plt.subplots(1, 1, figsize=(12, 8))
+                axes = np.array([[axes]])
+            else:
+                fig, axes = plt.subplots(1, 2, figsize=(24, 8))
+                axes = axes.reshape(1, -1)
+            
+            # First, calculate global min and max values for consistent y-axis scaling
+            global_min = float('inf')
+            global_max = float('-inf')
+            
+            for pos_idx, (pos_key, pos_title) in enumerate(positions):
+                ax = axes[0, pos_idx]
+                
+                for model_name in self.model_names:
+                    # Collect norm growth ratios for each pair
+                    growth_ratios_mean = []
+                    growth_ratios_std = []
+                    
+                    for pair_idx in range(len(pairs)):
+                        # Check if we have data for this pair
+                        if pair_idx in self.norm_growth_results[model_name] and self.norm_growth_results[model_name][pair_idx]:
+                            # Concatenate all batches
+                            all_ratios = torch.cat(self.norm_growth_results[model_name][pair_idx], dim=0)
+                            
+                            # Split by position
+                            if pos_key == 'first':
+                                # First token position only
+                                position_ratios = all_ratios[:, 0]
+                            else:
+                                # All other positions
+                                position_ratios = all_ratios[:, 1:].reshape(-1)
+                            
+                            # Compute mean and std
+                            mean = position_ratios.mean().item()
+                            std = position_ratios.std().item()
+                        else:
+                            # No data for this pair, use NaN to skip in plot
+                            print(f"Warning: No data for {model_name} at pair_idx {pair_idx} ({pairs[pair_idx]})")
+                            mean = float('nan')
+                            std = float('nan')
+                        
+                        growth_ratios_mean.append(mean)
+                        growth_ratios_std.append(std)
+                        
+                        # Update global min/max if we have valid data
+                        if not np.isnan(mean) and not np.isnan(std):
+                            global_min = min(global_min, mean - std)
+                            global_max = max(global_max, mean + std)
+                    
+                    # Filter out NaN values for plotting
+                    x = []
+                    means = []
+                    stds = []
+                    for i, (mean, std) in enumerate(zip(growth_ratios_mean, growth_ratios_std)):
+                        if not np.isnan(mean) and not np.isnan(std):
+                            x.append(i)
+                            means.append(mean)
+                            stds.append(std)
+                    
+                    # Plot with shaded uncertainty region
+                    ax.plot(x, means, 'o-', label=model_name, color=self.model_colors[model_name])
+                    ax.fill_between(x, 
+                                   [m - s for m, s in zip(means, stds)],
+                                   [m + s for m, s in zip(means, stds)],
+                                   alpha=0.2, color=self.model_colors[model_name])
+                
+                # Add a horizontal line at y=1 for reference (no growth)
+                ax.axhline(y=1.0, color='black', linestyle='--', alpha=0.5)
+                
+                # Set labels and title
+                ax.set_xlabel('Layer Transition')
+                ax.set_ylabel('L2 Norm Growth Ratio (Output/Input)')
+                ax.set_title(f'{pos_title}')
+                ax.set_xticks(np.arange(len(x_labels)))
+                ax.set_xticklabels(x_labels, rotation=45, ha='right')
+                ax.grid(True, linestyle='--', alpha=0.7)
+                ax.legend()
+
+                # Set consistent y-axis limits for both subplots
+                ax.set_ylim(global_min * 0.9, global_max * 1.1)
         
         plt.tight_layout()
         if save_path:
@@ -289,151 +941,25 @@ class ResidualNorms:
         
         return fig
 
-    def create_layer_norm_video(self, output_path, fps=1):
-        """
-        Create a video of layer norms across token positions for each model.
-        Each frame shows a different layer/hook point.
-        
-        Args:
-            output_path: Path to save the video
-            fps: Frames per second for the video
-        """
-        if self.last_token_only:
-            return f"Cannot analyse positional residual stream variations, last_token_only=True"
-
-        # Get all hook names in order
-        model = self.model_factory.models[self.model_names[0]]
-        hook_names = self.get_hook_names(model)
-        
-        # Set up the figure with a single plot
-        fig, ax = plt.subplots(figsize=(12, 8))
-        
-        # Initialize lines and fill collections for each model
-        lines = []
-        fills = []
-        max_val = 0  # For scaling
-        min_val = float('inf')  # For scaling
-        
-        # Prepare data and scale for each model
-        for model_name in self.model_names:
-            model_data = self.results[model_name]
-            
-            for hook in hook_names:
-                if hook in model_data:
-                    # Get sequence length from first example
-                    seq_len = model_data[hook][0].shape[1]
-                    
-                    # Compute mean and std across all sequences
-                    all_values = torch.cat(model_data[hook], dim=0)
-                    mean_values = all_values.mean(dim=0).numpy()
-                    std_values = all_values.std(dim=0).numpy()
-                    
-                    # Update min/max for consistent scaling
-                    max_val = max(max_val, (mean_values + std_values).max())
-                    min_val = min(min_val, (mean_values - std_values).min())
-            
-            # Create initial line with label
-            line, = ax.plot([], [], '-', linewidth=2, color=self.model_colors[model_name], label=model_name)
-            lines.append(line)
-            
-            # Create initial fill for standard deviation
-            fill = ax.fill_between([], [], [], alpha=0.2, color=self.model_colors[model_name])
-            fills.append(fill)
-        
-        # Set up axes with padding for std fills
-        ax.set_xlim(0, 10)
-        ax.set_ylim(min_val * 0.7, max_val * 1.3)
-        ax.set_yscale('log')
-        ax.set_xlabel("Token Position")
-        ax.set_ylabel("L2 Norm")
-        ax.grid(True, linestyle='--', alpha=0.7)
-        ax.legend()
-        
-        # Make a simplified hook name mapping for titles
-        hook_titles = {}
-        for hook in hook_names:
-            if 'hook_embed' in hook:
-                hook_titles[hook] = 'Embeddings'
-            elif 'blocks' in hook:
-                parts = hook.split('.')
-                layer_num = parts[1]
-                if 'resid_mid' in hook:
-                    hook_titles[hook] = f'Layer {layer_num} (Mid)'
-                else:
-                    hook_titles[hook] = f'Layer {layer_num} (Post)'
-            elif 'ln_final' in hook:
-                hook_titles[hook] = 'Final Layer Norm'
-            else:
-                hook_titles[hook] = hook
-        
-        # Animation function
-        def init():
-            for line in lines:
-                line.set_data([], [])
-            for fill in fills:
-                fill.set_visible(False)
-            return lines + fills
-        
-        def animate(frame):
-            hook = hook_names[frame]
-            ax.set_title(f"Residual L2 Norms Across Token Positions - {hook_titles[hook]}")
-            
-            for i, model_name in enumerate(self.model_names):
-                if hook in self.results[model_name]:
-                    all_values = torch.cat(self.results[model_name][hook], dim=0)
-                    mean_values = all_values.mean(dim=0).numpy()
-                    std_values = all_values.std(dim=0).numpy()
-                    x = np.arange(len(mean_values))
-                    
-                    # Update line
-                    lines[i].set_data(x, mean_values)
-                    
-                    # Update fill
-                    fills[i].remove()
-                    fills[i] = ax.fill_between(
-                        x, 
-                        mean_values - std_values, 
-                        mean_values + std_values, 
-                        alpha=0.2, 
-                        color=self.model_colors[model_name]
-                    )
-            
-            return lines + [fill for fill in fills if fill is not None]
-        
-        # Create animation
-        ani = animation.FuncAnimation(
-            fig, animate, frames=len(hook_names),
-            init_func=init, blit=False, interval=1000/fps
-        )
-        
-        # Save animation
-        ani.save(output_path, writer='ffmpeg', fps=fps)
-        plt.close(fig)
-        
-        print(f"Video saved to {output_path}")
-
-
 if __name__ == '__main__':
-    data_path = '/workspace/removing-layer-norm/mech_interp/inference_logs/dataset_apollo-pile_samples_5000_seqlen_512_prepend_False/inference_results.parquet'
-    #data_path = 'divergences/convergent.parquet'
-    # Initialize the analyzer with your dataset
-    analyzer = ResidualNorms(
-        data_path=data_path,  # Path to your parquet file
-        model_dir="../models",                   # Directory with your models
-        random_seed=42,                          # For reproducible sampling
-        last_token_only=False,
-        agg=True,
-        #num_samples=20000
-    )
-    
-    output_dir = 'norms'
+    #data_paths = {
+    #    'noLN diverges': 'divergences/divergent.parquet',
+    #    'all similar': 'divergences/convergent.parquet'
+    #}
+    data_paths = '/workspace/removing-layer-norm/mech_interp/inference_logs/dataset_luca-pile_samples_5000_seqlen_512_prepend_False/inference_results.parquet'
+    output_dir = 'norms/all_data'
     # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)
-
     
-    # Run the analysis to collect norms at all hook points
-    analyzer.run_analysis(batch_size=1)  # Process 8 examples at a time
+    analyzer = ResidualNorms(
+        data_paths=data_paths,
+        model_dir="../models",
+        last_token_only=False,
+        agg=True
+    )
     
-    # Generate the layer norm plots
-    fig = analyzer.plot_norms(os.path.join(output_dir, 'norms.png'))
-    analyzer.create_layer_norm_video(os.path.join(output_dir, 'video.gif'))
+    # Run analysis and generate plots
+    analyzer.run_analysis()
+    analyzer.plot_norms(os.path.join(output_dir, "l2_norms.png"))
+    analyzer.plot_norm_growth(os.path.join(output_dir, "l2_norm_growth.png"))
+    analyzer.plot_cosine_similarity(os.path.join(output_dir, "cosine_similarity.png"))

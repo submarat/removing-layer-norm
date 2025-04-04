@@ -7,13 +7,14 @@ from typing import Dict, List, Union, Optional, Any, Callable
 class DataLoader:
     # Dataset mapping dictionary for easier maintenance and extension
     DATASET_MAPPINGS: Dict[str, str] = {
+        'luca-pile': 'lucabaroni/apollo-pile-filtered-10k',
         'apollo-pile': 'apollo-research/monology-pile-uncopyrighted-tokenizer-gpt2',
         'apollo-owt': 'apollo-research/Skylion007-openwebtext-tokenizer-gpt2'
     }
     
     def __init__(
         self, 
-        dataset_name: str = 'apollo-pile',
+        dataset_name: str = 'luca-pile',
         batch_size: int = 10,
         max_context: int = 1024,
         num_samples: int = 5000,
