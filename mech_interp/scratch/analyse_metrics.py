@@ -65,51 +65,37 @@ class MetricsSummary:
         print(f"Filtered data to {len(self.df)} examples with sequence length >= {min_length}")
 
 
-    def get_aggregate_metrics(self):
+    def get_aggregate_metrics(self, agg_metric='ce_baseline'):
         """
-        Aggregate metrics accross all subsequences to get overall average results
+        Aggregate all subsequences metrics of original sequence to one, based on the highest agg_metric
+
+        Parameters:
+        --------
+        agg_metric : column name in dataframe to use as reference for aggregation
         
         Returns:
         --------
         Aggregated df
         """
-        # Define the metrics columns to aggregate
-        metric_columns = [
-            'ce_baseline', 'ce_finetuned', 'ce_noLN',
-            'ce_diff_baseline_vs_finetuned', 'jsd_baseline_vs_finetuned', 'topk_jsd_baseline_vs_finetuned',
-            'ce_diff_baseline_vs_noLN', 'jsd_baseline_vs_noLN', 'topk_jsd_baseline_vs_noLN',
-            'ce_diff_finetuned_vs_noLN', 'jsd_finetuned_vs_noLN', 'topk_jsd_finetuned_vs_noLN'
-        ]
-        
-        # Create a temporary function to get the row with the longest sequence for each group
-        def get_longest_sequence_info(group):
-            # Get the index of the row with the maximum sequence_length
-            idx_max_length = group['sequence_length'].idxmax()
-            # Return a Series with the relevant information from that row
-            return pd.Series({
-                'full_sequence': group.loc[idx_max_length, 'full_sequence'],
-                'last_token': group.loc[idx_max_length, 'last_token'],
-                'next_token': group.loc[idx_max_length, 'next_token'],
-                'sequence_length': group.loc[idx_max_length, 'sequence_length']
-            })
-        # Group by original_idx and calculate mean for all metrics
-        # For full_sequence, we'll take the longest one
-        aggregated_metrics = self.df.groupby('original_idx')[metric_columns].mean()
-        
-        # Find the longest full_sequence and corresponding tokens for each original_idx
-        longest_sequences_info = self.df.groupby('original_idx').apply(get_longest_sequence_info)
-        
-        # Combine the aggregated metrics with the longest sequences and their tokens
-        aggregated_df = aggregated_metrics.join(longest_sequences_info).reset_index()
-        
+        # Ensure the agg_metric exists in the dataframe
+        if agg_metric not in self.df.columns:
+            raise ValueError(f"Column '{agg_metric}' not found in dataframe")
+
+        # Function to select the row with maximum value in the specified column
+        def select_max_row(group):
+            return group.loc[group[agg_metric].idxmin()]
+
+        # For each original_idx, select the row with the maximum value in the specified column
+        aggregated_df = self.df.groupby('original_idx').apply(select_max_row).reset_index(drop=True)
+
         print(f"Original shape: {self.df.shape}")
         print(f"After aggregation: {aggregated_df.shape}")
-        
-        self.df = aggregated_df
 
+        self.df = aggregated_df
+       
 
     def plot_ce_histogram(self, bins : int = 50, alpha : float = 0.7,
-                          figsize: tuple = (12, 6), save_path: Optional[str] = None,
+                          figsize: tuple = (8, 6), save_path: Optional[str] = None,
                           logscale: bool = True):
         """
         Plot step histograms comparing CE loss across all three models.
@@ -135,25 +121,21 @@ class MetricsSummary:
         fig, ax = plt.subplots(figsize=figsize)
         
         for model in self.models:
+            mean_val = self.df[f'ce_{model}'].mean()
             ax.hist(
                 self.df[f'ce_{model}'],
                 bins=bins,
                 histtype='step',
                 linewidth=2,
                 alpha=alpha,
-                label=model,
+                label=f'{model}, mean: {mean_val:.3f}',
                 color=self.model_colors[model]
             )
-        
-        # Add mean lines
-        for model in self.models:
-            mean_val = self.df[f'ce_{model}'].mean()
             ax.axvline(
                 mean_val,
                 color=self.model_colors[model],
                 linestyle='--',
                 linewidth=1.5,
-                label=f'{model} mean: {mean_val:.4f}'
             )
         
         ax.set_title('Cross-Entropy Loss Distribution Across Models', fontsize=16)
@@ -174,7 +156,7 @@ class MetricsSummary:
 
 
     def plot_jsd_histograms(self, bins: int = 50, alpha: float = 0.7,
-                            figsize: tuple = (16, 6), save_path: Optional[str] = None,
+                            figsize: tuple = (8, 6), save_path: Optional[str] = None,
                             logscale: bool = True):
         """
         Plot a (1,2) subplot of histograms showing JSD and topk_JSD distributions
@@ -201,53 +183,37 @@ class MetricsSummary:
         model_pairs = [('baseline', 'finetuned'), ('baseline', 'noLN'), ('finetuned', 'noLN')]
         pair_colors = [self.colors[i] for i in range(len(model_pairs))]
         
-        fig, axes = plt.subplots(1, 2, figsize=figsize)
+        fig, axes = plt.subplots(1, 1, figsize=figsize)
         
         # Plot JSD histograms
         for i, (m1, m2) in enumerate(model_pairs):
             pair = f'{m1}_vs_{m2}'
-            label = f'{m1} vs {m2}'
-            
-            axes[0].hist(
+            mean_val = self.df[f'jsd_{pair}'].mean()
+            axes.hist(
                 self.df[f'jsd_{pair}'],
                 bins=bins,
                 histtype='step',
                 linewidth=2,
                 alpha=alpha,
-                label=label,
+                label=f'{pair}, mean: {mean_val:.3f}',
                 color=pair_colors[i]
-            )
-            
-            axes[1].hist(
-                self.df[f'topk_jsd_{pair}'],
-                bins=bins,
-                histtype='step',
-                linewidth=2,
-                alpha=alpha,
-                label=label,
-                color=pair_colors[i]
-            )
-        
+                )
+            axes.axvline(
+                mean_val,
+                color=pair_colors[i],
+                linestyle='--',
+                linewidth=1.5,
+                )
         # Set titles and labels
-        axes[0].set_title('Jensen-Shannon Divergence', fontsize=16)
-        axes[0].set_xlabel('JSD', fontsize=14)
-        axes[0].set_ylabel('Count', fontsize=14)
-        axes[0].legend(fontsize=12)
-        axes[0].grid(alpha=0.3)
+        axes.set_title('Jensen-Shannon Divergence', fontsize=16)
+        axes.set_xlabel('JSD', fontsize=14)
+        axes.set_ylabel('Count', fontsize=14)
+        axes.legend(fontsize=12)
+        axes.grid(alpha=0.3)
         
-        axes[1].set_title('Top-K Jensen-Shannon Divergence', fontsize=16)
-        axes[1].set_xlabel('Top-K JSD', fontsize=14)
-        axes[1].set_ylabel('Count', fontsize=14)
-        axes[1].legend(fontsize=12)
-        axes[1].grid(alpha=0.3)
         if logscale:
-            axes[0].set_yscale('log')
-            axes[0].set_ylabel('Count (log scale)', fontsize=14)
-            axes[1].set_yscale('log')
-            axes[1].set_ylabel('Count (log scale)', fontsize=14)
-
-        
-        plt.suptitle('Distribution of Divergence Metrics Across Model Comparisons', fontsize=18)
+            axes.set_yscale('log')
+            axes.set_ylabel('Count (log scale)', fontsize=14)
         plt.tight_layout()
         
         if save_path:
@@ -256,86 +222,130 @@ class MetricsSummary:
         return fig
 
 
-    def plot_jsd_scatterplots(self, figsize: tuple = (16, 8), alpha: float = 0.6, save_path: Optional[str] = None):
-        """
-        Plot a (1,2) subplot of scatterplots comparing JSD and topk_JSD metrics
-        between baseline_vs_finetuned and baseline_vs_noLN.
-        Points are colored by CE loss of noLN model.
-        
-        Parameters:
-        -----------
-        figsize : tuple, optional
-            Figure size (width, height)
-        alpha : float, optional
-            Transparency level for the scatter points
-        save_path : str, optional
-            Path to save the figure
+    def plot_jsd_scatterplots(self, figsize: tuple = (8, 6),
+                              alpha: float = 0.6, save_path: Optional[str] = None):
+            """
+            Plot a scatterplot comparing JSD
+            between baseline_vs_finetuned and baseline_vs_noLN.
+            Points are colored by CE loss of noLN model.
+           
+            Parameters:
+            -----------
+            figsize : tuple, optional
+                Figure size (width, height)
+            alpha : float, optional
+                Transparency level for the scatter points
+            save_path : str, optional
+                Path to save the figure
+                
+            Returns:
+            --------
+            matplotlib.figure.Figure
+                The generated figure
+            """
+            fig, axes = plt.subplots(1, 1, figsize=figsize)
             
-        Returns:
-        --------
-        matplotlib.figure.Figure
-            The generated figure
-        """
-        fig, axes = plt.subplots(1, 2, figsize=figsize)
-        
-        # Create a shared color normalization based on noLN CE loss
-        norm = Normalize(
-            vmin=self.df['ce_noLN'].min(),
-            vmax=np.percentile(self.df['ce_noLN'], 95)  # Cap at 95th percentile to avoid outliers
-            #vmax=self.df['ce_noLN'].max()
-        )
-        
-        # JSD scatterplot
-        sc1 = axes[0].scatter(
-            self.df['jsd_baseline_vs_finetuned'],
-            self.df['jsd_baseline_vs_noLN'],
-            c=self.df['ce_noLN'],
-            cmap='viridis',
-            alpha=alpha,
-            norm=norm,
-            s=25
-        )
-        
-        # Add diagonal line for reference
-        axes[0].plot([0, 1], [0, 1], 'k--', alpha=0.5)
-        
-        # topk_JSD scatterplot
-        sc2 = axes[1].scatter(
-            self.df['topk_jsd_baseline_vs_finetuned'],
-            self.df['topk_jsd_baseline_vs_noLN'],
-            c=self.df['ce_noLN'],
-            cmap='viridis',
-            alpha=alpha,
-            norm=norm,
-            s=25
-        )
-        
-        # Add diagonal line for reference
-        axes[1].plot([0, 1], [0, 1], 'k--', alpha=0.5)
-        
-        # Set titles and labels
-        axes[0].set_title('Jensen-Shannon Divergence Comparison', fontsize=16)
-        axes[0].set_xlabel('JSD: baseline vs finetuned', fontsize=14)
-        axes[0].set_ylabel('JSD: baseline vs noLN', fontsize=14)
-        axes[0].grid(alpha=0.3)
-        
-        axes[1].set_title('Top-K Jensen-Shannon Divergence Comparison', fontsize=16)
-        axes[1].set_xlabel('Top-K JSD: baseline vs finetuned', fontsize=14)
-        axes[1].set_ylabel('Top-K JSD: baseline vs noLN', fontsize=14)
-        axes[1].grid(alpha=0.3)
-        
-        # Add a shared colorbar
-        cbar_ax = fig.add_axes([0.92, 0.15, 0.02, 0.7])  # [left, bottom, width, height]
-        cbar = fig.colorbar(sc1, cax=cbar_ax)
-        cbar.set_label('CE Loss (noLN model)', fontsize=14)
-        
-        plt.suptitle('Comparison of Divergence Metrics Between Model Pairs', fontsize=18)
-        plt.tight_layout(rect=[0, 0, 0.9, 0.95])  # Adjust layout to make room for colorbar
-        
-        if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            # Create a shared color normalization based on noLN CE loss
+            if self.agg:
+                vmax = self.df['ce_finetuned'].max()
+            else:
+                vmax=np.percentile(self.df['ce_finetuned'], 95)  # Cap at 95th percentile to avoid outliers
+            norm = Normalize(vmin=self.df['ce_finetuned'].min(), vmax=vmax)
             
-        return fig
+            # JSD scatterplot
+            sc1 = axes.scatter(
+                self.df['jsd_baseline_vs_finetuned'],
+                self.df['jsd_baseline_vs_noLN'],
+                c=self.df['ce_noLN'],
+                cmap='viridis',
+                alpha=alpha,
+                norm=norm,
+                s=25
+            )
+            
+            # Add diagonal line for reference
+            axes.plot([0, self.df['jsd_baseline_vs_finetuned'].max()],
+                      [0, self.df['jsd_baseline_vs_noLN'].max()], 'k--', alpha=0.5)
+
+           
+            # Set titles and labels
+            axes.set_title('Jensen-Shannon Divergence Comparison', fontsize=16)
+            axes.set_xlabel('JSD: baseline vs finetuned', fontsize=14)
+            axes.set_ylabel('JSD: baseline vs noLN', fontsize=14)
+            axes.grid(alpha=0.3)
+            
+            # Add a shared colorbar
+            cbar_ax = fig.add_axes([0.92, 0.15, 0.02, 0.7])  # [left, bottom, width, height]
+            cbar = fig.colorbar(sc1, cax=cbar_ax)
+            cbar.set_label('CE Loss (noLN model)', fontsize=14)
+            
+            if save_path:
+                plt.savefig(save_path, dpi=300, bbox_inches='tight')
+                
+            return fig    
+
+
+
+    def plot_ce_scatterplots(self, figsize: tuple = (8, 6),
+                                  alpha: float = 0.6, save_path: Optional[str] = None):
+            """
+            Plot a scatterplot comparing CE loss
+            between baseline and noLN.
+            Points are colored by CE loss of finetuned model.
+            
+            Parameters:
+            -----------
+            figsize : tuple, optional
+                Figure size (width, height)
+            alpha : float, optional
+                Transparency level for the scatter points
+            save_path : str, optional
+                Path to save the figure
+                
+            Returns:
+            --------
+            matplotlib.figure.Figure
+                The generated figure
+            """
+            fig, axes = plt.subplots(1, 1, figsize=figsize)
+            
+            # Create a shared color normalization based on finetuned CE loss
+            if self.agg:
+                vmax = self.df['ce_finetuned'].max()
+            else:
+                vmax=np.percentile(self.df['ce_finetuned'], 95)  # Cap at 95th percentile to avoid outliers
+            norm = Normalize(vmin=self.df['ce_finetuned'].min(), vmax=vmax)
+            
+            # CE Loss scatterplot
+            sc1 = axes.scatter(
+                self.df['ce_baseline'],
+                self.df['ce_noLN'],
+                c=self.df['ce_finetuned'],
+                cmap='viridis',
+                alpha=alpha,
+                norm=norm,
+                s=25
+            )
+            
+            # Add diagonal line for reference
+            axes.plot([0, self.df['ce_baseline'].max()],
+                      [0, self.df['ce_noLN'].max()], 'k--', alpha=0.5)
+           
+            # Set titles and labels
+            axes.set_title('CE Loss comparison Comparison', fontsize=16)
+            axes.set_xlabel('CE Loss (baseline)', fontsize=14)
+            axes.set_ylabel('CE Loss (noLN)', fontsize=14)
+            axes.grid(alpha=0.3)
+            
+            # Add a shared colorbar
+            cbar_ax = fig.add_axes([0.92, 0.15, 0.02, 0.7])  # [left, bottom, width, height]
+            cbar = fig.colorbar(sc1, cax=cbar_ax)
+            cbar.set_label('CE Loss (finetuned model)', fontsize=14)
+            
+            if save_path:
+                plt.savefig(save_path, dpi=300, bbox_inches='tight')
+                
+            return fig    
 
 
     def plot_all(self, output_dir: Optional[str] = None):
@@ -354,7 +364,7 @@ class MetricsSummary:
         list
             List of paths to the generated figures
         """
-        metrics_str = 'agg' if self.agg else ''
+        metrics_str = '_agg' if self.agg else ''
 
         # If no output directory specified, use the directory of the parquet file
         if output_dir is None:
@@ -364,16 +374,21 @@ class MetricsSummary:
         os.makedirs(output_dir, exist_ok=True)
         
         # CE histogram
-        ce_path = os.path.join(output_dir, f'ce_histogram_{metrics_str}.png')
+        ce_path = os.path.join(output_dir, f'ce_histogram{metrics_str}.png')
         self.plot_ce_histogram(save_path=ce_path)
         
         # JSD histograms
-        jsd_path = os.path.join(output_dir, f'jsd_histograms_{metrics_str}.png')
+        jsd_path = os.path.join(output_dir, f'jsd_histograms{metrics_str}.png')
         self.plot_jsd_histograms(save_path=jsd_path)
         
         # JSD scatterplots
-        scatter_path = os.path.join(output_dir, f'jsd_scatterplots_{metrics_str}.png')
-        self.plot_jsd_scatterplots(save_path=scatter_path)
+        jsd_scatter_path = os.path.join(output_dir, f'jsd_scatterplots{metrics_str}.png')
+        self.plot_jsd_scatterplots(save_path=jsd_scatter_path)
+        
+        # CE scatterplots
+        ce_scatter_path = os.path.join(output_dir, f'ce_scatterplots{metrics_str}.png')
+        self.plot_ce_scatterplots(save_path=ce_scatter_path)
+       
         
         print(f"All figures saved to {output_dir}")
 
@@ -381,7 +396,7 @@ class MetricsSummary:
 # Example usage:
 if __name__ == "__main__":
     # Initialize with data path
-    data_path = '/workspace/removing-layer-norm/mech_interp/inference_logs/dataset_apollo-pile_samples_5000_seqlen_512_prepend_True/inference_results.parquet'
-    metrics_comparison = MetricsSummary(data_path, min_seq_length=50, agg=True)
+    data_path = '/workspace/removing-layer-norm/mech_interp/inference_logs/dataset_luca-pile_samples_5000_seqlen_512_prepend_False/inference_results.parquet'
+    metrics_comparison = MetricsSummary(data_path, agg=False)
     # Generate and save all plots
     metrics_comparison.plot_all('metrics')

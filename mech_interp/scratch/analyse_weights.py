@@ -85,17 +85,7 @@ class ModelWeights:
         # Calculate L2 norms for each embedding vector
         l2_norms = torch.norm(embed_matrix, dim=1)
         
-        # Calculate L1 norms for each embedding vector
-        l1_norms = torch.norm(embed_matrix, p=1, dim=1)
-        
-        # Calculate L1/L2 ratio
-        l1_l2_ratio = l1_norms / l2_norms
-        
-        return {
-            'l2_norms': l2_norms,
-            'l1_norms': l1_norms,
-            'l1_l2_ratio': l1_l2_ratio,
-        }
+        return l2_norms
    
 
     def get_pos_embedding_stats(self, model: HookedTransformer) -> Dict[str, torch.Tensor]:
@@ -118,20 +108,10 @@ class ModelWeights:
         # Calculate L2 norms for each positional embedding vector
         l2_norms = torch.norm(pos_embed_matrix, dim=1)
         
-        # Calculate L1 norms for each positional embedding vector
-        l1_norms = torch.norm(pos_embed_matrix, p=1, dim=1)
-        
-        # Calculate L1/L2 ratio
-        l1_l2_ratio = l1_norms / l2_norms
-        
-        return {
-            'l2_norms': l2_norms,
-            'l1_norms': l1_norms,
-            'l1_l2_ratio': l1_l2_ratio,
-        }
+        return l2_norms
 
 
-    def plot_embedding_stats(self, bins: int = 100, figsize: Tuple[int, int] = (16, 6),
+    def plot_embedding_stats(self, bins: int = 100, figsize: Tuple[int, int] = (10, 8),
                              log_scale: bool = True, save_path: Optional[str] = None):
         """
         Plot histograms of L2 norm and L1/L2 ratio for token embeddings across models.
@@ -152,7 +132,7 @@ class ModelWeights:
         matplotlib.figure.Figure
             The generated figure
         """
-        fig, axes = plt.subplots(1, 2, figsize=figsize)
+        fig, axes = plt.subplots(1, 1, figsize=figsize)
 
         # Get embedding stats for all models
         embedding_stats = {model_name: self.get_embedding_stats(model)
@@ -160,9 +140,9 @@ class ModelWeights:
 
         # Plot L2 norm histograms
         for model_name, stats in embedding_stats.items():
-            mean_l2 = stats['l2_norms'].mean().item()
-            axes[0].hist(
-                stats['l2_norms'].numpy(),
+            mean_l2 = stats.mean().item()
+            axes.hist(
+                stats.numpy(),
                 bins=bins,
                 histtype='step',
                 linewidth=2,
@@ -172,56 +152,28 @@ class ModelWeights:
             )
 
             # Add mean lines
-            axes[0].axvline(
+            axes.axvline(
                 mean_l2,
                 color=self.model_colors[model_name],
                 linestyle='--',
                 linewidth=1.5,
-                label=f'{model_name} mean: {mean_l2:.4f}'
             )
 
-        # Plot L1/L2 ratio histograms
-        for model_name, stats in embedding_stats.items():
-            mean_ratio = stats['l1_l2_ratio'].mean().item()
-            axes[1].hist(
-                stats['l1_l2_ratio'].numpy(),
-                bins=bins,
-                histtype='step',
-                linewidth=2,
-                alpha=0.7,
-                label=f'{model_name} mean: {mean_ratio:.4f}',
-                color=self.model_colors[model_name]
-            )
-
-            # Add mean lines
-            axes[1].axvline(
-                mean_ratio,
-                color=self.model_colors[model_name],
-                linestyle='--',
-                linewidth=1.5,
-            )
 
         # Set titles and labels
-        axes[0].set_title('Token Embedding L2 Norms', fontsize=16)
-        axes[0].set_xlabel('L2 Norm', fontsize=14)
-        axes[0].set_ylabel('Count', fontsize=14)
-        axes[0].legend(fontsize=12)
-        axes[0].grid(alpha=0.3)
-
-        axes[1].set_title('Token Embedding L1/L2 Ratio', fontsize=16)
-        axes[1].set_xlabel('L1/L2 Ratio', fontsize=14)
-        axes[1].set_ylabel('Count', fontsize=14)
-        axes[1].legend(fontsize=12)
-        axes[1].grid(alpha=0.3)
+        axes.set_title('Token Embedding L2 Norms', fontsize=16)
+        axes.set_xlabel('L2 Norm', fontsize=14)
+        axes.set_ylabel('Count', fontsize=14)
+        axes.legend(fontsize=12)
+        axes.grid(alpha=0.3)
 
         # Set log scale if requested
         if log_scale:
-            axes[0].set_yscale('log')
-            axes[0].set_ylabel('Count (log scale)', fontsize=14)
-            axes[1].set_yscale('log')
-            axes[1].set_ylabel('Count (log scale)', fontsize=14)
+            axes.set_yscale('log')
+            axes.set_ylabel('Count (log scale)', fontsize=14)
+            axes.set_yscale('log')
+            axes.set_ylabel('Count (log scale)', fontsize=14)
 
-        plt.suptitle('Token Embedding Statistics Across Models', fontsize=18)
         plt.tight_layout()
 
         if save_path:
@@ -230,7 +182,7 @@ class ModelWeights:
         return fig
 
 
-    def plot_pos_embedding_values(self, figsize: Tuple[int, int] = (16, 6), 
+    def plot_pos_embedding_values(self, figsize: Tuple[int, int] = (10, 8), 
                                   save_path: Optional[str] = None):
         """
         Plot positional embedding norms as scatter plots showing how they change with position index.
@@ -247,7 +199,7 @@ class ModelWeights:
         matplotlib.figure.Figure
             The generated figure
         """
-        fig, axes = plt.subplots(1, 2, figsize=figsize)
+        fig, axes = plt.subplots(1, 1, figsize=figsize)
         
         # Get positional embedding stats for all models
         pos_embedding_stats = {model_name: self.get_pos_embedding_stats(model) 
@@ -256,75 +208,43 @@ class ModelWeights:
         # Set up position indices
         for model_name, stats in pos_embedding_stats.items():
             # Get the position indices
-            positions = np.arange(len(stats['l2_norms']))
+            positions = np.arange(len(stats))
             
             # Plot L2 norms by position
-            axes[0].scatter(
+            axes.scatter(
                 positions, 
-                stats['l2_norms'].numpy(),
+                stats.numpy(),
                 label=model_name,
                 color=self.model_colors[model_name],
                 alpha=0.7,
                 s=15
             )
             
-            # Plot L1/L2 ratios by position
-            axes[1].scatter(
-                positions, 
-                stats['l1_l2_ratio'].numpy(),
-                label=model_name,
-                color=self.model_colors[model_name],
-                alpha=0.7,
-                s=15
-            )
-        
         # Add trend lines with lowess or moving average for clearer visualization
         for model_name, stats in pos_embedding_stats.items():
-            positions = np.arange(len(stats['l2_norms']))
+            positions = np.arange(len(stats))
             
             # Simple moving average for trend lines
             window = 20
-            l2_norms = stats['l2_norms'].numpy()
-            l1_l2_ratios = stats['l1_l2_ratio'].numpy()
-            
-            # Calculate moving averages
-            l2_smoothed = np.convolve(l2_norms, np.ones(window)/window, mode='valid')
-            l1_l2_smoothed = np.convolve(l1_l2_ratios, np.ones(window)/window, mode='valid')
-            
-            # Adjust positions for the reduced length of smoothed data
-            smooth_positions = positions[window-1:][:len(l2_smoothed)]
+            l2_norms = stats.numpy()
             
             # Plot trend lines
-            axes[0].plot(
-                smooth_positions, 
-                l2_smoothed,
+            axes.plot(
+                positions, 
+                l2_norms,
                 color=self.model_colors[model_name],
                 linewidth=2,
                 alpha=0.8
             )
             
-            axes[1].plot(
-                smooth_positions, 
-                l1_l2_smoothed,
-                color=self.model_colors[model_name],
-                linewidth=2,
-                alpha=0.8
-            )
-        
         # Set titles and labels
-        axes[0].set_title('Positional Embedding L2 Norms by Position', fontsize=16)
-        axes[0].set_xlabel('Position Index', fontsize=14)
-        axes[0].set_ylabel('L2 Norm', fontsize=14)
-        axes[0].legend(fontsize=12)
-        axes[0].grid(alpha=0.3)
+        axes.set_title('Positional Embedding L2 Norms by Position', fontsize=16)
+        axes.set_xlabel('Position Index', fontsize=14)
+        axes.set_ylabel('L2 Norm', fontsize=14)
+        axes.set_xlim(0, 30)
+        axes.legend(fontsize=12)
+        axes.grid(alpha=0.3)
         
-        axes[1].set_title('Positional Embedding L1/L2 Ratio by Position', fontsize=16)
-        axes[1].set_xlabel('Position Index', fontsize=14)
-        axes[1].set_ylabel('L1/L2 Ratio', fontsize=14)
-        axes[1].legend(fontsize=12)
-        axes[1].grid(alpha=0.3)
-        
-        plt.suptitle('Positional Embedding Metrics by Position', fontsize=18)
         plt.tight_layout()
         
         if save_path:
@@ -355,10 +275,11 @@ class ModelWeights:
         
         # Initialize result dictionaries
         stats = {
-            'Wq': {'l2_norms': []},
-            'Wk': {'l2_norms': []},
-            'Wv': {'l2_norms': []},
-            'Wo': {'l2_norms': []}
+            'Wq': [],
+            'Wk': [],
+            'Wv': [],
+            'Wo': [],
+            'WoWv' : []
         }
         
         # Loop through each layer
@@ -382,17 +303,25 @@ class ModelWeights:
             W_k_head_norms = torch.tensor([torch.norm(W_k_heads[i]) for i in range(n_heads)])
             W_v_head_norms = torch.tensor([torch.norm(W_v_heads[i]) for i in range(n_heads)])
             W_o_head_norms = torch.tensor([torch.norm(W_o_heads[i]) for i in range(n_heads)])
+
+            # Calculate W_o @ W_v per-head Frobenius norms
+            W_ov_head_norms = torch.tensor([
+                torch.norm(torch.matmul(W_o_heads[i], W_v_heads[i]))
+                for i in range(n_heads)
+            ])
+
             
             # Calculate mean and std of head norms as tuples
-            stats['Wq']['l2_norms'].append((W_q_head_norms.mean(), W_q_head_norms.std()))
-            stats['Wk']['l2_norms'].append((W_k_head_norms.mean(), W_k_head_norms.std()))
-            stats['Wv']['l2_norms'].append((W_v_head_norms.mean(), W_v_head_norms.std()))
-            stats['Wo']['l2_norms'].append((W_o_head_norms.mean(), W_o_head_norms.std()))
-        
+            stats['Wq'].append((W_q_head_norms.mean(), W_q_head_norms.std()))
+            stats['Wk'].append((W_k_head_norms.mean(), W_k_head_norms.std()))
+            stats['Wv'].append((W_v_head_norms.mean(), W_v_head_norms.std()))
+            stats['Wo'].append((W_o_head_norms.mean(), W_o_head_norms.std()))
+            stats['WoWv'].append((W_ov_head_norms.mean(), W_ov_head_norms.std()))
+       
         return stats
 
 
-    def plot_attention_weights(self, figsize: Tuple[int, int] = (10, 16), 
+    def plot_attention_weights(self, figsize: Tuple[int, int] = (10, 20), 
                               save_path: Optional[str] = None):
         """
         Plot mean L2 norms with standard deviation for attention weight matrices 
@@ -410,24 +339,24 @@ class ModelWeights:
         matplotlib.figure.Figure
             The generated figure
         """
-        fig, axes = plt.subplots(4, 1, figsize=figsize)
+        fig, axes = plt.subplots(5, 1, figsize=figsize)
         
         # Get attention weight stats for all models
         attention_stats = {model_name: self.get_attention_weight_stats(model) 
                           for model_name, model in self.models.items()}
         
         # Weight types and their corresponding row index
-        weight_types = ['Wq', 'Wk', 'Wv', 'Wo']
+        weight_types = ['Wq', 'Wk', 'Wv', 'Wo', 'WoWv']
         
         # Layer indices as x-axis
-        layers = np.arange(len(attention_stats[list(attention_stats.keys())[0]]['Wq']['l2_norms']))
+        layers = np.arange(len(attention_stats[list(attention_stats.keys())[0]]['Wq']))
         
         # Plot for each weight type in its own subplot
         for row_idx, weight_type in enumerate(weight_types):
             for model_name, stats in attention_stats.items():
                 # Extract means and standard deviations
-                means = np.array([norm[0].numpy() for norm in stats[weight_type]['l2_norms']])
-                stds = np.array([norm[1].numpy() for norm in stats[weight_type]['l2_norms']])
+                means = np.array([norm[0].numpy() for norm in stats[weight_type]])
+                stds = np.array([norm[1].numpy() for norm in stats[weight_type]])
                 
                 # Plot mean line
                 line = axes[row_idx].plot(
@@ -454,7 +383,7 @@ class ModelWeights:
             axes[row_idx].set_ylabel(f'{weight_type} Mean L2 Norm', fontsize=12)
             
             # Only add x-axis label to the bottom subplot
-            if row_idx == 3:
+            if row_idx == 4:
                 axes[row_idx].set_xlabel('Layer Index', fontsize=12)
             
             # Add legend only to the first subplot
@@ -464,7 +393,6 @@ class ModelWeights:
             # Add grid to all subplots
             axes[row_idx].grid(alpha=0.3)
         
-        plt.suptitle('Mean L2 Norm of Attention Weight Matrices Across Layers', fontsize=16)
         plt.tight_layout()
         
         if save_path:
@@ -494,8 +422,8 @@ class ModelWeights:
         
         # Initialize result dictionaries
         stats = {
-            'W_in': {'l2_norms': []},
-            'W_out': {'l2_norms': []}
+            'W_in': [],
+            'W_out': []
         }
         
         # Loop through each layer
@@ -505,13 +433,12 @@ class ModelWeights:
             W_out = model.blocks[layer_idx].mlp.W_out.detach().cpu()  # [4*d_model, d_model]
             
             # Calculate L2 norms - we compute the Frobenius norm of the entire matrix
-            stats['W_in']['l2_norms'].append(torch.norm(W_in))
-            stats['W_out']['l2_norms'].append(torch.norm(W_out))
+            stats['W_in'].append(torch.norm(W_in))
+            stats['W_out'].append(torch.norm(W_out))
             
         # Convert lists to tensors
         for weight_type in stats:
-            for stat_type in stats[weight_type]:
-                stats[weight_type][stat_type] = torch.stack(stats[weight_type][stat_type])
+            stats[weight_type] = torch.stack(stats[weight_type])
         
         return stats
 
@@ -548,14 +475,14 @@ class ModelWeights:
         # Plot statistics for each weight type and model
         for model_name, stats in ffn_stats.items():
             # Layer indices as x-axis
-            layers = np.arange(len(stats['W_in']['l2_norms']))
+            layers = np.arange(len(stats['W_in']))
             
             # Plot each weight type in its own column
             for weight_type, col_idx in weight_types.items():
                 # L2 norms
                 axes[col_idx].plot(
                     layers,
-                    stats[weight_type]['l2_norms'].numpy(),
+                    stats[weight_type].numpy(),
                     'o-',
                     label=model_name,
                     color=self.model_colors[model_name],
@@ -581,7 +508,6 @@ class ModelWeights:
             # Add grid
             axes[col_idx].grid(alpha=0.3)
         
-        plt.suptitle('Feed-Forward Network Weight L2 Norms Across Layers', fontsize=20)
         plt.tight_layout()
     
         if save_path:

@@ -130,11 +130,13 @@ class InferenceRunner:
         # Compute logits for all models in one pass
         logits = {name: model(batch) for name, model in self.model_manager.models.items()}
 
-        # Compute CE loss
+        # Compute CE loss, gather model pred
         ce_losses = {}
+        token_preds = {}
         for model_name, model_logits in logits.items():
             ce_loss = self._compute_ce_loss(model_logits, batch)
             ce_losses[model_name] = ce_loss.cpu().numpy()
+            token_preds[model_name] = torch.argmax(model_logits[:, :-1, :], dim=-1).cpu().numpy()
 
         # Compute CE loss differences
         ce_diffs = {}
@@ -156,6 +158,7 @@ class InferenceRunner:
             batch_idx * self.config.batch_size, # To keep track of original sequence indices
             batch.cpu().numpy(),
             ce_losses,
+            token_preds,
             ce_diffs,
             jsd_losses,
             topk_jsd_losses,
@@ -165,12 +168,12 @@ class InferenceRunner:
 if __name__ == "__main__":
     # Create a config for the Apollo Pile dataset
     config = InferenceConfig(
-        dataset="apollo-pile",
+        dataset="luca-pile",
         models=["baseline", "finetuned", "noLN"],
         num_samples=5000,
         max_sequence_length=512,
         batch_size=10,
-        prepend_bos=True
+        prepend_bos=False
     )
 
     runner = InferenceRunner(config)

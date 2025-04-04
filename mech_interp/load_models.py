@@ -24,7 +24,7 @@ class ModelLoader(ABC):
         device: Optional[DeviceType] = None,
         repo_id: str = "gpt2",
         revision: str = "main",
-        model_subdir: str = "gpt2_model"
+        model_subdir: str = "gpt2_model",
     ):
         """Initialize model loader with device and model directory."""
         # Set up device
@@ -69,7 +69,11 @@ class ModelLoader(ABC):
 class StandardModelLoader(ModelLoader):
     """Loader for standard GPT-2 models (baseline and finetuned)."""
     
-    def load(self, fold_ln: bool = True, center_unembed: bool = False, eval_mode: bool = True) -> HookedTransformer:
+    def load(self,
+            fold_ln : bool = True,
+            center_writing_weights: bool = False,
+            center_unembed: bool = False,
+            eval_mode: bool = True) -> HookedTransformer:
         """Load a standard GPT-2 model."""
         self.download_if_needed()
         
@@ -82,7 +86,8 @@ class StandardModelLoader(ModelLoader):
             hf_model=hf_model,
             fold_ln=fold_ln, 
             center_unembed=center_unembed,
-            device=self.device
+            center_writing_weights=center_writing_weights,
+            device=self.device,
         )
         
         if eval_mode:
@@ -94,7 +99,11 @@ class StandardModelLoader(ModelLoader):
 class NoLNModelLoader(ModelLoader):
     """Loader for the no-layer-norm GPT-2 model."""
     
-    def load(self, fold_ln: bool = True, center_unembed: bool = False, eval_mode: bool = True) -> HookedTransformer:
+    def load(self,
+            fold_ln : bool = True,
+            center_writing_weights: bool = False,
+            center_unembed: bool = False,
+            eval_mode: bool = True) -> HookedTransformer:
         """Load the no-layer-norm GPT-2 model."""
         self.download_if_needed()
         
@@ -121,8 +130,9 @@ class NoLNModelLoader(ModelLoader):
             "gpt2", 
             hf_model=model, 
             fold_ln=fold_ln, 
+            center_writing_weights=center_writing_weights,
             center_unembed=center_unembed,
-            device=self.device
+            device=self.device,
         )
 
         hooked_model.removeLN()
@@ -144,12 +154,14 @@ class ModelFactory:
         device: Optional[DeviceType] = None,
         fold_ln: bool = True,
         center_unembed: bool = False,
+        center_writing_weights: bool = False,
         eval_mode: bool = True
     ):
         """Initialize with specified models and load them."""
         self.model_dir = model_dir
         self.device = device
         self.fold_ln = fold_ln
+        self.center_writing_weights = center_writing_weights
         self.center_unembed = center_unembed
         self.eval_mode = eval_mode
         
@@ -174,14 +186,14 @@ class ModelFactory:
                 self.device, 
                 repo_id="apollo-research/gpt2_noLN", 
                 revision="vanilla_1200",
-                model_subdir="apollo_gpt2_finetuned"
+                model_subdir="apollo_gpt2_finetuned",
             ),
             'noLN': NoLNModelLoader(
                 self.model_dir,
                 self.device,
                 repo_id="apollo-research/gpt2_noLN",
                 revision="main",
-                model_subdir="apollo_gpt2_noLN"
+                model_subdir="apollo_gpt2_noLN",
             )
         }
         
@@ -192,6 +204,7 @@ class ModelFactory:
             models_dict[name] = loaders[name].load(
                 fold_ln=self.fold_ln,
                 center_unembed=self.center_unembed,
+                center_writing_weights=self.center_writing_weights,
                 eval_mode=self.eval_mode
             )
             

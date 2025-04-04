@@ -23,7 +23,7 @@ class FormatInference:
 
     def _process_sequence(self, args):
         """Process a single sequence and return all its subsequence records."""
-        seq_idx, input_idx, seq_input, ce_losses, ce_diffs, jsd_losses, topk_jsd_losses, tokenizer = args
+        seq_idx, input_idx, seq_input, ce_losses, token_preds, ce_diffs, jsd_losses, topk_jsd_losses, tokenizer = args
         
         seq_len = len(seq_input)
         records = []
@@ -60,6 +60,7 @@ class FormatInference:
             # Add metrics directly from numpy arrays
             for model_name in ce_losses:
                 record[f'ce_{model_name}'] = float(ce_losses[model_name][seq_idx][pos])
+                record[f'pred_{model_name}'] = int(token_preds[model_name][seq_idx][pos])
             
             for pair_name in ce_diffs:
                 record[f'ce_diff_{pair_name}'] = float(ce_diffs[pair_name][seq_idx][pos])
@@ -70,7 +71,8 @@ class FormatInference:
             
         return records
 
-    def add_batch_data(self, input_idx, input_seqs, ce_losses, ce_diffs, jsd_losses, topk_jsd_losses):
+    def add_batch_data(self, input_idx, input_seqs, ce_losses, token_preds,
+                       ce_diffs, jsd_losses, topk_jsd_losses):
         """Process batch data using thread pool for parallel sequence processing."""
         batch_size = input_seqs.shape[0]
         
@@ -82,7 +84,8 @@ class FormatInference:
                 seq_idx,
                 input_idx,
                 input_seqs[seq_idx], 
-                ce_losses, 
+                ce_losses,
+                token_preds,
                 ce_diffs, 
                 jsd_losses, 
                 topk_jsd_losses,
