@@ -233,7 +233,9 @@ class FakeLayerNorm(nn.Module):
     def disable_eos_special_treatment(self):
         # Disable EOT special treatment, note that bos_std[0] will be set to average_std[1]
         # which is not always the same as bos_std[1]
-        self.bos_std = self.average_std
+        with torch.no_grad():
+            # Create a new tensor with the same values as average_std to avoid sharing
+            self.bos_std = self.average_std.clone().detach().requires_grad_(False)
     
     def disable_bos_special_treatment(self):
         # Disable BOS special treatment
@@ -430,7 +432,7 @@ def load_model(model_name="gpt2", remove_ln=False):
     return model
 
 
-def finetune(model, training_args, tokenized, data_collator, config, pile_eval_dataset=None, remove_ln=False):
+def finetune(model, training_args, tokenized, data_collator, config, pile_eval_dataset=None, remove_ln=False, checkpoint_step=None):
     """Finetune model with or without layer normalization"""
     def disable_ln_2(block_index):
         model.transformer.h[block_index].ln_2.is_fake_prop = True
@@ -595,7 +597,36 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
             print("========================================\n")
             
             return control
-    
+
+    class SaveAtSpecificStepsCallback(TrainerCallback):
+        """Callback to save checkpoints at specific steps specified by the user."""
+        
+        def __init__(self, save_steps=None):
+            """
+            Initialize the callback with the steps to checkpoint at.
+            
+            Args:
+                save_steps: List of specific steps at which to save checkpoints
+            """
+            self.save_steps = save_steps or []
+            
+        def on_step_end(self, args, state, control, **kwargs):
+            """Check if current step is in the list of steps to save checkpoints at."""
+            if state.global_step in self.save_steps:
+                # Use Trainer's existing checkpoint logic
+                control.should_save = True
+                
+                # Force saving even if we just saved recently
+                control.should_save_model = True
+                
+                print(f"Triggering checkpoint at step {state.global_step}")
+                
+                # Log to wandb if enabled
+                if _USE_WANDB:
+                    wandb.log({"custom_checkpoint": state.global_step})
+                    
+            return control
+
     # Get schedule from config
     model_name = config.model_name
     training_config = config
@@ -616,7 +647,12 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
     ]
     if remove_ln:
         callbacks.append(LNRemoverCallback(ln_removers))
-
+    
+    # Add custom checkpoint callback if checkpoint_step was provided
+    if checkpoint_step:
+        callbacks.append(SaveAtSpecificStepsCallback(save_steps=[checkpoint_step]))
+        print(f"Will save checkpoint at step: {checkpoint_step}")
+    
     # Create multi-dataset dictionary if pile_eval_dataset is provided
     if pile_eval_dataset is not None:
         eval_datasets = {
@@ -639,6 +675,25 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
         resume_from_checkpoint=training_args.resume_from_checkpoint
     )
 
+def check_checkpoint_path(checkpoint_path):
+    """
+    Verify if the checkpoint path exists and which format is used.
+    Returns a message about the checkpoint status.
+    """
+    if not os.path.exists(checkpoint_path):
+        return f"Warning: Checkpoint path {checkpoint_path} does not exist"
+    
+    # Check for PyTorch or safetensors format
+    pytorch_model_path = os.path.join(checkpoint_path, "pytorch_model.bin")
+    safetensors_model_path = os.path.join(checkpoint_path, "model.safetensors")
+    
+    if os.path.exists(pytorch_model_path):
+        return f"Found PyTorch checkpoint at {pytorch_model_path}"
+    elif os.path.exists(safetensors_model_path):
+        return f"Found safetensors checkpoint at {safetensors_model_path}"
+    else:
+        return f"Warning: No model file found in {checkpoint_path} (checked for pytorch_model.bin and model.safetensors)"
+
 def main():
     parser = argparse.ArgumentParser(
         description="Finetune model with or without layer normalization"
@@ -659,6 +714,11 @@ def main():
         "--resume_from_checkpoint",
         required=False,
         help="Checkpoint to resume from",
+    )
+    parser.add_argument(
+        "--checkpoint_step", 
+        type=int,
+        help="Step number at which to save a checkpoint",
     )
     args = parser.parse_args()
 
@@ -698,7 +758,7 @@ def main():
         output_dir=output_dir,
         bf16=True,
         resume_from_checkpoint=args.resume_from_checkpoint,
-        save_safetensors=False,
+        save_safetensors=False,  # Always use .bin format
         max_steps=config.max_steps,
         per_device_train_batch_size=config.batch_size,
         per_device_eval_batch_size=4,
@@ -728,6 +788,11 @@ def main():
         load_best_model_at_end=False,
     )
 
+    # Check if the checkpoint exists and print info
+    if args.resume_from_checkpoint:
+        checkpoint_message = check_checkpoint_path(args.resume_from_checkpoint)
+        print(checkpoint_message)
+    
     # Initialize model
     model = load_model(model_name, remove_ln=args.mode == "without_ln")
     
@@ -744,9 +809,9 @@ def main():
         data_collator,
         config,
         pile_eval_dataset,
-        remove_ln=args.mode == "without_ln"
+        remove_ln=args.mode == "without_ln",
+        checkpoint_step=args.checkpoint_step
     )
-    
 
 if __name__ == "__main__":
     main()
