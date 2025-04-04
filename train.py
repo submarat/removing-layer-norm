@@ -4,6 +4,7 @@ Feature flags:
 EXP_CORRECT_BOS: Use correct BOS special treatment
 EXP_RECOMPUTE_STD_ON_FAKE: Recompute std when FakeLayerNorm is fake - will recompute std on every forward pass
 EXP_RECOMPUTE_STD_ON_REAL: Recompute std when FakeLayerNorm is real - will freeze std when FakeLayerNorm goes fake
+EXP_NON_BOS_AVERAGE_STD: Compute average std based on input[1:] (i.e. non-BOS) positions
 """
 import os
 
@@ -158,10 +159,17 @@ class FakeLayerNorm(nn.Module):
         # LN for the QK and V paths separately.
         is_fake_value = self.attn_v_is_fake.item() if attn_v else self.is_fake.item()
 
+        # Refresh std values for the first iteration
+        # Useful for different average_std recomputation schemes
+        if self.iteration == 0:
+            avg_std, bos_std = self.recompute_average_std(input)
+            self.real_average_std.fill_(float(avg_std))
+            self.real_bos_std.fill_(float(bos_std))
+            self.sync_std()
+        
         self.iteration += 1
         # Calculate the std of the input
         if self.iteration % self.update_freq == 0:
-            self.iteration = 0
             avg_std, bos_std = self.recompute_average_std(input)
             self.real_average_std.fill_(float(avg_std))
             self.real_bos_std.fill_(float(bos_std))
@@ -206,7 +214,10 @@ class FakeLayerNorm(nn.Module):
     def recompute_average_std(self, x):
         with torch.no_grad():
             std = x.var(dim=(0, -1))**0.5
-            average_std = std.mean().detach().item()
+            if os.environ.get("EXP_NON_BOS_AVERAGE_STD", "0") == "1":
+                average_std = std[1:].mean().detach().item()
+            else:
+                average_std = std.mean().detach().item()
             bos_std = std[0].detach().item()
         return average_std, bos_std
     
