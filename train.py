@@ -170,7 +170,6 @@ class FakeLayerNorm(nn.Module):
         self.iteration += 1
         # Calculate the std of the input
         if self.iteration % self.update_freq == 0:
-            self.iteration = 0
             avg_std, bos_std = self.recompute_average_std(input)
             self.real_average_std.fill_(float(avg_std))
             self.real_bos_std.fill_(float(bos_std))
