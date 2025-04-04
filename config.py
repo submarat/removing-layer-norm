@@ -376,7 +376,7 @@ def make_gpt2_large():
 
 def make_gpt2_large_aux():
     # Architecture params
-    model_name = "gpt2-large-aux"
+    model_name = "gpt2-large"
     n_layers = 36
     
     # Training params
