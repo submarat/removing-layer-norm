@@ -627,6 +627,16 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
                     
             return control
 
+            
+    class StopAfterNStepsCallback(TrainerCallback):
+        def __init__(self, early_stop_step):
+            self.early_stop_step = early_stop_step
+            
+        def on_step_end(self, args, state, control, **kwargs):
+            if state.global_step >= self.early_stop_step:
+                control.should_training_stop = True
+                return control
+    
     # Get schedule from config
     model_name = config.model_name
     training_config = config
@@ -644,6 +654,7 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
     callbacks = [
         LogFakeLayerNormState(),
         CheckFakeLayerNormStateAfterLoading(),
+        StopAfterNStepsCallback(config.early_stop_step),
     ]
     if remove_ln:
         callbacks.append(LNRemoverCallback(ln_removers))
