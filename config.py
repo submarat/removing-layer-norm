@@ -380,7 +380,7 @@ def make_gpt2_large_aux():
     n_layers = 36
     
     # Training params
-    base_batch_size = 13
+    base_batch_size = 10
     max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
