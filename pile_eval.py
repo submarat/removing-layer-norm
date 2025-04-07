@@ -151,7 +151,7 @@ def evaluate_model_on_pile(model, processed_examples, tokenizer, batch_size=8, d
 
                 # TODO: Fix this as a feature to mask out EOT tokens. 
                 # Don't count tokens at EOT positions, needs fixing, 
-                # Commented out code currenlty only adapts count and not yet loss.
+                # Commented out code currently only adapts count and not yet loss.
                 # eot_mask = (batch_input_ids == tokenizer.eos_token_id)
                 # batch_tokens = (~eot_mask).sum().item()
                 batch_tokens = batch_input_ids.numel()
