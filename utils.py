@@ -1,8 +1,13 @@
 import torch
 from std_dicts import std_dicts
 
-def remove_layernorm(model_name: str, model_hf):
-    std_dict = std_dicts[model_name]['std_dict']
+def remove_layernorm(model_name: str, model_hf, std_dict: dict=None):
+
+    if std_dict is not None:
+        print("Stds exists in model checkpoint, taking these.")
+    else:
+        print("Stds do not exist in model checkpoint, loading from default file.")
+        std_dict = std_dicts[model_name]['std_dict']
     
     # Now kill the layer norm by setting layer_norm_epsilon to 1e12, and multiplied the ln scaling parameters by 1e6
     n_layers = len(model_hf.transformer.h)
