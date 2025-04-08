@@ -478,6 +478,42 @@ def make_gpt2_xl():
     
     return FinetuneConfig(**locals())
 
+def make_gpt2_xl_aux():
+    # Architecture params
+    model_name = "gpt2-xl"
+    n_layers = 48
+    
+    # Training params
+    base_batch_size = 5
+    max_steps = 1200
+    block_size = 1024
+    target_batch_tokens = 2**19
+    
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    warmup_steps = 10
+    
+    # Calculate layernorm schedule
+    gap_ln2 = 4
+    gap_ln1qk = 4
+    gap_ln1v = 6
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+    
+    start_ln2 = 20
+    start_ln1qk = start_ln2 + n_layers * gap_ln2
+    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
+    start_lnf = start_ln1v + n_layers * gap_ln1v
+    start_eot = start_lnf + 2
+    start_bos = start_eot + 10
+    
+    aux_loss_weight = 0.1
+
+    return FinetuneConfig(**locals())
+
 def make_gpt2_xl_test():
     # Architecture params
     model_name = "gpt2-xl"
@@ -523,6 +559,7 @@ FINETUNE_CONFIGS = {
     "gpt2-large_aux": make_gpt2_large_aux(),
     "gpt2-large_test": make_gpt2_large_test(),
     "gpt2-xl": make_gpt2_xl(),
+    "gpt2-xl_aux": make_gpt2_xl_aux(),
     "gpt2-xl_test": make_gpt2_xl_test(),
 }
 
