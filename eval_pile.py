@@ -13,9 +13,9 @@ Usage:
 Options:
     -h --help                       Show this help message
     -m MODEL --model MODEL          Model checkpoint path or model id [REQUIRED]
-    -f FORMAT --format FORMAT       Model format: nanogpt/transformers [default: transformers]
-    -d DATASET --dataset DATASET    Dataset variant: pile-10k/pile-apollo/pile-uncopyrighted [default: pile-apollo]
-    -n NUM --num-samples NUM        Number of samples to evaluate [default: 20000]
+    -f FORMAT --format FORMAT       Model format: nanogpt/transformers/noLN_HF_model [default: transformers]
+    -d DATASET --dataset DATASET    Dataset variant: pile-10k/pile-apollo/pile-apollo-luca/pile-uncopyrighted [default: pile-apollo]
+    -n NUM --num-samples NUM        Number of samples to evaluate [default: 10000]
     -b BATCH_SIZE --batch-size BATCH_SIZE  Batch size for evaluation [default: 8]
     --model-name MODEL_NAME         Base model name [default: gpt2]
     --slay-ln                       Remove LayerNorm from model [default: False]
@@ -27,7 +27,7 @@ from transformer_lens import HookedTransformer
 from std_dicts import std_dicts
 from utils import remove_layernorm
 from pile_eval import preprocess_pile_dataset, evaluate_model_on_pile
-from transformers import GPT2LMHeadModel, AutoModelForCausalLM
+from transformers import GPT2LMHeadModel, AutoModelForCausalLM, logging
 
 # Load model with appropriate device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -43,10 +43,39 @@ def load_saved_model(model_name: str, model_path=None):
 
 def load_hf_model(model_id_or_ckpt_path, model_name, slay_ln=False):
     """ Loads huggingface transformers model and removes layernorm """
-    model_hf = GPT2LMHeadModel.from_pretrained(model_id_or_ckpt_path)
 
+    unused_params = {}
+    if os.path.isdir(model_id_or_ckpt_path):
+        print("Loading model from local checkpoint")
+        path = os.path.join(model_id_or_ckpt_path, 'pytorch_model.bin')
+        checkpoint_model = torch.load(path, weights_only=True)
+        logging.set_verbosity_error()  # Only show errors, not warnings
+        model_hf = GPT2LMHeadModel.from_pretrained(model_id_or_ckpt_path)
+        nb_keys = 0
+        for key in checkpoint_model.keys():
+            if key not in model_hf.state_dict():
+                # print(f"{key} not in state _dict ")
+                nb_keys += 1
+                unused_params[key] = checkpoint_model[key].cpu()
+        print(f"{nb_keys} parameters not in standard model, and loaded separately")
+    else:   
+        model_hf = GPT2LMHeadModel.from_pretrained(model_id_or_ckpt_path)
+
+    # Check whether the unused params contain the relevant std vals
     if slay_ln:
-        remove_layernorm(model_name, model_hf)
+        try:
+            std_dict = {}
+            for id, block in enumerate(model_hf.transformer.h):
+                assert unused_params[f"transformer.h.{id}.ln_2.average_std_buffer"] is not None
+                assert unused_params[f"transformer.h.{id}.ln_1.average_std_buffer"] is not None
+                # add std to the dict with appropriate key.
+                std_dict[f'blocks.{id}.hook_resid_pre'] = unused_params[f"transformer.h.{id}.ln_1.average_std_buffer"]
+                std_dict[f'blocks.{id}.hook_resid_mid'] = unused_params[f"transformer.h.{id}.ln_2.average_std_buffer"]
+            assert unused_params[f"transformer.ln_f.average_std_buffer"] is not None
+            std_dict[f'blocks.{id}.hook_resid_post'] = unused_params[f"transformer.ln_f.average_std_buffer"]
+            remove_layernorm(model_name, model_hf, std_dict=std_dict)
+        except AssertionError:
+            remove_layernorm(model_name, model_hf)
 
     return model_hf
 
@@ -168,13 +197,14 @@ def main():
         model = load_pt_file(model_path, model_name, slay_ln=slay_ln)
     elif format_type == 'transformers':
         model = load_hf_model(model_path, model_name, slay_ln=slay_ln)
+    elif format_type == 'noLN_HF_model':
+        model = load_nln_hf_model(model_name=model_name, name=model_path)
     else:
         raise ValueError(f"Unknown format type: {format_type}")
 
     model = model.to(device)
     
-    #if slay_ln:
-    #    model = load_nln_hf_model(model=model, model_name=model_name)
+
 
     # Using shared preprocessing function
     processed_examples, tokenizer = preprocess_pile_dataset(dataset_name, model_name, num_samples)
