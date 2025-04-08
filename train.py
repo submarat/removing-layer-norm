@@ -195,7 +195,7 @@ class FakeLayerNorm(nn.Module):
         self.is_training = True
         
         # Track update frequency to avoid updating on every forward pass
-        self.update_freq = 10  # Update every 10 steps
+        self.update_freq = 1  # Update every 10 steps
         self.steps_since_update = 0
         
         # Register buffers for std values and modes so they get saved with the model
@@ -925,7 +925,7 @@ def main():
     )
 
     training_args = TrainingArguments(
-        output_dir="./results",
+        output_dir="./results/xl3_run",
         bf16=True,
         resume_from_checkpoint=args.resume_from_checkpoint,
         save_safetensors=False,
