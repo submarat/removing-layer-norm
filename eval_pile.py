@@ -69,8 +69,8 @@ def load_hf_model(model_id_or_ckpt_path, model_name, slay_ln=False):
                 assert unused_params[f"transformer.h.{id}.ln_2.average_std_buffer"] is not None
                 assert unused_params[f"transformer.h.{id}.ln_1.average_std_buffer"] is not None
                 # add std to the dict with appropriate key.
-                std_dict[f'blocks.{id}.hook_resid_pre'] = unused_params[f"transformer.h.{id}.ln_2.average_std_buffer"]
-                std_dict[f'blocks.{id}.hook_resid_mid'] = unused_params[f"transformer.h.{id}.ln_1.average_std_buffer"]
+                std_dict[f'blocks.{id}.hook_resid_pre'] = unused_params[f"transformer.h.{id}.ln_1.average_std_buffer"]
+                std_dict[f'blocks.{id}.hook_resid_mid'] = unused_params[f"transformer.h.{id}.ln_2.average_std_buffer"]
             assert unused_params[f"transformer.ln_f.average_std_buffer"] is not None
             std_dict[f'blocks.{id}.hook_resid_post'] = unused_params[f"transformer.ln_f.average_std_buffer"]
             remove_layernorm(model_name, model_hf, std_dict=std_dict)
