@@ -485,7 +485,7 @@ def make_gpt2_xl_aux():
     
     # Training params
     base_batch_size = 5
-    max_steps = 1200
+    max_steps = 1600
     block_size = 1024
     target_batch_tokens = 2**19
     
