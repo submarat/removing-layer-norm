@@ -29,23 +29,21 @@ def preprocess_pile_dataset(dataset_name, model_name, num_samples=5000, cache_di
     
     # Load dataset
     if dataset_name == "pile-apollo":
-        dataset = load_dataset("apollo-research/monology-pile-uncopyrighted-tokenizer-gpt2", streaming=False, split="train")
-        if num_samples < len(dataset):
-            dataset = dataset.select(range(num_samples))
+        dataset = load_dataset("apollo-research/monology-pile-uncopyrighted-tokenizer-gpt2", streaming=True, split="train")
+        dataset = dataset.take(num_samples)
     elif dataset_name == "pile-apollo-luca":
         dataset = load_dataset("lucabaroni/apollo-pile-filtered-10k", streaming=False, split="train")
         if num_samples < len(dataset):
-            dataset = dataset.select(range(num_samples))
+            dataset = dataset.shuffle(seed=42).select(range(num_samples))
     elif dataset_name == "pile-uncopyrighted":
-        dataset = load_dataset("monology/pile-uncopyrighted", streaming=False, split="train")
-        if num_samples < len(dataset):
-            dataset = dataset.select(range(num_samples))
+        dataset = load_dataset("monology/pile-uncopyrighted", streaming=True, split="train")
+        dataset = dataset.take(num_samples)
     elif dataset_name == "pile-10k":
         dataset = load_dataset("NeelNanda/pile-10k", streaming=False, split="train")
         if num_samples < len(dataset):
             # Sample randomly if num_samples is less than dataset size
             dataset = dataset.shuffle(seed=42).select(range(num_samples))
-
+    dataset = dataset.shuffle(seed=42)
     
     # Process without batching to avoid PyArrow errors
     print("Tokenizing examples...")
