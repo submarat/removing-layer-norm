@@ -925,7 +925,7 @@ def main():
     )
 
     training_args = TrainingArguments(
-        output_dir="./results/super_low_aux",
+        output_dir="./results/medium_aux",
         bf16=True,
         resume_from_checkpoint=args.resume_from_checkpoint,
         save_safetensors=False,

@@ -510,7 +510,7 @@ def make_gpt2_xl_aux():
     start_eot = start_lnf + 2
     start_bos = start_eot + 10
     
-    aux_loss_weight = 0.001
+    aux_loss_weight = 0.03
 
     return FinetuneConfig(**locals())
 
