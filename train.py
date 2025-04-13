@@ -433,7 +433,7 @@ def load_model(model_name="gpt2", remove_ln=False):
         ),
     )
 
-    if remove_ln :
+    if remove_ln:
         # Replace all LayerNorm instances with FakeLayerNorm
         std_dict = std_dicts[model_name]["std_dict"]
         std_bos_dict = std_dicts[model_name]["std_bos_dict"]
