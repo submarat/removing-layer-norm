@@ -1,3 +1,4 @@
+import os
 import torch
 
 from train import load_model
@@ -11,7 +12,15 @@ def extract_std_from_checkpoint(model_name, ckpt_path):
     # Load model and replace with FakeLayerNorm
     ckpt_model = load_model(model_name=model_name, remove_ln=True)
     # Load checkpoint to load in std values
-    missing, unexpected = load_sharded_checkpoint(ckpt_model, ckpt_path, strict=False)
+    try:
+        # First try loading a single pytorch model file
+        missing, unexpected = ckpt_model.load_state_dict(torch.load(os.path.join(ckpt_path, 'pytorch_model.bin')), strict=False)
+    except FileNotFoundError:
+        try:
+            # If that fails, try loading a sharded checkpoint
+            missing, unexpected = load_sharded_checkpoint(ckpt_model, ckpt_path, strict=False)
+        except Exception as e:
+            raise ValueError(f"Could not load checkpoint from {ckpt_path}. Error: {str(e)}")
 
     if missing:
         print(f"Missing keys when loading checkpoint: {len(missing)} keys")

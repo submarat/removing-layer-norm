@@ -6,11 +6,11 @@ This script requires the docopt package. Install with:
     pip install docopt
 
 Usage:
-    ln_removal_and_push.py --ckpt-path=<checkpoint_path> --model-name=<model_name> [--output-name=<output_name>] [--push]
+    ln_removal_and_push.py --checkpoint=<checkpoint_path> --model-name=<model_name> [--output-name=<output_name>] [--push]
     ln_removal_and_push.py -h | --help
 
 Arguments:
-    --ckpt-path=<checkpoint_path>   Path to the checkpoint
+    --checkpoint=<checkpoint_path>   Path to the checkpoint
     --model-name=<model_name>       Base model name (e.g., "gpt2", "gpt2-medium")
     --output-name=<output_name>     Name for the output model on HuggingFace Hub [default: None]
     --push                          Push to HuggingFace Hub [default: False]
@@ -29,7 +29,7 @@ def main():
     args = docopt(__doc__)
     
     # Extract arguments
-    checkpoint_path = args['--ckpt-path']
+    checkpoint_path = args['--checkpoint']
     model_name = args['--model-name']
     output_name = args['--output-name']
     should_push = args['--push']
