@@ -8,7 +8,9 @@ def get_device():
     return torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
 
 def extract_std_from_checkpoint(model_name, ckpt_path):
+    # Load model and replace with FakeLayerNorm
     ckpt_model = load_model(model_name=model_name, remove_ln=True)
+    # Load checkpoint to load in std values
     missing, unexpected = load_sharded_checkpoint(ckpt_model, ckpt_path, strict=False)
 
     if missing:
@@ -19,12 +21,11 @@ def extract_std_from_checkpoint(model_name, ckpt_path):
     state_dict = ckpt_model.state_dict()
 
     std_dict = {}
-    n_layers = len(ckpt_model.transformer.h)
     for id, block in enumerate(ckpt_model.transformer.h):
         # add std to the dict with appropriate key.
-        std_dict[f'blocks.{id}.hook_resid_pre'] = state_dict[f'transformer.h.block{id}.ln_1.average_std_buffer']
-        std_dict[f'blocks.{id}.hook_resid_mid'] = state_dict[f'transformer.h.block{id}.ln_2.average_std_buffer']
-    std_dict[f'blocks.{n_layers-1}.hook_resid_post'] = state_dict['transformer.ln_f.average_std_buffer']
+        std_dict[f'blocks.{id}.hook_resid_pre'] = state_dict[f'transformer.h.{id}.ln_1.average_std_buffer'][0].item()
+        std_dict[f'blocks.{id}.hook_resid_mid'] = state_dict[f'transformer.h.{id}.ln_2.average_std_buffer'][0].item()
+    std_dict[f'blocks.{id}.hook_resid_post'] = state_dict['transformer.ln_f.average_std_buffer'][0].item()
 
     return std_dict
 
