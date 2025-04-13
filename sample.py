@@ -5,7 +5,7 @@ Example:
     python sample.py -m results/checkpoint-300 -p "to be or not to"
 
 Usage:
-    sample.py -m MODEL [-c CHECKPOINT] [-p PROMPT] [-n]
+    sample.py -m MODEL [-c CHECKPOINT] [-p PROMPT] [-r]
 
 Options:
     -h --help                               Show this help message
@@ -46,7 +46,7 @@ def main():
     # Load the tokenizer
     model_type = model.config.model_type
     tokenizer = AutoTokenizer.from_pretrained(model_type)
-    tokenizer.eos_token = tokenizer.eos_token
+    tokenizer.pad_token = tokenizer.eos_token
     
     # Example usage
     text = prompt
@@ -59,7 +59,7 @@ def main():
         max_length=50,  # Adjust max length as needed
         num_return_sequences=1,
         do_sample=True,
-        temperature=1.0,  # Adjust temperature to control randomness (higher = more random)
+        temperature=0.7,  # Adjust temperature to control randomness (higher = more random)
         attention_mask=inputs["attention_mask"],
     )
     
