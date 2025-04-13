@@ -5,20 +5,23 @@ Example:
     python sample.py -m results/checkpoint-300 -p "to be or not to"
 
 Usage:
-    sample.py -m MODEL [-p PROMPT] [--remove-ln]
+    sample.py -m MODEL [-c CHECKPOINT] [-p PROMPT] [-n]
 
 Options:
-    -h --help                       Show this help message
-    -m MODEL --model MODEL          Model checkpoint path or model id [REQUIRED]
-    -p PROMPT --prompt PROMPT       Prompt for completion [default: "to be or not to"]
-    --remove_ln                     Undo eps scale hack [default: False]
+    -h --help                               Show this help message
+    -m MODEL --model MODEL                  Pretrained model name [REQUIRED]
+    -c CHECKPOINT --checkpoint CHECKPOINT   Checkpoint to load [REQUIRED]
+    -p PROMPT --prompt PROMPT               Prompt for completion [default: As the last leaf fell from the tree ]
+    -r --remove_ln_by_scaling               Remove ln by scaling weights and eps [default: False]
 """
 
-import os
 import torch
 from std_dicts import std_dicts
-from transformers import GPT2LMHeadModel, AutoTokenizer
-from utils import remove_layernorm
+from transformers import GPT2LMHeadModel, AutoTokenizer, AutoModel, GPT2Config
+from transformers.modeling_utils import load_sharded_checkpoint
+from train import load_model, replace_layernorm_with_fake_layernorm
+
+from utils import remove_layernorm_by_scaling, extract_std_from_checkpoint, get_device
 
 
 def main():
@@ -26,25 +29,23 @@ def main():
     args = docopt(__doc__)
     
     # Load the model and tokenizer using your Hugging Face Hub model ID
-    model_id = args['--model']
+    model_name = args['--model']
+    ckpt = args['--checkpoint']
     prompt = args['--prompt']
-    remove_ln = args['--remove-ln']
-    
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
-    
-    # Load the model
-    model = GPT2LMHeadModel.from_pretrained(model_id)
-    model = model.to(device)
-    
-    print(model)
+    remove_ln = args['--remove_ln_by_scaling']
 
-    if remove_ln:
-        model = remove_layernorm("gpt2-medium", model)
+    device = get_device()
+    std_dict = extract_std_from_checkpoint(model_name, ckpt)
     
+    model = load_model(ckpt)
+    if remove_ln:
+        model = remove_layernorm_by_scaling(model, std_dict)
+
+    model.to(device)
+
     # Load the tokenizer
     model_type = model.config.model_type
     tokenizer = AutoTokenizer.from_pretrained(model_type)
-    import pdb; pdb.set_trace()
     tokenizer.eos_token = tokenizer.eos_token
     
     # Example usage
@@ -58,7 +59,7 @@ def main():
         max_length=50,  # Adjust max length as needed
         num_return_sequences=1,
         do_sample=True,
-        temperature=0.7,  # Adjust temperature to control randomness (higher = more random)
+        temperature=1.0,  # Adjust temperature to control randomness (higher = more random)
         attention_mask=inputs["attention_mask"],
     )
     
