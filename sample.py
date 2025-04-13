@@ -17,9 +17,8 @@ Options:
 
 import torch
 from std_dicts import std_dicts
-from transformers import GPT2LMHeadModel, AutoTokenizer, AutoModel, GPT2Config
-from transformers.modeling_utils import load_sharded_checkpoint
-from train import load_model, replace_layernorm_with_fake_layernorm
+from transformers import GPT2LMHeadModel, AutoTokenizer
+from train import load_model
 
 from utils import remove_layernorm_by_scaling, extract_std_from_checkpoint, get_device
 
@@ -35,12 +34,22 @@ def main():
     remove_ln = args['--remove_ln_by_scaling']
 
     device = get_device()
-    std_dict = extract_std_from_checkpoint(model_name, ckpt)
     
-    model = load_model(ckpt)
     if remove_ln:
+        model = load_model(ckpt)
+        std_dict = extract_std_from_checkpoint(model_name, ckpt)
         model = remove_layernorm_by_scaling(model, std_dict)
+    else:
+        model = GPT2LMHeadModel.from_pretrained(model_name)
+    
 
+    # Print LayerNorm epsilon values
+    print("\nLayerNorm epsilon values:")
+    print(f"Config layer_norm_epsilon: {model.config.layer_norm_epsilon}")
+    for id, block in enumerate(model.transformer.h):
+        print(f"Block {id} ln_1 eps: {block.ln_1.eps}")
+        print(f"Block {id} ln_2 eps: {block.ln_2.eps}")
+    print(f"Final LayerNorm eps: {model.transformer.ln_f.eps}")
     model.to(device)
 
     # Load the tokenizer
