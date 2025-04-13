@@ -25,12 +25,12 @@ import os
 import torch
 from transformer_lens import HookedTransformer
 from std_dicts import std_dicts
-from utils import remove_layernorm
+from utils import remove_layernorm_by_scaling, get_device
 from pile_eval import preprocess_pile_dataset, evaluate_model_on_pile
 from transformers import GPT2LMHeadModel, AutoModelForCausalLM, logging
 
 # Load model with appropriate device
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = get_device()
 
 def load_saved_model(model_name: str, model_path=None):
     if model_path is not None: 
@@ -47,8 +47,20 @@ def load_hf_model(model_id_or_ckpt_path, model_name, slay_ln=False):
     unused_params = {}
     if os.path.isdir(model_id_or_ckpt_path):
         print("Loading model from local checkpoint")
-        path = os.path.join(model_id_or_ckpt_path, 'pytorch_model.bin')
-        checkpoint_model = torch.load(path, weights_only=True)
+        path = os.path.join(model_id_or_ckpt_path, 'pytorch_model-00001-of-00002.bin')
+        checkpoint_model = torch.load(path, weights_only=True, map_location=device)
+        logging.set_verbosity_error()  # Only show errors, not warnings
+        model_hf = GPT2LMHeadModel.from_pretrained(model_id_or_ckpt_path)
+        nb_keys = 0
+        for key in checkpoint_model.keys():
+            if key not in model_hf.state_dict():
+                # print(f"{key} not in state _dict ")
+                nb_keys += 1
+                unused_params[key] = checkpoint_model[key].cpu()
+        print(f"{nb_keys} parameters not in standard model, and loaded separately")
+
+        path = os.path.join(model_id_or_ckpt_path, 'pytorch_model-00002-of-00002.bin')
+        checkpoint_model = torch.load(path, weights_only=True, map_location=device)
         logging.set_verbosity_error()  # Only show errors, not warnings
         model_hf = GPT2LMHeadModel.from_pretrained(model_id_or_ckpt_path)
         nb_keys = 0
@@ -73,9 +85,11 @@ def load_hf_model(model_id_or_ckpt_path, model_name, slay_ln=False):
                 std_dict[f'blocks.{id}.hook_resid_mid'] = unused_params[f"transformer.h.{id}.ln_2.average_std_buffer"]
             assert unused_params[f"transformer.ln_f.average_std_buffer"] is not None
             std_dict[f'blocks.{id}.hook_resid_post'] = unused_params[f"transformer.ln_f.average_std_buffer"]
-            remove_layernorm(model_name, model_hf, std_dict=std_dict)
+            remove_layernorm_by_scaling(model_hf, std_dict=std_dict)
+            import pdb; pdb.set_trace()
         except AssertionError:
-            remove_layernorm(model_name, model_hf)
+            print("No std values found in unused params, using scaling method")
+            remove_layernorm_by_scaling(model_hf)
 
     return model_hf
 
@@ -115,7 +129,7 @@ def load_pt_file(filepath, model_name, slay_ln=False):
 
     # Now kill the layer norm by setting layer_norm_epsilon to 1e12, and multiplied the ln scaling parameters by 1e6
     if slay_ln:
-        remove_layernorm(model_hf)
+        remove_layernorm_by_scaling(model_hf)
     return model_hf
 
 

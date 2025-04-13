@@ -20,44 +20,6 @@ from std_dicts import std_dicts
 import os
 import json
 
-def remove_ln(model_hf, model_name: str):
-    """Remove layer normalization by scaling weights and setting high epsilon values."""
-    epsilon_value = 1e12
-
-    std_dict = std_dicts[model_name]['std_dict']
-    
-    # Store the epsilon values in the config
-    if not hasattr(model_hf.config, 'layer_norm_eps_values'):
-        model_hf.config.layer_norm_eps_values = {}
-
-    n_layers = len(model_hf.transformer.h)
-    
-    for id, block in enumerate(model_hf.transformer.h):
-        with torch.no_grad():
-            # Get the standard deviations from the std_dict
-            ln1_std = std_dict[f'blocks.{id}.hook_resid_pre']
-            ln2_std = std_dict[f'blocks.{id}.hook_resid_mid']
-            block.ln_1.weight.data *= 1e6 / ln1_std
-            block.ln_2.weight.data *= 1e6 / ln2_std
-            block.ln_1.eps = epsilon_value
-            block.ln_2.eps = epsilon_value
-            
-            # Store epsilon values in config
-            model_hf.config.layer_norm_eps_values[f'block_{id}_ln1'] = epsilon_value
-            model_hf.config.layer_norm_eps_values[f'block_{id}_ln2'] = epsilon_value
-    
-    with torch.no_grad():
-        lnf_std = std_dict[f'blocks.{n_layers-1}.hook_resid_post']
-        model_hf.transformer.ln_f.weight.data *= 1e6 / lnf_std
-        model_hf.transformer.ln_f.eps = epsilon_value
-        model_hf.config.layer_norm_eps_values['final_ln'] = epsilon_value
-    
-    # Save the original layer_norm_epsilon in config
-    model_hf.config.original_layer_norm_epsilon = model_hf.config.layer_norm_epsilon
-    model_hf.config.layer_norm_epsilon = epsilon_value
-    
-    return model_hf
-
 def verify_ln_eps(model):
     """Verify that all LayerNorm epsilon values are set correctly."""
     epsilon_value = 1e12
