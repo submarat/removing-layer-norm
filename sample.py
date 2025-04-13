@@ -5,20 +5,22 @@ Example:
     python sample.py -m results/checkpoint-300 -p "to be or not to"
 
 Usage:
-    sample.py -m MODEL [-p PROMPT] [--remove-ln]
+    sample.py -m MODEL [-c CHECKPOINT] [-p PROMPT] [-r]
 
 Options:
-    -h --help                       Show this help message
-    -m MODEL --model MODEL          Model checkpoint path or model id [REQUIRED]
-    -p PROMPT --prompt PROMPT       Prompt for completion [default: "to be or not to"]
-    --remove_ln                     Undo eps scale hack [default: False]
+    -h --help                               Show this help message
+    -m MODEL --model MODEL                  Pretrained model name [REQUIRED]
+    -c CHECKPOINT --checkpoint CHECKPOINT   Checkpoint to load [REQUIRED]
+    -p PROMPT --prompt PROMPT               Prompt for completion [default: As the last leaf fell from the tree ]
+    -r --remove_ln_by_scaling               Remove ln by scaling weights and eps [default: False]
 """
 
-import os
 import torch
 from std_dicts import std_dicts
 from transformers import GPT2LMHeadModel, AutoTokenizer
-from utils import remove_layernorm
+from train import load_model
+
+from utils import remove_layernorm_by_scaling, extract_std_from_checkpoint, get_device
 
 
 def main():
@@ -26,26 +28,34 @@ def main():
     args = docopt(__doc__)
     
     # Load the model and tokenizer using your Hugging Face Hub model ID
-    model_id = args['--model']
+    model_name = args['--model']
+    ckpt = args['--checkpoint']
     prompt = args['--prompt']
-    remove_ln = args['--remove-ln']
-    
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
-    
-    # Load the model
-    model = GPT2LMHeadModel.from_pretrained(model_id)
-    model = model.to(device)
-    
-    print(model)
+    remove_ln = args['--remove_ln_by_scaling']
 
-    if remove_ln:
-        model = remove_layernorm("gpt2-medium", model)
+    device = get_device()
     
+    if remove_ln:
+        model = load_model(ckpt)
+        std_dict = extract_std_from_checkpoint(model_name, ckpt)
+        model = remove_layernorm_by_scaling(model, std_dict)
+    else:
+        model = GPT2LMHeadModel.from_pretrained(model_name)
+    
+
+    # Print LayerNorm epsilon values
+    print("\nLayerNorm epsilon values:")
+    print(f"Config layer_norm_epsilon: {model.config.layer_norm_epsilon}")
+    for id, block in enumerate(model.transformer.h):
+        print(f"Block {id} ln_1 eps: {block.ln_1.eps}")
+        print(f"Block {id} ln_2 eps: {block.ln_2.eps}")
+    print(f"Final LayerNorm eps: {model.transformer.ln_f.eps}")
+    model.to(device)
+
     # Load the tokenizer
     model_type = model.config.model_type
     tokenizer = AutoTokenizer.from_pretrained(model_type)
-    import pdb; pdb.set_trace()
-    tokenizer.eos_token = tokenizer.eos_token
+    tokenizer.pad_token = tokenizer.eos_token
     
     # Example usage
     text = prompt
