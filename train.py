@@ -72,11 +72,11 @@ class FakeLayerNorm(nn.Module):
             std_dim = n_embd
             
         # Register non-parameter tensors as buffers so they're saved in state_dict
-        self.register_buffer("average_std", torch.ones(std_dim, device=device) * init_average_std)
-        self.register_buffer("bos_std", torch.ones(std_dim, device=device) * init_bos_std)
+        self.register_buffer("average_std_buffer", torch.ones(std_dim, device=device) * init_average_std)
+        self.register_buffer("bos_std_buffer", torch.ones(std_dim, device=device) * init_bos_std)
         
         # Special handling for position 0
-        self.average_std[0] = init_bos_std
+        self.average_std_buffer[0] = init_bos_std
 
         self.iteration = 0
         self.update_freq = 1
@@ -144,8 +144,8 @@ class FakeLayerNorm(nn.Module):
         layer_name = self.layer.split('.')[-1] if hasattr(self, 'layer') and self.layer else "unknown"
         
         # Sample a few values from the std tensors for debugging
-        avg_std_sample = f"[{self.average_std[0].item():.4f}, {self.average_std[1].item():.4f}, ...]"
-        bos_std_sample = f"[{self.bos_std[0].item():.4f}, {self.bos_std[1].item():.4f}, ...]"
+        avg_std_sample = f"[{self.average_std_buffer[0].item():.4f}, {self.average_std_buffer[1].item():.4f}, ...]"
+        bos_std_sample = f"[{self.bos_std_buffer[0].item():.4f}, {self.bos_std_buffer[1].item():.4f}, ...]"
         
         return (f"FakeLayerNorm(layer={layer_name}, mode={mode}, attn_v_mode={attn_v_mode}, "
                 f"real_avg_std={self.real_average_std.item():.4f}, real_bos_std={self.real_bos_std.item():.4f}, "
@@ -187,7 +187,7 @@ class FakeLayerNorm(nn.Module):
                     self.sync_std()
 
             assert std_type in ["avg", "bos"]
-            std = self.average_std if std_type == "avg" else self.bos_std
+            std = self.average_std_buffer if std_type == "avg" else self.bos_std_buffer
             if os.environ.get("EXP_CORRECT_BOS", "0") == "1":
                 return (
                     (input - input.mean(-1, keepdim=True)) / std.view(1, -1, 1) * self.weight
@@ -227,36 +227,202 @@ class FakeLayerNorm(nn.Module):
             # Create new tensors instead of modifying in-place because we don't want to track gradients for these
             # This is conditional on the recomputation mode
             if self.bos_special_treatment.item():
-                new_average_std = self.average_std.clone()
+                new_average_std = self.average_std_buffer.clone()
                 new_average_std[1:] = torch.ones_like(new_average_std[1:]) * self.real_average_std.item()
                 new_average_std[0] = self.real_bos_std.item()
-                self.average_std = new_average_std.detach().requires_grad_(False)
+                self.average_std_buffer = new_average_std.detach().requires_grad_(False)
             else:
-                self.average_std = torch.ones_like(self.average_std) * self.real_average_std.item()
+                self.average_std_buffer = torch.ones_like(self.average_std_buffer) * self.real_average_std.item()
             
             # This will always enable BOS special treatment
             if self.bos_special_treatment.item():
-                new_bos_std = torch.ones_like(self.bos_std) * self.real_bos_std.item()
+                new_bos_std = torch.ones_like(self.bos_std_buffer) * self.real_bos_std.item()
             else:
-                new_bos_std = torch.ones_like(self.bos_std) * self.real_average_std.item()
-            self.bos_std = new_bos_std.detach().requires_grad_(False)
+                new_bos_std = torch.ones_like(self.bos_std_buffer) * self.real_average_std.item()
+            self.bos_std_buffer = new_bos_std.detach().requires_grad_(False)
     
     def disable_eos_special_treatment(self):
-        # Disable EOT special treatment, note that bos_std[0] will be set to average_std[1]
-        # which is not always the same as bos_std[1]
+        # Disable EOT special treatment, note that bos_std_buffer[0] will be set to average_std_buffer[1]
+        # which is not always the same as bos_std_buffer[1]
         with torch.no_grad():
-            # Create a new tensor with the same values as average_std to avoid sharing
-            self.bos_std = self.average_std.clone().detach().requires_grad_(False)
+            # Create a new tensor with the same values as average_std_buffer to avoid sharing
+            self.bos_std_buffer = self.average_std_buffer.clone().detach().requires_grad_(False)
     
     def disable_bos_special_treatment(self):
         # Disable BOS special treatment
         self.bos_special_treatment.fill_(False)
         with torch.no_grad():
             # Special treatment of position 0 is now disabled
-            self.average_std[0] = self.average_std[1]
-            # If EOS mask happens to apply to position 0, should also set bos_std[0] to average
-            self.bos_std[0] = self.bos_std[1]
+            self.average_std_buffer[0] = self.average_std_buffer[1]
+            # If EOS mask happens to apply to position 0, should also set bos_std_buffer[0] to average
+            self.bos_std_buffer[0] = self.bos_std_buffer[1]
 
+
+def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict):
+    n_layers = model.config.n_layer
+    n_embd = model.transformer.h[0].ln_1.weight.shape[0]
+    n_ctx = model.config.n_ctx
+
+    # Replace ln_1 and ln_2 with FakeLayerNorm for each block
+    for i in range(n_layers):
+        block = model.transformer.h[i]
+        
+        # Store original weights
+        ln_1_weight = block.ln_1.weight.clone().detach()
+        ln_1_bias = block.ln_1.bias.clone().detach() if block.ln_1.bias is not None else None
+        ln_2_weight = block.ln_2.weight.clone().detach()
+        ln_2_bias = block.ln_2.bias.clone().detach() if block.ln_2.bias is not None else None
+        
+        # Replace with FakeLayerNorm
+        layer = f"blocks.{i}.hook_resid_pre"
+        block.ln_1 = FakeLayerNorm(
+            n_embd=n_embd,
+            n_ctx=n_ctx,
+            layer=layer,
+            bias=block.ln_1.bias is not None,
+            init_average_std=std_dict[layer],
+            init_bos_std=std_bos_dict[layer])
+
+        layer = f"blocks.{i}.hook_resid_mid"
+        block.ln_2 = FakeLayerNorm(
+            n_embd=n_embd,
+            n_ctx=n_ctx,
+            layer=layer,
+            bias=block.ln_2.bias is not None,
+            init_average_std=std_dict[layer],
+            init_bos_std=std_bos_dict[layer])
+        
+        # Restore weights
+        block.ln_1.weight = nn.Parameter(ln_1_weight)
+        if ln_1_bias is not None:
+            block.ln_1.bias = nn.Parameter(ln_1_bias)
+        block.ln_2.weight = nn.Parameter(ln_2_weight)
+        if ln_2_bias is not None:
+            block.ln_2.bias = nn.Parameter(ln_2_bias)
+            
+        # Monkey patch the attention forward
+        def make_attn_forward(old_forward):
+            def new_forward(self, x_qk, x_v):
+                B, T, C = x_qk.size()
+
+                # Calculate q,k from x_qk and v from x_v
+                # Correct matrix multiplication order and reshape
+                qkv_qk = x_qk.reshape(B*T, C) @ self.c_attn.weight[:, :2*C]  # For Q and K
+                v = x_v.reshape(B*T, C) @ self.c_attn.weight[:, 2*C:]  # For V
+                
+                # Split qkv into q and k
+                q, k = qkv_qk.split(C, dim=1)
+                
+                if self.c_attn.bias is not None:
+                    q = q + self.c_attn.bias[:C]
+                    k = k + self.c_attn.bias[C:2*C]
+                    v = v + self.c_attn.bias[2*C:]
+
+                # Reshape
+                q = q.view(B, T, self.num_heads, C//self.num_heads).transpose(1, 2)
+                k = k.view(B, T, self.num_heads, C//self.num_heads).transpose(1, 2)
+                v = v.view(B, T, self.num_heads, C//self.num_heads).transpose(1, 2)
+
+                # Causal self-attention
+                y = F.scaled_dot_product_attention(
+                    q, k, v,
+                    dropout_p=self.attn_dropout.p,
+                    is_causal=True
+                )
+                y = y.transpose(1, 2).contiguous().view(B, T, C)
+
+                # Output projection
+                y = self.c_proj(y)
+                y = self.resid_dropout(y)
+                return y
+
+            return types.MethodType(new_forward, block.attn)
+
+        block.attn.forward = make_attn_forward(block.attn.forward)
+        
+        # Monkey patch the forward method of the block
+        def make_forward(old_forward):
+            def new_forward(self, x, *args, **kwargs):
+                # Get EOT mask from the input
+                eot_mask = kwargs.pop('eot_mask', None)
+                
+                # Calculate LN'd x for Q and K
+                x_qk = self.ln_1(x)
+                # Calculate LN'd x for V
+                x_v = self.ln_1(x, attn_v=True)
+                
+                if eot_mask is not None:
+                    x_v_eot = self.ln_1(x, std_type='bos', attn_v=True)
+                    x_v[eot_mask] = x_v_eot[eot_mask]
+                    del x_v_eot
+                
+                # Modify attention call to use both x_qk and x_v
+                attn_output = self.attn(x_qk, x_v)
+                x = x + attn_output
+                x = x + self.mlp(self.ln_2(x))
+                return x
+            return types.MethodType(new_forward, block)
+        
+        block.forward = make_forward(block.forward)
+
+    # Replace ln_f with FakeLayerNorm
+    ln_f = model.transformer.ln_f
+    ln_f_weight = ln_f.weight.clone().detach()
+    ln_f_bias = ln_f.bias.clone().detach() if ln_f.bias is not None else None
+    
+    layer = f"blocks.{n_layers-1}.hook_resid_post"
+    model.transformer.ln_f = FakeLayerNorm(
+        n_embd=n_embd,
+        n_ctx=n_ctx,
+        layer=layer,
+        bias=ln_f.bias is not None,
+        init_average_std=std_dict[layer],
+        init_bos_std=std_bos_dict[layer]
+    )
+    model.transformer.ln_f.weight = nn.Parameter(ln_f_weight)
+    if ln_f_bias is not None:
+        model.transformer.ln_f.bias = nn.Parameter(ln_f_bias)
+
+    # Monkey patch the transformer's forward to include eot_mask
+    def make_transformer_forward(old_forward):
+        def new_forward(self, *args, **kwargs):
+            # Extract input_ids from either kwargs or first positional arg
+            input_ids = kwargs.get('input_ids', args[0] if args else None)
+            
+            # Create eot_mask if we have input_ids
+            eot_mask = None
+            if input_ids is not None:
+                eot_mask = input_ids == 50256
+            
+            # If args contains positional arguments that match kwargs, we should use kwargs only
+            if args and isinstance(args[0], torch.Tensor):  # First arg is likely input_ids
+                kwargs['input_ids'] = args[0]
+                args = args[1:]  # Remove the first argument
+            
+            # Get embeddings
+            hidden_states = self.wte(kwargs['input_ids'])
+            position_ids = torch.arange(0, hidden_states.size(1), dtype=torch.long, device=hidden_states.device)
+            hidden_states = hidden_states + self.wpe(position_ids)
+            hidden_states = self.drop(hidden_states)
+
+            # Forward through blocks with eot_mask
+            for block in self.h:
+                hidden_states = block(hidden_states, eot_mask=eot_mask)
+            
+            hidden_states = self.ln_f(hidden_states)
+
+            # Create BaseModelOutputWithPastAndCrossAttentions object
+            return transformers.modeling_outputs.BaseModelOutputWithPastAndCrossAttentions(
+                last_hidden_state=hidden_states,
+                past_key_values=None,
+                hidden_states=None,
+                attentions=None,
+                cross_attentions=None,
+            )
+
+        return types.MethodType(new_forward, model.transformer)
+    
+    model.transformer.forward = make_transformer_forward(model.transformer.forward)
 
 def load_model(model_name="gpt2", remove_ln=False):
     model = transformers.GPT2LMHeadModel.from_pretrained(
@@ -266,172 +432,6 @@ def load_model(model_name="gpt2", remove_ln=False):
             model_name, dropout=0.0, attn_pdrop=0.0, embd_pdrop=0.0, resid_pdrop=0.0
         ),
     )
-
-    def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict):
-        n_layers = model.config.n_layer
-        n_embd = model.transformer.h[0].ln_1.weight.shape[0]
-        n_ctx = model.config.n_ctx
-
-        # Replace ln_1 and ln_2 with FakeLayerNorm for each block
-        for i in range(n_layers):
-            block = model.transformer.h[i]
-            
-            # Store original weights
-            ln_1_weight = block.ln_1.weight.clone().detach()
-            ln_1_bias = block.ln_1.bias.clone().detach() if block.ln_1.bias is not None else None
-            ln_2_weight = block.ln_2.weight.clone().detach()
-            ln_2_bias = block.ln_2.bias.clone().detach() if block.ln_2.bias is not None else None
-            
-            # Replace with FakeLayerNorm
-            layer = f"blocks.{i}.hook_resid_pre"
-            block.ln_1 = FakeLayerNorm(
-                n_embd=n_embd,
-                n_ctx=n_ctx,
-                layer=layer,
-                bias=block.ln_1.bias is not None,
-                init_average_std=std_dict[layer],
-                init_bos_std=std_bos_dict[layer])
-
-            layer = f"blocks.{i}.hook_resid_mid"
-            block.ln_2 = FakeLayerNorm(
-                n_embd=n_embd,
-                n_ctx=n_ctx,
-                layer=layer,
-                bias=block.ln_2.bias is not None,
-                init_average_std=std_dict[layer],
-                init_bos_std=std_bos_dict[layer])
-            
-            # Restore weights
-            block.ln_1.weight = nn.Parameter(ln_1_weight)
-            if ln_1_bias is not None:
-                block.ln_1.bias = nn.Parameter(ln_1_bias)
-            block.ln_2.weight = nn.Parameter(ln_2_weight)
-            if ln_2_bias is not None:
-                block.ln_2.bias = nn.Parameter(ln_2_bias)
-                
-            # Monkey patch the attention forward
-            def make_attn_forward(old_forward):
-                def new_forward(self, x_qk, x_v):
-                    B, T, C = x_qk.size()
-
-                    # Calculate q,k from x_qk and v from x_v
-                    # Correct matrix multiplication order and reshape
-                    qkv_qk = x_qk.reshape(B*T, C) @ self.c_attn.weight[:, :2*C]  # For Q and K
-                    v = x_v.reshape(B*T, C) @ self.c_attn.weight[:, 2*C:]  # For V
-                    
-                    # Split qkv into q and k
-                    q, k = qkv_qk.split(C, dim=1)
-                    
-                    if self.c_attn.bias is not None:
-                        q = q + self.c_attn.bias[:C]
-                        k = k + self.c_attn.bias[C:2*C]
-                        v = v + self.c_attn.bias[2*C:]
-
-                    # Reshape
-                    q = q.view(B, T, self.num_heads, C//self.num_heads).transpose(1, 2)
-                    k = k.view(B, T, self.num_heads, C//self.num_heads).transpose(1, 2)
-                    v = v.view(B, T, self.num_heads, C//self.num_heads).transpose(1, 2)
-
-                    # Causal self-attention
-                    y = F.scaled_dot_product_attention(
-                        q, k, v,
-                        dropout_p=self.attn_dropout.p,
-                        is_causal=True
-                    )
-                    y = y.transpose(1, 2).contiguous().view(B, T, C)
-
-                    # Output projection
-                    y = self.c_proj(y)
-                    y = self.resid_dropout(y)
-                    return y
-
-                return types.MethodType(new_forward, block.attn)
-
-            block.attn.forward = make_attn_forward(block.attn.forward)
-            
-            # Monkey patch the forward method of the block
-            def make_forward(old_forward):
-                def new_forward(self, x, *args, **kwargs):
-                    # Get EOT mask from the input
-                    eot_mask = kwargs.pop('eot_mask', None)
-                    
-                    # Calculate LN'd x for Q and K
-                    x_qk = self.ln_1(x)
-                    # Calculate LN'd x for V
-                    x_v = self.ln_1(x, attn_v=True)
-                    
-                    if eot_mask is not None:
-                        x_v_eot = self.ln_1(x, std_type='bos', attn_v=True)
-                        x_v[eot_mask] = x_v_eot[eot_mask]
-                        del x_v_eot
-                    
-                    # Modify attention call to use both x_qk and x_v
-                    attn_output = self.attn(x_qk, x_v)
-                    x = x + attn_output
-                    x = x + self.mlp(self.ln_2(x))
-                    return x
-                return types.MethodType(new_forward, block)
-            
-            block.forward = make_forward(block.forward)
-
-        # Replace ln_f with FakeLayerNorm
-        ln_f = model.transformer.ln_f
-        ln_f_weight = ln_f.weight.clone().detach()
-        ln_f_bias = ln_f.bias.clone().detach() if ln_f.bias is not None else None
-        
-        layer = f"blocks.{n_layers-1}.hook_resid_post"
-        model.transformer.ln_f = FakeLayerNorm(
-            n_embd=n_embd,
-            n_ctx=n_ctx,
-            layer=layer,
-            bias=ln_f.bias is not None,
-            init_average_std=std_dict[layer],
-            init_bos_std=std_bos_dict[layer]
-        )
-        model.transformer.ln_f.weight = nn.Parameter(ln_f_weight)
-        if ln_f_bias is not None:
-            model.transformer.ln_f.bias = nn.Parameter(ln_f_bias)
-
-        # Monkey patch the transformer's forward to include eot_mask
-        def make_transformer_forward(old_forward):
-            def new_forward(self, *args, **kwargs):
-                # Extract input_ids from either kwargs or first positional arg
-                input_ids = kwargs.get('input_ids', args[0] if args else None)
-                
-                # Create eot_mask if we have input_ids
-                eot_mask = None
-                if input_ids is not None:
-                    eot_mask = input_ids == 50256
-                
-                # If args contains positional arguments that match kwargs, we should use kwargs only
-                if args and isinstance(args[0], torch.Tensor):  # First arg is likely input_ids
-                    kwargs['input_ids'] = args[0]
-                    args = args[1:]  # Remove the first argument
-                
-                # Get embeddings
-                hidden_states = self.wte(kwargs['input_ids'])
-                position_ids = torch.arange(0, hidden_states.size(1), dtype=torch.long, device=hidden_states.device)
-                hidden_states = hidden_states + self.wpe(position_ids)
-                hidden_states = self.drop(hidden_states)
-
-                # Forward through blocks with eot_mask
-                for block in self.h:
-                    hidden_states = block(hidden_states, eot_mask=eot_mask)
-                
-                hidden_states = self.ln_f(hidden_states)
-
-                # Create BaseModelOutputWithPastAndCrossAttentions object
-                return transformers.modeling_outputs.BaseModelOutputWithPastAndCrossAttentions(
-                    last_hidden_state=hidden_states,
-                    past_key_values=None,
-                    hidden_states=None,
-                    attentions=None,
-                    cross_attentions=None,
-                )
-
-            return types.MethodType(new_forward, model.transformer)
-        
-        model.transformer.forward = make_transformer_forward(model.transformer.forward)
 
     if remove_ln:
         # Replace all LayerNorm instances with FakeLayerNorm
@@ -547,7 +547,7 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
             pass
 
         def on_step_begin(self, args, state, control, **kwargs):
-            """ Log to wandb: block number, mode, att_v_mode, average_std, bos_std, average_std[0], average_std[1], bos_std[0], bos_std[1] """
+            """ Log to wandb: block number, mode, att_v_mode, average_std_buffer, bos_std_buffer, average_std_buffer[0], average_std_buffer[1], bos_std_buffer[0], bos_std_buffer[1] """
             if not _USE_WANDB:
                 return control
 
@@ -555,28 +555,28 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
                 wandb.log({
                     f"block_{i}_ln_1_real_average_std": block.ln_1.real_average_std_prop,
                     f"block_{i}_ln_1_real_bos_std": block.ln_1.real_bos_std_prop,
-                    f"block_{i}_ln_1_average_std_0": block.ln_1.average_std[0],
-                    f"block_{i}_ln_1_average_std_1": block.ln_1.average_std[1],
-                    f"block_{i}_ln_1_bos_std_0": block.ln_1.bos_std[0],
-                    f"block_{i}_ln_1_bos_std_1": block.ln_1.bos_std[1],
+                    f"block_{i}_ln_1_average_std_0": block.ln_1.average_std_buffer[0],
+                    f"block_{i}_ln_1_average_std_1": block.ln_1.average_std_buffer[1],
+                    f"block_{i}_ln_1_bos_std_0": block.ln_1.bos_std_buffer[0],
+                    f"block_{i}_ln_1_bos_std_1": block.ln_1.bos_std_buffer[1],
                 })
 
                 wandb.log({
                     f"block_{i}_ln_2_real_average_std": block.ln_2.real_average_std_prop,
                     f"block_{i}_ln_2_real_bos_std": block.ln_2.real_bos_std_prop,
-                    f"block_{i}_ln_2_average_std_0": block.ln_2.average_std[0],
-                    f"block_{i}_ln_2_average_std_1": block.ln_2.average_std[1],
-                    f"block_{i}_ln_2_bos_std_0": block.ln_2.bos_std[0],
-                    f"block_{i}_ln_2_bos_std_1": block.ln_2.bos_std[1],
+                    f"block_{i}_ln_2_average_std_0": block.ln_2.average_std_buffer[0],
+                    f"block_{i}_ln_2_average_std_1": block.ln_2.average_std_buffer[1],
+                    f"block_{i}_ln_2_bos_std_0": block.ln_2.bos_std_buffer[0],
+                    f"block_{i}_ln_2_bos_std_1": block.ln_2.bos_std_buffer[1],
                 })
 
             wandb.log({
                 f"ln_f_real_average_std": model.transformer.ln_f.real_average_std_prop,
                 f"ln_f_real_bos_std": model.transformer.ln_f.real_bos_std_prop,
-                f"ln_f_average_std_0": model.transformer.ln_f.average_std[0],
-                f"ln_f_average_std_1": model.transformer.ln_f.average_std[1],
-                f"ln_f_bos_std_0": model.transformer.ln_f.bos_std[0],
-                f"ln_f_bos_std_1": model.transformer.ln_f.bos_std[1],
+                f"ln_f_average_std_0": model.transformer.ln_f.average_std_buffer[0],
+                f"ln_f_average_std_1": model.transformer.ln_f.average_std_buffer[1],
+                f"ln_f_bos_std_0": model.transformer.ln_f.bos_std_buffer[0],
+                f"ln_f_bos_std_1": model.transformer.ln_f.bos_std_buffer[1],
             })
 
             return control 
