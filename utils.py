@@ -59,3 +59,36 @@ def remove_layernorm_by_scaling(model_hf, std_dict):
     # Set the layer_norm_epsilon to 1e12 as it is not a buffer or learned parameter
     model_hf.config.layer_norm_epsilon = 1e12
     return model_hf
+
+
+def calculate_sink_rate(model, attentions, eps=0.3):
+    """
+    Proportion of heads that attend to the sink on average with a coefficient of at least eps.
+    As defined in https://arxiv.org/pdf/2504.02732
+    """
+
+    # Get config from model
+    config = model.config
+    T = attentions[0].shape[2]
+    H = config.n_head
+    L = config.n_layer
+    B = attentions[0].shape[0]
+
+    # Calculate the sink rate for each input in the batch
+    sink_rate = torch.zeros((B,), device=attentions[0].device)
+    for attn in attentions:
+        print(attn.shape)
+        # Heads attending to sink
+        y = attn[:,:,:,0] > eps # Bool[B, T, H]
+        # Number of heads attending to sink for each position
+        y = y.sum(dim=(1,2)).float()
+        # Proportion of heads attending to sink
+        y = y/T
+        sink_rate += y
+
+    # Average over the batch of inputs
+    sink_rate = sink_rate.mean()
+
+    # Scale the sink rate
+    sink_rate = sink_rate/(L*H)
+    return sink_rate
