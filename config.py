@@ -36,6 +36,7 @@ class FinetuneConfig(BaseModel):
     
     # Auxiliary loss params
     aux_loss_weight: float = Field(default=0.0, description="Weight for the auxiliary loss to encourage uniform residual norms")
+    gradient_checkpointing: bool = Field(default=False, description="Use gradient checkpointing to save memory")
 
     # Layernorm schedule params
     gap_ln2: Optional[int]
@@ -106,6 +107,8 @@ def make_gpt2_standard_aux():
     desired_batch_size = target_batch_tokens / block_size
     gradient_accumulation_steps = int(desired_batch_size // batch_size)
     
+    gradient_checkpointing = True
+
     # Calculate layernorm schedule
     gap_ln2 = 2
     gap_ln1qk = 2
@@ -330,6 +333,8 @@ def make_gpt2_medium_fasttune_aux():
     target_batch_tokens = 2**19
     warmup_steps = 10  # Shorter warmup due to accelerated schedule
     
+    gradient_checkpointing = True
+
     # Calculate derived training params
     batch_size = base_batch_size
     desired_batch_size = target_batch_tokens / block_size
@@ -442,6 +447,8 @@ def make_gpt2_large_aux():
     gradient_accumulation_steps = int(desired_batch_size // batch_size)
     warmup_steps = 10
     
+    gradient_checkpointing = True
+
     # Calculate layernorm schedule
     gap_ln2 = 4
     gap_ln1qk = 4
@@ -548,6 +555,8 @@ def make_gpt2_xl_aux():
     desired_batch_size = target_batch_tokens / block_size
     gradient_accumulation_steps = int(desired_batch_size // batch_size)
     warmup_steps = 20
+
+    gradient_checkpointing = True
     
     # Calculate layernorm schedule
     gap_ln2 = 5
