@@ -97,7 +97,7 @@ def make_gpt2_standard_aux():
     
     # Training params
     base_batch_size = 32
-    max_steps = 300
+    max_steps = 1600
     block_size = 1024
     target_batch_tokens = 2**19
     warmup_steps = 25
@@ -122,7 +122,7 @@ def make_gpt2_standard_aux():
     start_ln1v = start_ln1qk + 12 * gap_ln1qk
     start_lnf = start_ln1v + 12 * gap_ln1v
     start_eot = start_lnf + 2
-    start_bos = start_eot + 10
+    start_bos = start_eot + 1000
 
     aux_loss_weight = 0.1
     
@@ -328,7 +328,7 @@ def make_gpt2_medium_fasttune_aux():
     
     # Training params
     base_batch_size = 22
-    max_steps = 500
+    max_steps = 1600
     block_size = 1024
     target_batch_tokens = 2**19
     warmup_steps = 10  # Shorter warmup due to accelerated schedule
@@ -353,7 +353,7 @@ def make_gpt2_medium_fasttune_aux():
     start_ln1v = start_ln1qk + n_layers * gap_ln1qk
     start_lnf = start_ln1v + n_layers * gap_ln1v
     start_eot = start_lnf + 2
-    start_bos = start_eot + 10
+    start_bos = start_eot + 1000
 
     aux_loss_weight = 0.1
     
@@ -437,7 +437,7 @@ def make_gpt2_large_aux():
     
     # Training params
     base_batch_size = 10
-    max_steps = 1200
+    max_steps = 1600
     block_size = 1024
     target_batch_tokens = 2**19
     
@@ -462,7 +462,7 @@ def make_gpt2_large_aux():
     start_ln1v = start_ln1qk + n_layers * gap_ln1qk
     start_lnf = start_ln1v + n_layers * gap_ln1v
     start_eot = start_lnf + 2
-    start_bos = start_eot + 10
+    start_bos = start_eot + 1000
     
     aux_loss_weight = 0.1
 
@@ -545,7 +545,7 @@ def make_gpt2_xl_aux():
     n_layers = 48
     
     # Training params
-    base_batch_size = 14
+    base_batch_size = 4
     max_steps = 1600
     block_size = 1024
     target_batch_tokens = 2**19
@@ -571,7 +571,7 @@ def make_gpt2_xl_aux():
     start_ln1v = start_ln1qk + n_layers * gap_ln1qk
     start_lnf = start_ln1v + n_layers * gap_ln1v
     start_eot = start_lnf + 2
-    start_bos = start_eot + 10
+    start_bos = start_eot + 1000
     
     aux_loss_weight = 0.025
 
