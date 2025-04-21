@@ -1,4 +1,5 @@
 # %%
+import os
 import sys
 import copy
 import numpy as np
@@ -17,6 +18,10 @@ sys.path.append(parent_dir)
 
 from load_models import NoLNModelLoader
 
+
+# %%
+os.makedirs('figures', exist_ok=True)
+os.makedirs('parquets', exist_ok=True)
 
 # %%
 model = NoLNModelLoader(model_dir='../models/',
