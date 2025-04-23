@@ -23,7 +23,7 @@ class FinetuneConfig(BaseModel):
     weight_decay: float = 0.01
     learning_rate: float = 6e-4
     lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
-    lr_scheduler_kwargs: dict = {"min_lr": 3e-4}
+    lr_scheduler_kwargs: dict = {"min_lr": 1e-5}
     save_steps: int = 100  # Save checkpoint every 100 steps, for larger models less often
     
     # Evaluation params
@@ -437,7 +437,7 @@ def make_gpt2_large_aux():
     
     # Training params
     base_batch_size = 10
-    max_steps = 1600
+    max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
     
