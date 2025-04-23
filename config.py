@@ -436,7 +436,7 @@ def make_gpt2_large_aux():
     n_layers = 36
     
     # Training params
-    base_batch_size = 12
+    base_batch_size = 10
     max_steps = 1600
     block_size = 1024
     target_batch_tokens = 2**19
@@ -462,9 +462,9 @@ def make_gpt2_large_aux():
     start_ln1v = start_ln1qk + n_layers * gap_ln1qk
     start_lnf = start_ln1v + n_layers * gap_ln1v
     start_eot = start_lnf + 2
-    start_bos = start_eot + 1000
+    start_bos = start_eot + 10
     
-    aux_loss_weight = 0.025
+    aux_loss_weight = 0.1
 
     return FinetuneConfig(**locals())
 
