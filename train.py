@@ -159,14 +159,6 @@ class FakeLayerNorm(nn.Module):
         # LN for the QK and V paths separately.
         is_fake_value = self.attn_v_is_fake.item() if attn_v else self.is_fake.item()
 
-        # Refresh std values for the first iteration
-        # Useful for different average_std recomputation schemes
-        if self.iteration == 0:
-            avg_std, bos_std = self.recompute_average_std(input)
-            self.real_average_std.fill_(float(avg_std))
-            self.real_bos_std.fill_(float(bos_std))
-            self.sync_std()
-        
         self.iteration += 1
         # Calculate the std of the input
         if self.iteration % self.update_freq == 0:

@@ -23,11 +23,13 @@ Options:
 
 import os
 import torch
+import train
 from transformer_lens import HookedTransformer
 from std_dicts import std_dicts
 from utils import extract_std_from_checkpoint, remove_layernorm_by_scaling, get_device
 from pile_eval import preprocess_pile_dataset, evaluate_model_on_pile
 from transformers import GPT2LMHeadModel, AutoModelForCausalLM, logging
+from transformers.modeling_utils import load_sharded_checkpoint
 
 # Load model with appropriate device
 device = get_device()
@@ -57,6 +59,28 @@ def load_hf_model(model_id_or_ckpt_path, model_name, slay_ln=False):
             remove_layernorm_by_scaling(model_hf, std_dict=std_dicts[model_name]["std_dict"])
 
     return model_hf
+
+def load_fakeln_checkpoint(ckpt_path, model_name):
+
+    # Load model and replace with FakeLayerNorm
+    ckpt_model = train.load_model(model_name=model_name, remove_ln=True)
+    # Load checkpoint to load in std values
+    try:
+        # First try loading a single pytorch model file
+        missing, unexpected = ckpt_model.load_state_dict(torch.load(os.path.join(ckpt_path, 'pytorch_model.bin'), map_location=get_device()), strict=False)
+    except FileNotFoundError:
+        try:
+            # If that fails, try loading a sharded checkpoint
+            missing, unexpected = load_sharded_checkpoint(ckpt_model, ckpt_path, strict=False)
+        except Exception as e:
+            raise ValueError(f"Could not load checkpoint from {ckpt_path}. Error: {str(e)}")
+
+    if missing:
+        print(f"Missing keys when loading checkpoint: {len(missing)} keys")
+    if unexpected:
+        print(f"Unexpected keys when loading checkpoint: {len(unexpected)} keys")
+
+    return ckpt_model
 
 
 def load_pt_file(filepath, model_name, slay_ln=False):
@@ -178,12 +202,12 @@ def main():
         model = load_hf_model(model_path, model_name, slay_ln=slay_ln)
     elif format_type == 'noLN_HF_model':
         model = load_nln_hf_model(model_name=model_name, name=model_path)
+    elif format_type == 'fakeln_checkpoint':
+        model = load_fakeln_checkpoint(model_name=model_name, ckpt_path=model_path)
     else:
         raise ValueError(f"Unknown format type: {format_type}")
 
     model = model.to(device)
-    
-
 
     # Using shared preprocessing function
     processed_examples, tokenizer = preprocess_pile_dataset(dataset_name, model_name, num_samples)
