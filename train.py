@@ -210,7 +210,7 @@ class FakeLayerNorm(nn.Module):
         self.average_std_buffer[0] = init_bos_std
 
         self.iteration = 0
-        self.update_freq = 1
+        self.update_freq = 10
     
     def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
         # Call parent method to load most of the state
