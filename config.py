@@ -241,7 +241,7 @@ def make_gpt2_medium_fasttune():
     n_layers = 24
     
     # Training params
-    base_batch_size = 22
+    base_batch_size = 17
     max_steps = 500
     block_size = 1024
     target_batch_tokens = 2**19
