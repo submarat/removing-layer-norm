@@ -24,11 +24,11 @@ class FinetuneConfig(BaseModel):
     learning_rate: float = 6e-4
     lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
     lr_scheduler_kwargs: dict = {"min_lr": 3e-4}
-    save_steps: int = 100  # Save checkpoint every 100 steps, for larger models less often
+    save_steps: int = 50  # Save checkpoint every 100 steps, for larger models less often
     
     # Evaluation params
     num_eval_samples: int = 1000
-    eval_steps: int = 100
+    eval_steps: int = 200
     
     # Derived training params
     batch_size: int
@@ -85,7 +85,7 @@ def make_gpt2_standard():
     start_eot = start_lnf + 2
     start_bos = start_eot + 10
 
-    early_stop_step = start_bos + 40
+    early_stop_step = start_bos + 200
     
     return FinetuneConfig(**locals())
 
@@ -468,6 +468,45 @@ def make_gpt2_large_aux():
 
     return FinetuneConfig(**locals())
 
+
+def make_gpt2_large_aux_fast():
+    # Architecture params
+    model_name = "gpt2-large"
+    n_layers = 36
+    
+    # Training params
+    base_batch_size = 15
+    max_steps = 500
+    block_size = 1024
+    target_batch_tokens = 2**19
+    
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    warmup_steps = 10
+    
+    gradient_checkpointing = True
+
+    # Calculate layernorm schedule
+    gap_ln2 = 1
+    gap_ln1qk = 1
+    gap_ln1v = 2
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+    
+    start_ln2 = 20
+    start_ln1qk = start_ln2 + n_layers * gap_ln2
+    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
+    start_lnf = start_ln1v + n_layers * gap_ln1v
+    start_eot = start_lnf + 2
+    start_bos = start_eot + 5
+    
+    aux_loss_weight = 0.05
+
+    return FinetuneConfig(**locals())
+
 def make_gpt2_large_test():
     # Architecture params
     model_name = "gpt2-large"
@@ -621,6 +660,7 @@ FINETUNE_CONFIGS = {
     "gpt2-medium_test": make_gpt2_medium_test(),
     "gpt2-large": make_gpt2_large(),
     "gpt2-large_aux": make_gpt2_large_aux(),
+    "gpt2-large_aux_fast": make_gpt2_large_aux_fast(),
     "gpt2-large_test": make_gpt2_large_test(),
     "gpt2-xl": make_gpt2_xl(),
     "gpt2-xl_aux": make_gpt2_xl_aux(),
