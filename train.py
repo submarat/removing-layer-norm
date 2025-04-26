@@ -10,6 +10,7 @@ import os
 
 import argparse
 import datasets
+import gc
 import numpy as np
 import torch
 import torch.nn as nn
@@ -45,6 +46,136 @@ torch.manual_seed(1337)
 
 _USE_WANDB = True
 
+class CustomTrainer(Trainer):
+    """Trainer with auxiliary loss to encourage uniform residual norms."""
+    
+    def __init__(self, *args, aux_loss_weight=0.1, **kwargs):
+        """
+        CustomTrainer with auxiliary loss to encourage uniform residual norms.
+        
+        Args:
+            aux_loss_weight: Weight of the auxiliary loss for uniform residual norms.
+                             Set to 0 to disable the auxiliary loss.
+        """
+        super().__init__(*args, **kwargs)
+        self.aux_loss_weight = aux_loss_weight
+        self.pre_ln_f_activations = None
+        
+        # Register a hook to capture activations if we're using auxiliary loss
+        if self.aux_loss_weight > 0 and hasattr(self.model, 'transformer'):
+            # Register forward hook to capture activations before ln_f
+            def pre_ln_f_hook(module, input):
+                # Store the input to ln_f (which is what we want to normalize)
+                self.pre_ln_f_activations = input[0]
+                return input
+                
+            # Register the hook on the final layer norm
+            self.model.transformer.ln_f.register_forward_pre_hook(pre_ln_f_hook)
+        
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        """Compute CE loss with an auxiliary loss to encourage uniform residual norms."""
+        # Regular forward pass - hook will capture activations before ln_f
+        outputs = model(**inputs)
+        loss = outputs.loss
+        
+        # Skip auxiliary loss calculation if weight is 0 or no activations captured
+        if self.aux_loss_weight == 0 or self.pre_ln_f_activations is None:
+            return (loss, outputs) if return_outputs else loss
+        
+        # Get input_ids for identifying special tokens
+        input_ids = inputs["input_ids"]
+        
+        # Identify BOS and EOS tokens
+        # BOS is the first token (position 0)
+        bos_positions = torch.zeros_like(input_ids, dtype=torch.bool)
+        bos_positions[:, 0] = True
+        
+        # For GPT-2, the EOS token ID is 50256
+        eos_token_id = 50256  # GPT-2 specific EOS token ID
+        eos_positions = (input_ids == eos_token_id)
+        
+        # Create a mask for non-BOS/EOS positions
+        non_special_positions = ~(bos_positions | eos_positions)
+        
+        # Calculate norm statistics from the captured activations
+        # We need to reshape the activations to match the input_ids shape for masking
+        hidden_states = self.pre_ln_f_activations
+        
+        # Compute std along feature dimension for each position
+        with torch.no_grad():  # Only for computing statistics, not affecting gradients
+            mean = hidden_states.mean(dim=-1, keepdim=True)
+            # Compute variance 
+            var = ((hidden_states - mean) ** 2).mean(dim=-1)
+            # Compute standard deviation
+            std = torch.sqrt(var + 1e-5)  # Adding epsilon for numerical stability
+            
+            # Get target std from non-special positions
+            # Create flattened masks aligned with the std tensor
+            batch_size, seq_len = input_ids.size()
+            flat_std = std.view(-1)
+            flat_non_special = non_special_positions.view(-1)
+            
+            # Extract valid standard deviations using the mask
+            valid_stds = flat_std[flat_non_special]
+            
+            if valid_stds.numel() > 0:
+                target_std = valid_stds.mean()
+            else:
+                # Fallback if no valid positions
+                target_std = torch.tensor(1.0, device=std.device)
+        
+        # Now compute the loss with gradients
+        # Recompute mean and std with gradient tracking enabled
+        mean_with_grad = hidden_states.mean(dim=-1, keepdim=True)
+        centered = hidden_states - mean_with_grad
+        var_with_grad = (centered ** 2).mean(dim=-1)
+        std_with_grad = torch.sqrt(var_with_grad + 1e-5)
+        
+        # Calculate auxiliary loss - MSE to encourage uniform norms
+        # Computing this using the gradable tensors
+        aux_loss = self.aux_loss_weight * ((std_with_grad - target_std) ** 2).mean()
+        
+        # Free up memory - important to avoid OOM errors
+        self.pre_ln_f_activations = None
+        
+        # Log statistics if using wandb
+        if _USE_WANDB:
+            try:
+                is_main_process = torch.distributed.get_rank() == 0 if torch.distributed.is_initialized() else True
+            except:
+                is_main_process = True
+                
+            if is_main_process:
+                # Compute statistics for logging using the already computed values
+                with torch.no_grad():
+                    flat_bos = bos_positions.view(-1)
+                    flat_eos = eos_positions.view(-1)
+                    
+                    bos_std_val = flat_std[flat_bos].mean().item() if flat_bos.any() else 0
+                    eos_std_val = flat_std[flat_eos].mean().item() if flat_eos.any() else 0
+                    
+                    wandb.log({
+                        "target_std": target_std.item(),
+                        "avg_std": std.mean().item(),
+                        "bos_std": bos_std_val,
+                        "eos_std": eos_std_val,
+                        "aux_loss": aux_loss.item(),
+                        "main_loss": loss.item()
+                    })
+        
+        # Free up memory for other tensors we no longer need
+        del std, var
+        if _USE_WANDB:
+            with torch.no_grad():
+                del flat_bos, flat_eos
+        torch.cuda.empty_cache()  # Explicitly clear cache if using CUDA
+        gc.collect() # Collect garbage to free up memory sometimes this does magic
+        
+        # Add auxiliary loss to main loss
+        loss = loss + aux_loss
+        
+        return (loss, outputs) if return_outputs else loss
+
 class FakeLayerNorm(nn.Module):
     """LayerNorm using a fixed std instead of the actual standard deviation."""
 
@@ -79,7 +210,7 @@ class FakeLayerNorm(nn.Module):
         self.average_std_buffer[0] = init_bos_std
 
         self.iteration = 0
-        self.update_freq = 1
+        self.update_freq = 10
     
     def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
         # Call parent method to load most of the state
@@ -428,11 +559,10 @@ def load_model(model_name="gpt2", remove_ln=False):
     model = transformers.GPT2LMHeadModel.from_pretrained(
         model_name,
         cache_dir=f"{model_name}_cache",
-        config=transformers.GPT2Config.from_pretrained(
-            model_name, dropout=0.0, attn_pdrop=0.0, embd_pdrop=0.0, resid_pdrop=0.0
-        ),
+        config=transformers.GPT2Config.from_pretrained(model_name),
     )
-
+    # attn_pdrop=0.1, embd_pdrop=0.1, resid_pdrop=0.1: Default values for GPT2, can be changed with kwargs
+    
     if remove_ln:
         # Replace all LayerNorm instances with FakeLayerNorm
         std_dict = std_dicts[model_name]["std_dict"]
@@ -683,15 +813,28 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
         }
     else:
         eval_datasets = tokenized["test"]
+
+    aux_loss_weight = config.aux_loss_weight
     
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=tokenized["train"],
-        eval_dataset=eval_datasets,
-        data_collator=data_collator,
-        callbacks=callbacks,
-    )
+    if aux_loss_weight != 0:
+        trainer = CustomTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=tokenized["train"],
+            eval_dataset=eval_datasets,
+            data_collator=data_collator,
+            callbacks=callbacks,
+            aux_loss_weight=aux_loss_weight,
+        )
+    else:
+        trainer = Trainer(
+            model=model,
+            args=training_args,
+            train_dataset=tokenized["train"],
+            eval_dataset=eval_datasets,
+            data_collator=data_collator,
+            callbacks=callbacks,
+        )
 
     trainer.train(
         resume_from_checkpoint=training_args.resume_from_checkpoint
@@ -785,6 +928,7 @@ def main():
         per_device_train_batch_size=config.batch_size,
         per_device_eval_batch_size=4,
         gradient_accumulation_steps=config.gradient_accumulation_steps,
+        gradient_checkpointing=config.gradient_checkpointing,
         warmup_steps=config.warmup_steps,
         weight_decay=config.weight_decay,
         learning_rate=config.learning_rate,
