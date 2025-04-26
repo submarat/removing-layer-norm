@@ -611,10 +611,10 @@ def make_gpt2_xl_test():
     return FinetuneConfig(**locals())
 
 FINETUNE_CONFIGS = {
-    "gpt2_standard": make_gpt2_standard(),
-    "gpt2_standard_aux": make_gpt2_standard_aux(),
-    "gpt2_test": make_gpt2_test(),
-    "gpt2_test_all_zeros": make_gpt2_test_all_zeros(),
+    "gpt2-standard": make_gpt2_standard(),
+    "gpt2-standard_aux": make_gpt2_standard_aux(),
+    "gpt2-standard_test": make_gpt2_test(),
+    "gpt2-standard_test_all_zeros": make_gpt2_test_all_zeros(),
     "gpt2-medium_slow": make_gpt2_medium_slow(),
     "gpt2-medium_fasttune": make_gpt2_medium_fasttune(),
     "gpt2-medium_fasttune_aux": make_gpt2_medium_fasttune_aux(),
