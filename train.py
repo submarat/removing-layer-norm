@@ -559,11 +559,10 @@ def load_model(model_name="gpt2", remove_ln=False):
     model = transformers.GPT2LMHeadModel.from_pretrained(
         model_name,
         cache_dir=f"{model_name}_cache",
-        config=transformers.GPT2Config.from_pretrained(
-            model_name, dropout=0.0, attn_pdrop=0.0, embd_pdrop=0.0, resid_pdrop=0.0
-        ),
+        config=transformers.GPT2Config.from_pretrained(model_name),
     )
-
+    # attn_pdrop=0.1, embd_pdrop=0.1, resid_pdrop=0.1: Default values for GPT2, can be changed with kwargs
+    
     if remove_ln:
         # Replace all LayerNorm instances with FakeLayerNorm
         std_dict = std_dicts[model_name]["std_dict"]
