@@ -475,7 +475,7 @@ def make_gpt2_large_aux_fast():
     n_layers = 36
     
     # Training params
-    base_batch_size = 15
+    base_batch_size = 10
     max_steps = 500
     block_size = 1024
     target_batch_tokens = 2**19
@@ -489,9 +489,9 @@ def make_gpt2_large_aux_fast():
     gradient_checkpointing = True
 
     # Calculate layernorm schedule
-    gap_ln2 = 1
+    gap_ln2 = 2
     gap_ln1qk = 1
-    gap_ln1v = 2
+    gap_ln1v = 1
     gap_lnf = None
     gap_eot = 0
     gap_bos = 0
@@ -503,7 +503,7 @@ def make_gpt2_large_aux_fast():
     start_eot = start_lnf + 2
     start_bos = start_eot + 5
     
-    aux_loss_weight = 0.05
+    aux_loss_weight = 0.1
 
     return FinetuneConfig(**locals())
 
