@@ -744,14 +744,15 @@ def replace_layernorm_with_fake_layernorm(model):
 def load_model(model_name="gpt2", remove_ln=False):
     # Loading fresh model without checkpoint
     print(f"Loading pretrained model: {model_name}")
-    # model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
-    model = transformers.GPT2LMHeadModel.from_pretrained(
-        model_name,
-        cache_dir=f"{model_name}_cache",
-        config=transformers.GPT2Config.from_pretrained(
-            model_name, dropout=0.0, attn_pdrop=0.0, embd_pdrop=0.0, resid_pdrop=0.0
-        ),
-    )
+    model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
+    print(f"Attn_pdrop: {model.config.attn_pdrop}, embd_pdrop: {model.config.embd_pdrop}, resid_pdrop: {model.config.resid_pdrop}")
+    # model = transformers.GPT2LMHeadModel.from_pretrained(
+    #     model_name,
+    #     cache_dir=f"{model_name}_cache",
+    #     config=transformers.GPT2Config.from_pretrained(
+    #         model_name,
+    #     ),
+    # )
     if remove_ln:
         print("Converting model to use FakeLayerNorm")
         replace_layernorm_with_fake_layernorm(model)
@@ -808,8 +809,7 @@ def main():
     # Initialize model
     model = load_model(
         model_name, 
-        remove_ln=args.mode == "without_ln", 
-        checkpoint_path=args.resume_from_checkpoint
+        remove_ln=args.mode == "without_ln",
     )
 
     training_args = TrainingArguments(
