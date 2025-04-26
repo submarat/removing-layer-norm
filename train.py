@@ -364,129 +364,6 @@ def log_std_values(model):
         })
 
 
-def load_model(model_name="gpt2", remove_ln=False, checkpoint_path=None):
-    """
-    Load a pretrained model, optionally replacing LayerNorm with FakeLayerNorm.
-    If a checkpoint path is provided, loads the model from the checkpoint, preserving
-    FakeLayerNorm mode attributes if present.
-    
-    Args:
-        model_name: Name of the pretrained model
-        remove_ln: Whether to replace LayerNorm with FakeLayerNorm
-        checkpoint_path: Path to a saved model checkpoint
-    
-    Returns:
-        The loaded model with preserved FakeLayerNorm states if from checkpoint
-    """
-    # Check if we're loading from a checkpoint
-    if checkpoint_path is not None and os.path.exists(checkpoint_path):
-        print(f"Loading model from checkpoint: {checkpoint_path}")
-        
-        # 1. First, load the state dict from the checkpoint
-        state_dict = None
-        mode_info = {}  # Store mode information from buffers
-        
-        try:
-            # Try to load the PyTorch state dict directly first
-            pytorch_bin_path = os.path.join(checkpoint_path, "pytorch_model.bin")
-            if os.path.exists(pytorch_bin_path):
-                print(f"Loading state dict from {pytorch_bin_path}")
-                state_dict = torch.load(pytorch_bin_path)
-                
-                # Extract mode information from the state dict
-                for key in state_dict:
-                    if "mode_buffer" in key:
-                        module_path = ".".join(key.split(".")[:-1])
-                        buffer_name = key.split(".")[-1]
-                        mode_val = state_dict[key].item()
-                        mode_str = "real" if mode_val == 0 else "fake"
-                        mode_info[(module_path, buffer_name)] = mode_str
-                
-                print(f"Found {len([k for k in mode_info if k[1] == 'mode_buffer'])} mode settings in checkpoint")
-                
-            else:
-                # Try safetensors as fallback
-                safetensors_path = os.path.join(checkpoint_path, "model.safetensors")
-                if os.path.exists(safetensors_path):
-                    try:
-                        from safetensors.torch import load_file
-                        print(f"Loading state dict from {safetensors_path}")
-                        state_dict = load_file(safetensors_path)
-                        
-                        # Extract mode information (same as above)
-                        for key in state_dict:
-                            if "mode_buffer" in key:
-                                module_path = ".".join(key.split(".")[:-1])
-                                buffer_name = key.split(".")[-1]
-                                mode_val = state_dict[key].item()
-                                mode_str = "real" if mode_val == 0 else "fake"
-                                mode_info[(module_path, buffer_name)] = mode_str
-                    except ImportError:
-                        print("safetensors not available, skipping safetensors file")
-        except Exception as e:
-            print(f"Error loading state dict: {e}")
-        
-        # 2. Load a fresh model architecture
-        print(f"Loading base model architecture from {model_name}")
-        model = AutoModelForCausalLM.from_pretrained(model_name)
-        
-        # 3. Process based on what we found and what was requested
-        if remove_ln and state_dict:
-            # Convert to FakeLayerNorm and restore weights + modes
-            print("Converting model to use FakeLayerNorm")
-            model = replace_layernorm_with_fake_layernorm(model)
-            
-            # Load the weights
-            print("Loading weights from state dict")
-            model.load_state_dict(state_dict, strict=False)
-            model = model.to(device)
-            
-            # Now restore mode information
-            print("Restoring FakeLayerNorm modes...")
-            mode_count = 0
-            std_count = 0
-            for name, module in model.named_modules():
-                if isinstance(module, FakeLayerNorm):
-                    # Check for mode buffers
-                    if (name, "mode_buffer") in mode_info:
-                        module.mode = mode_info[(name, "mode_buffer")]
-                        mode_count += 1
-                    
-                    if (name, "attn_v_mode_buffer") in mode_info:
-                        module.attn_v_mode = mode_info[(name, "attn_v_mode_buffer")]
-                        mode_count += 1
-                    
-                    # Explicitly load std buffers into the module
-                    # This will ensure average_std and bos_std are loaded from the checkpoint
-                    module._load_from_buffers()
-                    std_count += 1
-            
-            print(f"Restored {mode_count} mode values and {std_count} std buffers")
-            
-        elif remove_ln:
-            # Just convert to FakeLayerNorm without checkpoint weights
-            print("Converting model to use FakeLayerNorm (no checkpoint weights)")
-            model = replace_layernorm_with_fake_layernorm(model)
-            
-        elif state_dict:
-            # Load weights but don't convert to FakeLayerNorm
-            print("Loading weights from state dict (keeping original LayerNorm)")
-            model.load_state_dict(state_dict, strict=False, device=device)
-            
-        model = model.to(device)
-        return model
-        
-    # Loading fresh model without checkpoint
-    print(f"Loading pretrained model: {model_name}")
-    model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
-    
-    if remove_ln:
-        print("Converting model to use FakeLayerNorm")
-        model = replace_layernorm_with_fake_layernorm(model)
-    
-    model = model.to(device)
-    return model
-
 def finetune_with_ln(model, training_args, tokenized, data_collator, config):
     """Finetune model with layer normalization
     
@@ -864,11 +741,22 @@ def replace_layernorm_with_fake_layernorm(model):
     
     model.transformer.forward = make_transformer_forward(model.transformer.forward)
     
-    print("Replaced all LayerNorm instances with FakeLayerNorm")
+def load_model(model_name="gpt2", remove_ln=False):
+    # Loading fresh model without checkpoint
+    print(f"Loading pretrained model: {model_name}")
+    # model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
+    model = transformers.GPT2LMHeadModel.from_pretrained(
+        model_name,
+        cache_dir=f"{model_name}_cache",
+        config=transformers.GPT2Config.from_pretrained(
+            model_name, dropout=0.0, attn_pdrop=0.0, embd_pdrop=0.0, resid_pdrop=0.0
+        ),
+    )
+    if remove_ln:
+        print("Converting model to use FakeLayerNorm")
+        replace_layernorm_with_fake_layernorm(model)
     
-    # Final check to make sure everything is on the correct device
     model = model.to(device)
-    
     return model
 
 def main():
