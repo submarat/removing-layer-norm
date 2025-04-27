@@ -46,6 +46,34 @@ torch.manual_seed(1337)
 
 _USE_WANDB = True
 
+class TensorDeque:
+    """
+    A fixed-size FIFO buffer for tensors, emulating a deque using torch tensors.
+    """
+    def __init__(self, maxlen):
+        self.maxlen = maxlen
+        self.buffer = torch.zeros(maxlen)
+        self.index = 0
+        self.full = False
+
+    def append(self, x):
+        self.buffer[self.index] = x
+        self.index = (self.index + 1) % self.maxlen
+        if self.index == 0:
+            self.full = True
+
+    def get(self):
+        if self.full:
+            # Return in correct order: oldest to newest
+            return torch.cat((self.buffer[self.index:], self.buffer[:self.index]), dim=0)
+        else:
+            return self.buffer[:self.index]
+
+    def get_mean(self):
+        if self.full:
+            return self.buffer.mean()
+        else:
+            return self.buffer[:self.index].mean()
 class CustomTrainer(Trainer):
     """Trainer with auxiliary loss to encourage uniform residual norms."""
     
@@ -179,7 +207,7 @@ class CustomTrainer(Trainer):
 class FakeLayerNorm(nn.Module):
     """LayerNorm using a fixed std instead of the actual standard deviation."""
 
-    def __init__(self, n_embd, n_ctx, layer, bias, init_average_std, init_bos_std):
+    def __init__(self, n_embd, n_ctx, layer, bias, init_average_std, init_bos_std, grad_acc_steps=1):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(n_embd))
         self.bias = nn.Parameter(torch.zeros(n_embd)) if bias else None
@@ -196,6 +224,10 @@ class FakeLayerNorm(nn.Module):
         self.register_buffer("bos_special_treatment", torch.tensor(True))
         self.register_buffer("real_average_std", torch.tensor(float(init_average_std)))
         self.register_buffer("real_bos_std", torch.tensor(float(init_bos_std)))
+        self.register_buffer("grad_acc_steps", torch.tensor(grad_acc_steps))
+        self.register_buffer("global_step", torch.tensor(0))
+        self.moving_std = TensorDeque(grad_acc_steps)
+        self.moving_std_bos = TensorDeque(grad_acc_steps)
 
         if os.environ.get("EXP_CORRECT_BOS", "0") == "1":
             std_dim = n_ctx
@@ -290,20 +322,38 @@ class FakeLayerNorm(nn.Module):
         # LN for the QK and V paths separately.
         is_fake_value = self.attn_v_is_fake.item() if attn_v else self.is_fake.item()
 
+
+        # Start of std calculation
+        self.iteration += 1
+        # if self.layer == "blocks.0.hook_resid_pre":
+        #     print(f"Current_iteration: {self.iteration}")
+        if self.iteration % (3*self.grad_acc_steps) == 0:
+            self.global_step += 1
+            avg_std = self.moving_std.get_mean()
+            bos_std = self.moving_std_bos.get_mean()
+            self.real_average_std.fill_(float(avg_std))
+            self.real_bos_std.fill_(float(bos_std))
+        # if self.layer == "blocks.0.hook_resid_pre":
+        #     print(f"Current_global_step: {self.global_step.item()}")
+
+        avg_std, bos_std = self.recompute_average_std(input)
+        self.moving_std.append(avg_std)
+        self.moving_std_bos.append(bos_std)
+
         # Refresh std values for the first iteration
         # Useful for different average_std recomputation schemes
-        if self.iteration == 0:
-            avg_std, bos_std = self.recompute_average_std(input)
-            self.real_average_std.fill_(float(avg_std))
-            self.real_bos_std.fill_(float(bos_std))
-            self.sync_std()
+        # if self.iteration == 1:
+        #     avg_std, bos_std = self.recompute_average_std(input)
+        #     self.real_average_std.fill_(float(avg_std))
+        #     self.real_bos_std.fill_(float(bos_std))
+        #     self.sync_std()
         
-        self.iteration += 1
-        # Calculate the std of the input
-        if self.iteration % self.update_freq == 0:
-            avg_std, bos_std = self.recompute_average_std(input)
-            self.real_average_std.fill_(float(avg_std))
-            self.real_bos_std.fill_(float(bos_std))
+        # # Calculate the std of the input
+        # if self.iteration % self.update_freq == 0:
+        #     avg_std, bos_std = self.recompute_average_std(input)
+        #     self.real_average_std.fill_(float(avg_std))
+        #     self.real_bos_std.fill_(float(bos_std))
+        # End of std recalculation. 
 
         if is_fake_value:
             # Which std values to use: We use (1) average std (which is actually a vector of length
@@ -389,7 +439,7 @@ class FakeLayerNorm(nn.Module):
             self.bos_std_buffer[0] = self.bos_std_buffer[1]
 
 
-def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict):
+def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_acc_steps=1):
     n_layers = model.config.n_layer
     n_embd = model.transformer.h[0].ln_1.weight.shape[0]
     n_ctx = model.config.n_ctx
@@ -412,7 +462,8 @@ def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict):
             layer=layer,
             bias=block.ln_1.bias is not None,
             init_average_std=std_dict[layer],
-            init_bos_std=std_bos_dict[layer])
+            init_bos_std=std_bos_dict[layer],
+            grad_acc_steps=grad_acc_steps)
 
         layer = f"blocks.{i}.hook_resid_mid"
         block.ln_2 = FakeLayerNorm(
@@ -421,7 +472,8 @@ def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict):
             layer=layer,
             bias=block.ln_2.bias is not None,
             init_average_std=std_dict[layer],
-            init_bos_std=std_bos_dict[layer])
+            init_bos_std=std_bos_dict[layer],
+            grad_acc_steps=grad_acc_steps)
         
         # Restore weights
         block.ln_1.weight = nn.Parameter(ln_1_weight)
@@ -508,7 +560,8 @@ def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict):
         layer=layer,
         bias=ln_f.bias is not None,
         init_average_std=std_dict[layer],
-        init_bos_std=std_bos_dict[layer]
+        init_bos_std=std_bos_dict[layer],
+        grad_acc_steps=grad_acc_steps
     )
     model.transformer.ln_f.weight = nn.Parameter(ln_f_weight)
     if ln_f_bias is not None:
@@ -555,7 +608,7 @@ def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict):
     
     model.transformer.forward = make_transformer_forward(model.transformer.forward)
 
-def load_model(model_name="gpt2", remove_ln=False):
+def load_model(model_name="gpt2", remove_ln=False, grad_acc_steps=1):
     model = transformers.GPT2LMHeadModel.from_pretrained(
         model_name,
         cache_dir=f"{model_name}_cache",
@@ -568,7 +621,7 @@ def load_model(model_name="gpt2", remove_ln=False):
         std_dict = std_dicts[model_name]["std_dict"]
         std_bos_dict = std_dicts[model_name]["std_bos_dict"]
 
-        replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict)
+        replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_acc_steps=grad_acc_steps)
     
     return model
 
@@ -960,7 +1013,7 @@ def main():
         print(checkpoint_message)
     
     # Initialize model
-    model = load_model(model_name, remove_ln=args.mode == "without_ln")
+    model = load_model(model_name, remove_ln=args.mode == "without_ln", grad_acc_steps=config.gradient_accumulation_steps)
     
     print("Begin training")
     print(model)
