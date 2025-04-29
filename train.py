@@ -226,10 +226,10 @@ class FakeLayerNorm(nn.Module):
         self.register_buffer("real_average_std", torch.tensor(float(init_average_std)))
         self.register_buffer("real_bos_std", torch.tensor(float(init_bos_std)))
         self.register_buffer("grad_acc_steps", torch.tensor(grad_acc_steps))
-        self.register_buffer("global_step", torch.tensor(0))
+        self.register_buffer("iteration", torch.tensor(0))
         self.moving_var = TensorDeque(grad_acc_steps)
         self.moving_var_bos = TensorDeque(grad_acc_steps)
-
+        self.counter = 0
         if os.environ.get("EXP_CORRECT_BOS", "0") == "1":
             std_dim = n_ctx
         else:
@@ -237,13 +237,10 @@ class FakeLayerNorm(nn.Module):
             
         # Register non-parameter tensors as buffers so they're saved in state_dict
         self.register_buffer("average_std_buffer", torch.ones(std_dim, device=device) * init_average_std)
-        self.register_buffer("bos_std_buffer", torch.ones(std_dim, device=device) * init_bos_std)
-        
+        self.register_buffer("bos_std_buffer", torch.ones(std_dim, device=device) * init_bos_std)        
         # Special handling for position 0
         self.average_std_buffer[0] = init_bos_std
 
-        self.iteration = 0
-        self.update_freq = 10
     
     def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
         # Call parent method to load most of the state
@@ -326,16 +323,11 @@ class FakeLayerNorm(nn.Module):
 
         # Start of std calculation
         self.iteration += 1
-        # if self.layer == "blocks.0.hook_resid_pre":
-        #     print(f"Current_iteration: {self.iteration}")
-        if self.iteration % (3*self.grad_acc_steps) == 0:
-            self.global_step += 1
+        if self.iteration % self.grad_acc_steps == 0:
             avg_std = self.moving_var.get_mean()**0.5
             bos_std = self.moving_var_bos.get_mean()**0.5
             self.real_average_std.fill_(float(avg_std))
             self.real_bos_std.fill_(float(bos_std))
-        # if self.layer == "blocks.0.hook_resid_pre":
-        #     print(f"Current_global_step: {self.global_step.item()}")
 
         self.recompute_average_std(input)
 
