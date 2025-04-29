@@ -63,10 +63,18 @@ class TensorDeque:
             self.full = True
 
     def get_mean(self):
+        """
+        The moving window statistics are calculated according to:
+        https://stats.stackexchange.com/questions/25848/how-to-sum-a-standard-deviation
+        for the mean, the mean of the window is the mean of the means.
+        for the std, this is more complicated, but if we assume that all the minibatches 
+        have the same norm, the mean of the var is fine.
+        """
         if self.full:
             return self.buffer.mean()
         else:
             return self.buffer[:self.index].mean()
+        
 class CustomTrainer(Trainer):
     """Trainer with auxiliary loss to encourage uniform residual norms."""
     
@@ -219,8 +227,8 @@ class FakeLayerNorm(nn.Module):
         self.register_buffer("real_bos_std", torch.tensor(float(init_bos_std)))
         self.register_buffer("grad_acc_steps", torch.tensor(grad_acc_steps))
         self.register_buffer("global_step", torch.tensor(0))
-        self.moving_std = TensorDeque(grad_acc_steps)
-        self.moving_std_bos = TensorDeque(grad_acc_steps)
+        self.moving_var = TensorDeque(grad_acc_steps)
+        self.moving_var_bos = TensorDeque(grad_acc_steps)
 
         if os.environ.get("EXP_CORRECT_BOS", "0") == "1":
             std_dim = n_ctx
@@ -322,16 +330,15 @@ class FakeLayerNorm(nn.Module):
         #     print(f"Current_iteration: {self.iteration}")
         if self.iteration % (3*self.grad_acc_steps) == 0:
             self.global_step += 1
-            avg_std = self.moving_std.get_mean()
-            bos_std = self.moving_std_bos.get_mean()
+            avg_std = self.moving_var.get_mean()**0.5
+            bos_std = self.moving_var_bos.get_mean()**0.5
             self.real_average_std.fill_(float(avg_std))
             self.real_bos_std.fill_(float(bos_std))
         # if self.layer == "blocks.0.hook_resid_pre":
         #     print(f"Current_global_step: {self.global_step.item()}")
 
-        avg_std, bos_std = self.recompute_average_std(input)
-        self.moving_std.append(avg_std)
-        self.moving_std_bos.append(bos_std)
+        self.recompute_average_std(input)
+
 
         if is_fake_value:
             # Which std values to use: We use (1) average std (which is actually a vector of length
@@ -372,13 +379,14 @@ class FakeLayerNorm(nn.Module):
     
     def recompute_average_std(self, x):
         with torch.no_grad():
-            std = x.var(dim=(0, -1))**0.5
+            var = x.var(dim=(0, -1))
             if os.environ.get("EXP_NON_BOS_AVERAGE_STD", "0") == "1":
-                average_std = std[1:].mean().detach().item()
+                average_var = var[1:].mean().detach().item()
             else:
-                average_std = std.mean().detach().item()
-            bos_std = std[0].detach().item()
-        return average_std, bos_std
+                average_var = var.mean().detach().item()
+            bos_var = var[0].detach().item()
+        self.moving_var.append(average_var)
+        self.moving_var_bos.append(bos_var)
     
     def sync_std(self):
         """Sync the average and bos std values (that are used in the forward pass) with the real std values."""
