@@ -62,13 +62,6 @@ class TensorDeque:
         if self.index == 0:
             self.full = True
 
-    def get(self):
-        if self.full:
-            # Return in correct order: oldest to newest
-            return torch.cat((self.buffer[self.index:], self.buffer[:self.index]), dim=0)
-        else:
-            return self.buffer[:self.index]
-
     def get_mean(self):
         if self.full:
             return self.buffer.mean()
@@ -339,21 +332,6 @@ class FakeLayerNorm(nn.Module):
         avg_std, bos_std = self.recompute_average_std(input)
         self.moving_std.append(avg_std)
         self.moving_std_bos.append(bos_std)
-
-        # Refresh std values for the first iteration
-        # Useful for different average_std recomputation schemes
-        # if self.iteration == 1:
-        #     avg_std, bos_std = self.recompute_average_std(input)
-        #     self.real_average_std.fill_(float(avg_std))
-        #     self.real_bos_std.fill_(float(bos_std))
-        #     self.sync_std()
-        
-        # # Calculate the std of the input
-        # if self.iteration % self.update_freq == 0:
-        #     avg_std, bos_std = self.recompute_average_std(input)
-        #     self.real_average_std.fill_(float(avg_std))
-        #     self.real_bos_std.fill_(float(bos_std))
-        # End of std recalculation. 
 
         if is_fake_value:
             # Which std values to use: We use (1) average std (which is actually a vector of length
