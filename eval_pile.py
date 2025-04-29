@@ -4,21 +4,20 @@ Evaluate language model performance on The Pile dataset variants.
 Example:
     python eval_pile.py -m ckpt1200.pt -f nanogpt -d pile-10k -n 20000 -b 16
     python eval_pile.py -m gpt2 -f transformers -d pile-apollo -b 8
-    python eval_pile.py -m results/checkpoint-1200 -f transformers --slay-ln -b 4
+    python eval_pile.py -m results/checkpoint-1200 -f transformers
 
 Usage:
-    eval_pile.py -m MODEL [-f FORMAT] [-d DATASET] [-n NUM_SAMPLES] [-b BATCH_SIZE] [--slay-ln] [--model-name MODEL_NAME]
+    eval_pile.py -m MODEL [-f FORMAT] [-d DATASET] [-n NUM_SAMPLES] [-b BATCH_SIZE] [--model-name MODEL_NAME]
     eval_pile.py -h | --help
 
 Options:
     -h --help                       Show this help message
     -m MODEL --model MODEL          Model checkpoint path or model id [REQUIRED]
-    -f FORMAT --format FORMAT       Model format: nanogpt/transformers/noLN_HF_model [default: transformers]
+    -f FORMAT --format FORMAT       Model format: transformers/noLN_HF_model/fakeln_checkpoint [default: transformers]
     -d DATASET --dataset DATASET    Dataset variant: pile-10k/pile-apollo/pile-apollo-luca/pile-uncopyrighted [default: pile-apollo]
     -n NUM --num-samples NUM        Number of samples to evaluate [default: 10000]
     -b BATCH_SIZE --batch-size BATCH_SIZE  Batch size for evaluation [default: 8]
     --model-name MODEL_NAME         Base model name [default: gpt2]
-    --slay-ln                       Remove LayerNorm from model [default: False]
 """
 
 import os
@@ -43,20 +42,10 @@ def load_saved_model(model_name: str, model_path=None):
     return model
 
 
-def load_hf_model(model_id_or_ckpt_path, model_name, slay_ln=False):
+def load_hf_model(model_id_or_ckpt_path, model_name):
     """ Loads huggingface transformers model and removes layernorm """
 
     model_hf = GPT2LMHeadModel.from_pretrained(model_id_or_ckpt_path)
-
-    # Check whether we can extract std values from checkpoint
-    if slay_ln:
-        try:
-            std_dict = extract_std_from_checkpoint(model_name, model_id_or_ckpt_path)
-            remove_layernorm_by_scaling(model_hf, std_dict=std_dict)
-        except Exception as e:
-            print(f"Could not extract std values from checkpoint: {e}")
-            print("Using default scaling method")
-            remove_layernorm_by_scaling(model_hf, std_dict=std_dicts[model_name]["std_dict"])
 
     return model_hf
 
@@ -81,45 +70,6 @@ def load_fakeln_checkpoint(ckpt_path, model_name):
         print(f"Unexpected keys when loading checkpoint: {len(unexpected)} keys")
 
     return ckpt_model
-
-
-def load_pt_file(filepath, model_name, slay_ln=False):
-    """ Loads nanoGPT checkpoint and removes layernorm """
-    # Check if file exists
-    if not os.path.exists(filepath):
-        raise FileNotFoundError(f"Model file not found at {filepath}")
-    
-    checkpoint = torch.load(filepath, map_location=device)
-    sd = checkpoint["model"]
-    transposed = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
-
-    # Load the HF GPT2 model
-    # init a huggingface/transformers model
-    model_hf = GPT2LMHeadModel.from_pretrained(model_name)
-    sd_hf = model_hf.state_dict()
-    # Now, use the state dict from the checkpoint to overwrite the weights in the model
-    sd_keys_hf = list(sd_hf.keys())
-    sd_keys = list(sd.keys())
-    sd_keys = [k for k in sd_keys if not k.endswith('.attn.bias')]
-    assert len(sd_keys_hf) == len(sd_keys), f"mismatched keys: {len(sd_keys_hf)} != {len(sd_keys)}"
-    for k in sd_keys_hf:
-        if any(k.endswith(w) for w in transposed):
-            # special treatment for the Conv1D weights we need to transpose
-            assert sd_hf[k].shape[::-1] == sd[k].shape
-            with torch.no_grad():
-                sd_hf[k].copy_(sd[k].t())
-        else:
-            # vanilla copy over the other parameters
-            assert sd_hf[k].shape == sd[k].shape
-            with torch.no_grad():
-                sd_hf[k].copy_(sd[k])
-
-    model_hf.load_state_dict(sd_hf)
-
-    # Now kill the layer norm by setting layer_norm_epsilon to 1e12, and multiplied the ln scaling parameters by 1e6
-    if slay_ln:
-        remove_layernorm_by_scaling(model_hf)
-    return model_hf
 
 
 def load_nln_hf_model(model_name, name=None, model=None):
@@ -154,31 +104,6 @@ def load_nln_hf_model(model_name, name=None, model=None):
     return hooked_model
 
 
-def custom_tokenizer(examples, model_name):
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    tokenizer.pad_token = tokenizer.eos_token
-    # Add EOS token to the end of each example
-    examples["text"] = [text + tokenizer.eos_token for text in examples["text"]]
-
-    # Tokenize the examples
-    tokenized_examples = tokenizer(
-        examples["text"], truncation=False, padding=False, return_tensors=None
-    )
-
-    # Concatenate the tokenized examples
-    concatenated = []
-    for seq in tokenized_examples["input_ids"]:
-        concatenated.extend(seq)
-
-    # Chunk into 1024 token chunks, dropping any remainder
-    n_chunks = (
-        len(concatenated) // 1024
-    )  # Integer division to get complete chunks only
-    chunks = [concatenated[i * 1024 : (i + 1) * 1024] for i in range(n_chunks)]
-
-    return {"input_ids": chunks}
-
-
 def main():
     from docopt import docopt
     args = docopt(__doc__)
@@ -190,19 +115,19 @@ def main():
     num_samples = int(args['--num-samples'])
     batch_size = int(args['--batch-size'])
     model_name = args['--model-name'] or "gpt2"
-    slay_ln = args['--slay-ln']
     
     # Create cache directory if it doesn't exist
     os.makedirs("processed_datasets", exist_ok=True)
     
     # Load model based on format
-    if format_type == 'nanogpt':
-        model = load_pt_file(model_path, model_name, slay_ln=slay_ln)
-    elif format_type == 'transformers':
-        model = load_hf_model(model_path, model_name, slay_ln=slay_ln)
+    if format_type == 'transformers':
+        # Load model from huggingface or local, standard format
+        model = load_hf_model(model_path, model_name)
     elif format_type == 'noLN_HF_model':
+        # Load model that has scale trick applied to disable layer norm
         model = load_nln_hf_model(model_name=model_name, name=model_path)
     elif format_type == 'fakeln_checkpoint':
+        # Load local model checkpoint assuming it has FakeLayerNorms and special state_dict
         model = load_fakeln_checkpoint(model_name=model_name, ckpt_path=model_path)
     else:
         raise ValueError(f"Unknown format type: {format_type}")
