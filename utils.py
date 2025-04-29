@@ -14,7 +14,7 @@ def extract_std_from_checkpoint(model_name, ckpt_path):
     # Load checkpoint to load in std values
     try:
         # First try loading a single pytorch model file
-        missing, unexpected = ckpt_model.load_state_dict(torch.load(os.path.join(ckpt_path, 'pytorch_model.bin'), map_location=get_device()), strict=False)
+        missing, unexpected = ckpt_model.load_state_dict(torch.load(os.path.join(ckpt_path, 'pytorch_model.bin')), strict=False)
     except FileNotFoundError:
         try:
             # If that fails, try loading a sharded checkpoint
@@ -26,15 +26,17 @@ def extract_std_from_checkpoint(model_name, ckpt_path):
         print(f"Missing keys when loading checkpoint: {len(missing)} keys")
     if unexpected:
         print(f"Unexpected keys when loading checkpoint: {len(unexpected)} keys")
-    
+
+    import pdb; pdb.set_trace()
     state_dict = ckpt_model.state_dict()
 
     std_dict = {}
+    # Extract 1st index in case there is BOS special treatment applied
     for id, block in enumerate(ckpt_model.transformer.h):
         # add std to the dict with appropriate key.
-        std_dict[f'blocks.{id}.hook_resid_pre'] = state_dict[f'transformer.h.{id}.ln_1.average_std_buffer'][0].item()
-        std_dict[f'blocks.{id}.hook_resid_mid'] = state_dict[f'transformer.h.{id}.ln_2.average_std_buffer'][0].item()
-    std_dict[f'blocks.{id}.hook_resid_post'] = state_dict['transformer.ln_f.average_std_buffer'][0].item()
+        std_dict[f'blocks.{id}.hook_resid_pre'] = state_dict[f'transformer.h.{id}.ln_1.average_std_buffer'][1].item()
+        std_dict[f'blocks.{id}.hook_resid_mid'] = state_dict[f'transformer.h.{id}.ln_2.average_std_buffer'][1].item()
+    std_dict[f'blocks.{id}.hook_resid_post'] = state_dict['transformer.ln_f.average_std_buffer'][1].item()
 
     return std_dict
 
