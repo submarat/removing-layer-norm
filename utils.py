@@ -27,7 +27,6 @@ def extract_std_from_checkpoint(model_name, ckpt_path):
     if unexpected:
         print(f"Unexpected keys when loading checkpoint: {len(unexpected)} keys")
 
-    import pdb; pdb.set_trace()
     state_dict = ckpt_model.state_dict()
 
     std_dict = {}
