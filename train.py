@@ -323,7 +323,7 @@ class FakeLayerNorm(nn.Module):
             bos_std = self.moving_var_bos.get_mean()**0.5
             self.real_average_std.fill_(float(avg_std))
             self.real_bos_std.fill_(float(bos_std))
-            self.synced_step = self.global_step
+            self.synced_step = torch.tensor(self.global_step)
 
         self.recompute_average_std(input)
 
