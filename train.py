@@ -229,7 +229,6 @@ class FakeLayerNorm(nn.Module):
         self.register_buffer("iteration", torch.tensor(0))
         self.moving_var = TensorDeque(grad_acc_steps)
         self.moving_var_bos = TensorDeque(grad_acc_steps)
-        self.counter = 0
         if os.environ.get("EXP_CORRECT_BOS", "0") == "1":
             std_dim = n_ctx
         else:
@@ -240,6 +239,7 @@ class FakeLayerNorm(nn.Module):
         self.register_buffer("bos_std_buffer", torch.ones(std_dim, device=device) * init_bos_std)        
         # Special handling for position 0
         self.average_std_buffer[0] = init_bos_std
+        self.synced_step = 0
 
     
     def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
@@ -323,11 +323,12 @@ class FakeLayerNorm(nn.Module):
 
         # Start of std calculation
         self.iteration += 1
-        if self.iteration % self.grad_acc_steps == 0:
+        if (self.global_step - self.synced_step) == 1:
             avg_std = self.moving_var.get_mean()**0.5
             bos_std = self.moving_var_bos.get_mean()**0.5
             self.real_average_std.fill_(float(avg_std))
             self.real_bos_std.fill_(float(bos_std))
+            self.synced_step = self.global_step
 
         self.recompute_average_std(input)
 
@@ -371,6 +372,10 @@ class FakeLayerNorm(nn.Module):
     
     def recompute_average_std(self, x):
         with torch.no_grad():
+            # JS: If we do no BOS special treatment at all, it would be
+            # nicer to just estimate the var across all dimensions.
+            # Then we don't need to take the mean anymore, 
+            # which is only justified if all variances belong to variables with the same mean.
             var = x.var(dim=(0, -1))
             if os.environ.get("EXP_NON_BOS_AVERAGE_STD", "0") == "1":
                 average_var = var[1:].mean().detach().item()
@@ -798,6 +803,16 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
                     wandb.log({"custom_checkpoint": state.global_step})
                     
             return control
+    
+    class GlobalStepSetterCallback(TrainerCallback):
+        def on_step_begin(self, args, state, control, **kwargs):
+            model = kwargs.get("model", None)
+            for i, block in enumerate(model.transformer.h):
+                block.ln_1.global_step = state.global_step
+                block.ln_2.global_step = state.global_step
+            model.transformer.ln_f.global_step = state.global_step
+            return control
+    
 
             
     class StopAfterNStepsCallback(TrainerCallback):
@@ -827,6 +842,7 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
         LogFakeLayerNormState(),
         CheckFakeLayerNormStateAfterLoading(),
         StopAfterNStepsCallback(config.early_stop_step),
+        GlobalStepSetterCallback(),
     ]
     if remove_ln:
         callbacks.append(LNRemoverCallback(ln_removers))
