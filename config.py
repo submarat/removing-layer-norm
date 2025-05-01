@@ -62,7 +62,7 @@ def make_gpt2_standard():
     n_layers = 12
     
     # Training params
-    base_batch_size = 40
+    base_batch_size = 36
     max_steps = 300
     block_size = 1024
     target_batch_tokens = 2**19
@@ -99,7 +99,7 @@ def make_gpt2_standard_aux():
     n_layers = 12
     
     # Training params
-    base_batch_size = 32
+    base_batch_size = 36
     max_steps = 300
     block_size = 1024
     target_batch_tokens = 2**19
@@ -128,6 +128,84 @@ def make_gpt2_standard_aux():
     start_bos = start_eot + 10
 
     aux_loss_weight = 0.1
+    
+    return FinetuneConfig(**locals())
+
+def make_gpt2_standard_aux_fast():
+    # Fast schedule
+    # Architecture params
+    model_name = "gpt2"
+    n_layers = 12
+    
+    # Training params
+    base_batch_size = 32
+    max_steps = 300
+    save_steps = 50
+    block_size = 1024
+    target_batch_tokens = 2**19
+    warmup_steps = 10
+    
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    
+    gradient_checkpointing = True
+
+    # Calculate layernorm schedule
+    gap_ln2 = 0
+    gap_ln1qk = 0
+    gap_ln1v = 0
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+
+    start_ln2 = 15
+    start_ln1qk = start_ln2 + 12 #* gap_ln2
+    start_ln1v = start_ln1qk + 12 #* gap_ln1qk
+    start_lnf = start_ln1v + 12 #* gap_ln1v
+    start_eot = start_lnf + 5
+    start_bos = start_eot + 5
+
+    aux_loss_weight = 0.1
+    
+    return FinetuneConfig(**locals())
+
+def make_gpt2_standard_fast_():
+    # Fast schedule
+    # Architecture params
+    model_name = "gpt2"
+    n_layers = 12
+    
+    # Training params
+    base_batch_size = 32
+    max_steps = 300
+    save_steps = 50
+    block_size = 1024
+    target_batch_tokens = 2**19
+    warmup_steps = 10
+    
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    
+    gradient_checkpointing = True
+
+    # Calculate layernorm schedule
+    gap_ln2 = 0
+    gap_ln1qk = 0
+    gap_ln1v = 0
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+
+    start_ln2 = 15
+    start_ln1qk = start_ln2 + 12 #* gap_ln2
+    start_ln1v = start_ln1qk + 12 #* gap_ln1qk
+    start_lnf = start_ln1v + 12 #* gap_ln1v
+    start_eot = start_lnf + 5
+    start_bos = start_eot + 5
     
     return FinetuneConfig(**locals())
 
@@ -293,7 +371,7 @@ def make_gpt2_medium_fasttune():
     n_layers = 24
     
     # Training params
-    base_batch_size = 22
+    base_batch_size = 16
     max_steps = 500
     block_size = 1024
     target_batch_tokens = 2**19
@@ -330,7 +408,7 @@ def make_gpt2_medium_fasttune_aux():
     n_layers = 24
     
     # Training params
-    base_batch_size = 22
+    base_batch_size = 16
     max_steps = 500
     block_size = 1024
     target_batch_tokens = 2**19
@@ -403,7 +481,7 @@ def make_gpt2_large():
     
     # Training params
     base_batch_size = 22
-    max_steps = 1200
+    max_steps = 1000
     block_size = 1024
     target_batch_tokens = 2**19
     save_steps = 200
@@ -439,8 +517,8 @@ def make_gpt2_large_aux():
     n_layers = 36
     
     # Training params
-    base_batch_size = 15
-    max_steps = 1200
+    base_batch_size = 12
+    max_steps = 1000
     block_size = 1024
     target_batch_tokens = 2**19
     
@@ -450,7 +528,7 @@ def make_gpt2_large_aux():
     gradient_accumulation_steps = int(desired_batch_size // batch_size)
     warmup_steps = 10
     
-    gradient_checkpointing = True
+    gradient_checkpointing = False
 
     # Calculate layernorm schedule
     gap_ln2 = 4
@@ -616,6 +694,8 @@ def make_gpt2_xl_test():
 FINETUNE_CONFIGS = {
     "gpt2": make_gpt2_standard(),
     "gpt2_aux": make_gpt2_standard_aux(),
+    "gpt2_aux_fast": make_gpt2_standard_aux_fast(),
+    "gpt2_fast": make_gpt2_standard_fast_(),
     "gpt2_test": make_gpt2_test(),
     "gpt2_test_all_zeros": make_gpt2_test_all_zeros(),
     "gpt2-medium_slow": make_gpt2_medium_slow(),

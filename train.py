@@ -293,6 +293,7 @@ class FakeLayerNorm(nn.Module):
         # the V path. Thus we get to have flags `is_fake` and `attn_v_is_fake` to enable / disable the
         # LN for the QK and V paths separately.
         is_fake_value = self.attn_v_is_fake.item() if attn_v else self.is_fake.item()
+
         self.recompute_average_std(input)
 
         if is_fake_value:

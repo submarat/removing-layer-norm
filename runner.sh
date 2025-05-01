@@ -1,0 +1,4 @@
+CUDA_VISIBLE_DEVICES=0 EXP_RECOMPUTE_STD_ON_REAL=1 EXP_BOS_SPECIAL_TREATMENT=0 EXP_CORRECT_BOS=0 python train.py --mode without_ln --config gpt2_aux
+CUDA_VISIBLE_DEVICES=0 EXP_RECOMPUTE_STD_ON_REAL=1 EXP_BOS_SPECIAL_TREATMENT=0 EXP_CORRECT_BOS=0 python train.py --mode without_ln --config gpt2_aux_fast
+CUDA_VISIBLE_DEVICES=0 EXP_RECOMPUTE_STD_ON_REAL=1 EXP_BOS_SPECIAL_TREATMENT=0 EXP_CORRECT_BOS=0 python train.py --mode without_ln --config gpt2-medium_fasttune_aux
+CUDA_VISIBLE_DEVICES=0 EXP_RECOMPUTE_STD_ON_REAL=1 EXP_BOS_SPECIAL_TREATMENT=0 EXP_CORRECT_BOS=0 python train.py --mode without_ln --config gpt2-large_aux
