@@ -646,6 +646,8 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
     print(f"  EXP_CORRECT_BOS: {os.environ.get('EXP_CORRECT_BOS', '0')}")
     print(f"  EXP_RECOMPUTE_STD_ON_FAKE: {os.environ.get('EXP_RECOMPUTE_STD_ON_FAKE', '0')}")
     print(f"  EXP_RECOMPUTE_STD_ON_REAL: {os.environ.get('EXP_RECOMPUTE_STD_ON_REAL', '0')}")
+    print(f"  EXP_BOS_SPECIAL_TREATMENT: {os.environ.get('EXP_BOS_SPECIAL_TREATMENT', '0')}")
+
     
     for i, block in enumerate(model.transformer.h):
         print(f"\nBlock {i}:")
@@ -764,7 +766,8 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
             print(f"  EXP_CORRECT_BOS: {os.environ.get('EXP_CORRECT_BOS', '0')}")
             print(f"  EXP_RECOMPUTE_STD_ON_FAKE: {os.environ.get('EXP_RECOMPUTE_STD_ON_FAKE', '0')}")
             print(f"  EXP_RECOMPUTE_STD_ON_REAL: {os.environ.get('EXP_RECOMPUTE_STD_ON_REAL', '0')}")
-            
+            print(f"  EXP_BOS_SPECIAL_TREATMENT: {os.environ.get('EXP_BOS_SPECIAL_TREATMENT', '0')}")
+
             print("\nChecking if layers are fake after loading checkpoint:")
             for i, block in enumerate(model.transformer.h):
                 print(f"Block {i}:")
