@@ -42,8 +42,8 @@ from devtools import pprint
 device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
 
 torch.manual_seed(1337)
-# torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
-# torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
+torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
+torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 
 _USE_WANDB = True
 
@@ -602,6 +602,9 @@ def load_model(model_name="gpt2", remove_ln=False, grad_acc_steps=1):
         model_name,
         cache_dir=f"{model_name}_cache",
         config=transformers.GPT2Config.from_pretrained(model_name),
+        attn_implementation='flash_attention_2',
+        torch_dtype=torch.bfloat16,
+        device_map="auto",
     )
     # attn_pdrop=0.1, embd_pdrop=0.1, resid_pdrop=0.1: Default values for GPT2, can be changed with kwargs
     
