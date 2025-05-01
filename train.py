@@ -237,11 +237,13 @@ class FakeLayerNorm(nn.Module):
             
         # Register non-parameter tensors as buffers so they're saved in state_dict
         self.register_buffer("average_std_buffer", torch.ones(std_dim, device=device) * init_average_std)
-        self.register_buffer("bos_std_buffer", torch.ones(std_dim, device=device) * init_bos_std)        
         
-        if bos_special_treatment:
+        if self.bos_special_treatment.item():
             # Special handling for position 0
             self.average_std_buffer[0] = init_bos_std
+            self.register_buffer("bos_std_buffer", torch.ones(std_dim, device=device) * init_bos_std)        
+        else:
+            self.register_buffer("bos_std_buffer", torch.ones(std_dim, device=device) * init_average_std)
     
     def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
         # Call parent method to load most of the state
@@ -368,8 +370,9 @@ class FakeLayerNorm(nn.Module):
                 input, self.weight.shape, self.weight, self.bias, 1e-5
             )
     
+    @torch.no_grad()
     def recompute_average_std(self, x):
-        with torch.no_grad():
+        if self.bos_special_treatment.item():
             # JS: If we do no BOS special treatment at all, it would be
             # nicer to just estimate the var across all dimensions.
             # Then we don't need to take the mean anymore, 
@@ -380,8 +383,12 @@ class FakeLayerNorm(nn.Module):
             else:
                 average_var = var.mean().detach().item()
             bos_var = var[0].detach().item()
-        self.moving_var.append(average_var)
-        self.moving_var_bos.append(bos_var)
+            self.moving_var.append(average_var)
+            self.moving_var_bos.append(bos_var)
+        else:
+            var = x.var()
+            self.moving_var.append(var)
+            self.moving_var_bos.append(var)
     
     def sync_std(self):
         """Sync the average and bos std values (that are used in the forward pass) with the real std values."""
