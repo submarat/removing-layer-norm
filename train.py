@@ -228,6 +228,7 @@ class FakeLayerNorm(nn.Module):
         self.register_buffer("real_bos_std", torch.tensor(float(init_bos_std)))
         self.register_buffer("grad_acc_steps", torch.tensor(grad_acc_steps))
         self.register_buffer("synced_step", torch.tensor(0))
+        self.register_buffer("global_step", torch.tensor(0))
         self.moving_var = TensorDeque(grad_acc_steps)
         self.moving_var_bos = TensorDeque(grad_acc_steps)
         if os.environ.get("EXP_CORRECT_BOS", "0") == "1":
@@ -328,7 +329,7 @@ class FakeLayerNorm(nn.Module):
             bos_std = self.moving_var_bos.get_mean()**0.5
             self.real_average_std.fill_(float(avg_std))
             self.real_bos_std.fill_(float(bos_std))
-            self.synced_step = torch.tensor(self.global_step)
+            self.synced_step = self.global_step
 
         self.recompute_average_std(input)
 
@@ -816,9 +817,9 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
         def on_step_begin(self, args, state, control, **kwargs):
             model = kwargs.get("model", None)
             for i, block in enumerate(model.transformer.h):
-                block.ln_1.global_step = state.global_step
-                block.ln_2.global_step = state.global_step
-            model.transformer.ln_f.global_step = state.global_step
+                block.ln_1.global_step = torch.tensor(state.global_step)
+                block.ln_2.global_step = torch.tensor(state.global_step)
+            model.transformer.ln_f.global_step = torch.tensor(state.global_step)
             return control
     
 
