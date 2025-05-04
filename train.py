@@ -393,7 +393,7 @@ class FakeLayerNorm(nn.Module):
     #         self.moving_var.append(var)
     #         self.moving_var_bos.append(var)
 
-    
+
     @torch.no_grad()
     def update_stds(self, x):
         if self.bos_special_treatment.item():
@@ -408,14 +408,14 @@ class FakeLayerNorm(nn.Module):
                 average_var = var.mean().detach().item()
             bos_var = var[0].detach().item()
 
-            self.real_average_std_prop = (1 - self.momentum) * self.real_average_std_prop + self.momentum * average_var
-            self.real_bos_std_prop = (1 - self.momentum) * self.real_bos_std_prop + self.momentum * bos_var
+            self.real_average_std_prop = (1 - self.momentum) * self.real_average_std_prop + self.momentum * average_var**0.5
+            self.real_bos_std_prop = (1 - self.momentum) * self.real_bos_std_prop + self.momentum * bos_var**0.5
             # self.moving_var.append(average_var)
             # self.moving_var_bos.append(bos_var)
         else:
             var = x.var()
-            self.real_average_std_prop = (1 - self.momentum) * self.real_average_std_prop + self.momentum * var.detach().item()
-            self.real_bos_std_prop = (1 - self.momentum) * self.real_bos_std_prop + self.momentum * var.detach().item()
+            self.real_average_std_prop = (1 - self.momentum) * self.real_average_std_prop + self.momentum * var.detach().item()**0.5
+            self.real_bos_std_prop = (1 - self.momentum) * self.real_bos_std_prop + self.momentum * var.detach().item()**0.5
             # self.moving_var.append(var)
             # self.moving_var_bos.append(var)
 
