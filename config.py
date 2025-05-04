@@ -39,7 +39,7 @@ class FinetuneConfig(BaseModel):
     gradient_checkpointing: bool = Field(default=False, description="Use gradient checkpointing to save memory")
 
     # Momentum for recomputing the moving average std which will be fixed at LN removal
-    momentum: float = Field(default=0.1, description="Recompute momentum")
+    momentum: float = Field(default=0.5, description="Recompute momentum")
 
     # Layernorm schedule params
     gap_ln2: Optional[int]
@@ -529,6 +529,7 @@ def make_gpt2_large_aux():
     warmup_steps = 10
     
     gradient_checkpointing = False
+    momentum = 0.1
 
     # Calculate layernorm schedule
     gap_ln2 = 4
@@ -637,7 +638,8 @@ def make_gpt2_xl_aux():
     gradient_accumulation_steps = int(desired_batch_size // batch_size)
     warmup_steps = 20
 
-    gradient_checkpointing = True
+    gradient_checkpointing = False
+    momentum = 0.1
     
     # Calculate layernorm schedule
     gap_ln2 = 5
