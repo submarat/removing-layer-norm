@@ -181,7 +181,7 @@ class CustomTrainer(Trainer):
 class FakeLayerNorm(nn.Module):
     """LayerNorm using a fixed std instead of the actual standard deviation."""
 
-    def __init__(self, n_embd, n_ctx, layer, bias, init_average_std, init_bos_std, grad_acc_steps=1, momentum=0.95, bos_special_treatment=False):
+    def __init__(self, n_embd, n_ctx, layer, bias, init_average_std, init_bos_std, grad_acc_steps=1, momentum=0.1, bos_special_treatment=False):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(n_embd))
         self.bias = nn.Parameter(torch.zeros(n_embd)) if bias else None
@@ -386,7 +386,7 @@ class FakeLayerNorm(nn.Module):
             self.bos_std_buffer[0] = self.bos_std_buffer[1]
 
 
-def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_acc_steps=1, momentum=0.95):
+def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_acc_steps=1, momentum=0.1):
     n_layers = model.config.n_layer
     n_embd = model.transformer.h[0].ln_1.weight.shape[0]
     n_ctx = model.config.n_ctx
@@ -558,7 +558,7 @@ def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_ac
     
     model.transformer.forward = make_transformer_forward(model.transformer.forward)
 
-def load_model(model_name="gpt2", remove_ln=False, grad_acc_steps=1, momentum=0.95):
+def load_model(model_name="gpt2", remove_ln=False, grad_acc_steps=1, momentum=0.1):
     model = transformers.GPT2LMHeadModel.from_pretrained(
         model_name,
         cache_dir=f"{model_name}_cache",

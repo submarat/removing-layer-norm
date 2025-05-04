@@ -39,7 +39,7 @@ class FinetuneConfig(BaseModel):
     gradient_checkpointing: bool = Field(default=False, description="Use gradient checkpointing to save memory")
 
     # Momentum for recomputing the moving average std which will be fixed at LN removal
-    momentum: float = Field(default=0.95, description="Recompute momentum")
+    momentum: float = Field(default=0.1, description="Recompute momentum")
 
     # Layernorm schedule params
     gap_ln2: Optional[int]
