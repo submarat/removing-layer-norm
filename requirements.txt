@@ -4,3 +4,4 @@ datasets==3.2.0
 wandb==0.19.3
 docopt==0.6.2
 devtools
+transformer_lens
