@@ -392,9 +392,10 @@ class FakeLayerNorm(nn.Module):
     #         var = x.var()
     #         self.moving_var.append(var)
     #         self.moving_var_bos.append(var)
-    #     @torch.no_grad()
 
-    def update_std(self, x):
+    
+    @torch.no_grad()
+    def update_stds(self, x):
         if self.bos_special_treatment.item():
             # JS: If we do no BOS special treatment at all, it would be
             # nicer to just estimate the var across all dimensions.
