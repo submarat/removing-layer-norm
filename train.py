@@ -47,34 +47,34 @@ torch.manual_seed(1337)
 
 _USE_WANDB = True
 
-class TensorDeque:
-    """
-    A fixed-size FIFO buffer for tensors, emulating a deque using torch tensors.
-    """
-    def __init__(self, maxlen):
-        self.maxlen = maxlen
-        self.buffer = torch.zeros(maxlen)
-        self.index = 0
-        self.full = False
+# class TensorDeque:
+#     """
+#     A fixed-size FIFO buffer for tensors, emulating a deque using torch tensors.
+#     """
+#     def __init__(self, maxlen):
+#         self.maxlen = maxlen
+#         self.buffer = torch.zeros(maxlen)
+#         self.index = 0
+#         self.full = False
 
-    def append(self, x):
-        self.buffer[self.index] = x
-        self.index = (self.index + 1) % self.maxlen
-        if self.index == 0:
-            self.full = True
+#     def append(self, x):
+#         self.buffer[self.index] = x
+#         self.index = (self.index + 1) % self.maxlen
+#         if self.index == 0:
+#             self.full = True
 
-    def get_mean(self):
-        """
-        The moving window statistics are calculated according to:
-        https://stats.stackexchange.com/questions/25848/how-to-sum-a-standard-deviation
-        for the mean, the mean of the window is the mean of the means.
-        for the std, this is more complicated, but if we assume that all the minibatches 
-        have the same norm, the mean of the var is fine.
-        """
-        if self.full:
-            return self.buffer.mean()
-        else:
-            return self.buffer[:self.index].mean()
+#     def get_mean(self):
+#         """
+#         The moving window statistics are calculated according to:
+#         https://stats.stackexchange.com/questions/25848/how-to-sum-a-standard-deviation
+#         for the mean, the mean of the window is the mean of the means.
+#         for the std, this is more complicated, but if we assume that all the minibatches 
+#         have the same norm, the mean of the var is fine.
+#         """
+#         if self.full:
+#             return self.buffer.mean()
+#         else:
+#             return self.buffer[:self.index].mean()
         
 class CustomTrainer(Trainer):
     """Trainer with auxiliary loss to encourage uniform residual norms."""
@@ -227,10 +227,12 @@ class FakeLayerNorm(nn.Module):
         self.register_buffer("real_average_std", torch.tensor(float(init_average_std)))
         self.register_buffer("real_bos_std", torch.tensor(float(init_bos_std)))
         self.register_buffer("grad_acc_steps", torch.tensor(grad_acc_steps))
-        self.register_buffer("synced_step", torch.tensor(0))
-        self.register_buffer("global_step", torch.tensor(0))
-        self.moving_var = TensorDeque(grad_acc_steps)
-        self.moving_var_bos = TensorDeque(grad_acc_steps)
+        self.register_buffer("momentum", torch.tensor(0.1))
+        # self.register_buffer("synced_step", torch.tensor(0))
+        # self.register_buffer("global_step", torch.tensor(0))
+
+        # self.moving_var = TensorDeque(grad_acc_steps)
+        # self.moving_var_bos = TensorDeque(grad_acc_steps)
         if os.environ.get("EXP_CORRECT_BOS", "0") == "1":
             std_dim = n_ctx
         else:
@@ -324,14 +326,14 @@ class FakeLayerNorm(nn.Module):
         # LN for the QK and V paths separately.
         is_fake_value = self.attn_v_is_fake.item() if attn_v else self.is_fake.item()
 
-        if (self.global_step - self.synced_step) == 1:
-            avg_std = self.moving_var.get_mean()**0.5
-            bos_std = self.moving_var_bos.get_mean()**0.5
-            self.real_average_std.fill_(float(avg_std))
-            self.real_bos_std.fill_(float(bos_std))
-            self.synced_step = self.global_step
-
-        self.recompute_average_std(input)
+        # if (self.global_step - self.synced_step) == 1:
+        self.update_stds(input)
+        # avg_std = self.moving_var.get_mean()**0.5
+        # bos_std = self.moving_var_bos.get_mean()**0.5
+        # self.real_average_std.fill_(float(avg_std))
+        # self.real_bos_std.fill_(float(bos_std))
+        # self.synced_step = self.global_step
+        # self.recompute_average_std(input)
 
 
         if is_fake_value:
@@ -372,7 +374,27 @@ class FakeLayerNorm(nn.Module):
             )
     
     @torch.no_grad()
-    def recompute_average_std(self, x):
+    # def recompute_average_std(self, x):
+    #     if self.bos_special_treatment.item():
+    #         # JS: If we do no BOS special treatment at all, it would be
+    #         # nicer to just estimate the var across all dimensions.
+    #         # Then we don't need to take the mean anymore, 
+    #         # which is only justified if all variances belong to variables with the same mean.
+    #         var = x.var(dim=(0, -1))
+    #         if os.environ.get("EXP_NON_BOS_AVERAGE_STD", "0") == "1":
+    #             average_var = var[1:].mean().detach().item()
+    #         else:
+    #             average_var = var.mean().detach().item()
+    #         bos_var = var[0].detach().item()
+    #         self.moving_var.append(average_var)
+    #         self.moving_var_bos.append(bos_var)
+    #     else:
+    #         var = x.var()
+    #         self.moving_var.append(var)
+    #         self.moving_var_bos.append(var)
+    #     @torch.no_grad()
+
+    def update_std(self, x):
         if self.bos_special_treatment.item():
             # JS: If we do no BOS special treatment at all, it would be
             # nicer to just estimate the var across all dimensions.
@@ -384,13 +406,18 @@ class FakeLayerNorm(nn.Module):
             else:
                 average_var = var.mean().detach().item()
             bos_var = var[0].detach().item()
-            self.moving_var.append(average_var)
-            self.moving_var_bos.append(bos_var)
+
+            self.real_average_std_prop = (1 - self.momentum) * self.real_average_std_prop + self.momentum * average_var
+            self.real_bos_std_prop = (1 - self.momentum) * self.real_bos_std_prop + self.momentum * bos_var
+            # self.moving_var.append(average_var)
+            # self.moving_var_bos.append(bos_var)
         else:
             var = x.var()
-            self.moving_var.append(var)
-            self.moving_var_bos.append(var)
-    
+            self.real_average_std_prop = (1 - self.momentum) * self.real_average_std_prop + self.momentum * var.detach().item()
+            self.real_bos_std_prop = (1 - self.momentum) * self.real_bos_std_prop + self.momentum * var.detach().item()
+            # self.moving_var.append(var)
+            # self.moving_var_bos.append(var)
+
     def sync_std(self):
         """Sync the average and bos std values (that are used in the forward pass) with the real std values."""
         with torch.no_grad():
