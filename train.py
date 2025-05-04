@@ -181,7 +181,7 @@ class CustomTrainer(Trainer):
 class FakeLayerNorm(nn.Module):
     """LayerNorm using a fixed std instead of the actual standard deviation."""
 
-    def __init__(self, n_embd, n_ctx, layer, bias, init_average_std, init_bos_std, grad_acc_steps=1, bos_special_treatment=False):
+    def __init__(self, n_embd, n_ctx, layer, bias, init_average_std, init_bos_std, grad_acc_steps=1, momentum=0.95, bos_special_treatment=False):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(n_embd))
         self.bias = nn.Parameter(torch.zeros(n_embd)) if bias else None
@@ -199,7 +199,7 @@ class FakeLayerNorm(nn.Module):
         self.register_buffer("real_average_std", torch.tensor(float(init_average_std)))
         self.register_buffer("real_bos_std", torch.tensor(float(init_bos_std)))
         self.register_buffer("grad_acc_steps", torch.tensor(grad_acc_steps))
-        self.register_buffer("momentum", torch.tensor(0.1))
+        self.register_buffer("momentum", torch.tensor(float(momentum)))
 
         if os.environ.get("EXP_CORRECT_BOS", "0") == "1":
             std_dim = n_ctx
@@ -386,7 +386,7 @@ class FakeLayerNorm(nn.Module):
             self.bos_std_buffer[0] = self.bos_std_buffer[1]
 
 
-def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_acc_steps=1):
+def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_acc_steps=1, momentum=0.95):
     n_layers = model.config.n_layer
     n_embd = model.transformer.h[0].ln_1.weight.shape[0]
     n_ctx = model.config.n_ctx
@@ -410,7 +410,8 @@ def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_ac
             bias=block.ln_1.bias is not None,
             init_average_std=std_dict[layer],
             init_bos_std=std_bos_dict[layer],
-            grad_acc_steps=grad_acc_steps)
+            grad_acc_steps=grad_acc_steps,
+            momentum=momentum)
 
         layer = f"blocks.{i}.hook_resid_mid"
         block.ln_2 = FakeLayerNorm(
@@ -420,7 +421,8 @@ def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_ac
             bias=block.ln_2.bias is not None,
             init_average_std=std_dict[layer],
             init_bos_std=std_bos_dict[layer],
-            grad_acc_steps=grad_acc_steps)
+            grad_acc_steps=grad_acc_steps,
+            momentum=momentum)
         
         # Restore weights
         block.ln_1.weight = nn.Parameter(ln_1_weight)
@@ -508,7 +510,8 @@ def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_ac
         bias=ln_f.bias is not None,
         init_average_std=std_dict[layer],
         init_bos_std=std_bos_dict[layer],
-        grad_acc_steps=grad_acc_steps
+        grad_acc_steps=grad_acc_steps,
+        momentum=momentum,
     )
     model.transformer.ln_f.weight = nn.Parameter(ln_f_weight)
     if ln_f_bias is not None:
@@ -555,7 +558,7 @@ def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_ac
     
     model.transformer.forward = make_transformer_forward(model.transformer.forward)
 
-def load_model(model_name="gpt2", remove_ln=False, grad_acc_steps=1):
+def load_model(model_name="gpt2", remove_ln=False, grad_acc_steps=1, momentum=0.95):
     model = transformers.GPT2LMHeadModel.from_pretrained(
         model_name,
         cache_dir=f"{model_name}_cache",
@@ -568,7 +571,7 @@ def load_model(model_name="gpt2", remove_ln=False, grad_acc_steps=1):
         std_dict = std_dicts[model_name]["std_dict"]
         std_bos_dict = std_dicts[model_name]["std_bos_dict"]
 
-        replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_acc_steps=grad_acc_steps)
+        replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_acc_steps=grad_acc_steps, momentum=momentum)
     
     return model
 
@@ -964,7 +967,7 @@ def main():
         print(checkpoint_message)
     
     # Initialize model
-    model = load_model(model_name, remove_ln=args.mode == "without_ln", grad_acc_steps=config.gradient_accumulation_steps)
+    model = load_model(model_name, remove_ln=args.mode == "without_ln", grad_acc_steps=config.gradient_accumulation_steps, momentum=config.momentum)
     
     print("Begin training")
     print(model)

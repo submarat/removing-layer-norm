@@ -38,6 +38,9 @@ class FinetuneConfig(BaseModel):
     aux_loss_weight: float = Field(default=0.0, description="Weight for the auxiliary loss to encourage uniform residual norms")
     gradient_checkpointing: bool = Field(default=False, description="Use gradient checkpointing to save memory")
 
+    # Momentum for recomputing the moving average std which will be fixed at LN removal
+    momentum: float = Field(default=0.95, description="Recompute momentum")
+
     # Layernorm schedule params
     gap_ln2: Optional[int]
     gap_ln1qk: Optional[int]
