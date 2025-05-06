@@ -28,7 +28,6 @@ class InferenceConfig:
     folder: Union[str, Path] = field(default="/workspace/removing-layer-norm/mech_interp/inference_logs/")
     output_file: Optional[str] = None
     num_threads: Optional[int] = None
-    jsd_topk: int = 50
 
     
     def __post_init__(self):
@@ -73,39 +72,53 @@ class InferenceRunner:
 
                 )
         self.JSD = JSDivergence()
-        self.JSD_TopK = JSDivergence(topk=self.config.jsd_topk)
 
 
-    def _compute_ce_loss(self, logits, targets):
+    def _compute_metrics_from_logits(self, logits, targets):
         """
-        Compute optimised verison of CE loss using native log probs and gather
-        """
-        # Apply log_softmax along vocabulary dimension (dim=-1)
-        log_probs = F.log_softmax(logits[:, :-1, :], dim=-1)
-
-        # Target tokens - shape: [batch_size, sequence_length]
+        Compute all metrics (probs, CE loss, entropy) from logits in a single pass.
+        
+        Args:
+            logits: Model logits with shape [batch_size, sequence_length, vocab_size]
+            targets: Optional target tokens with shape [batch_size, sequence_length]
+            
+        Returns:
+            dict: Dictionary containing all computed metrics
+                - 'probs': Softmax probabilities [batch_size, sequence_length-1, vocab_size]
+                - 'ce_loss': Cross-entropy loss [batch_size, sequence_length-1]
+                - 'entropy': Entropy of probability distribution [batch_size, sequence_length-1]
+        """        
+        # Get sequence-aligned logits (skip last position)
+        seq_logits = logits[:, :-1, :]
+        
+        # Apply softmax to get probabilities (only once!)
+        probs = F.softmax(seq_logits, dim=-1)
+        
+        # Initialize result dictionary
+        results = {
+            'probs': probs,
+        }
+        
+        # Calculate entropy: -sum(p * log(p))
+        epsilon = 1e-10  # Small epsilon to avoid log(0)
+        log_probs = torch.log(probs + epsilon)
+        entropy = -torch.sum(probs * log_probs, dim=-1)
+        results['entropy'] = entropy
+        
+        # Calculate cross-entropy loss
+        # Target tokens - shape: [batch_size, sequence_length-1]
         target_tokens = targets[:, 1:]
-
-        # Find probability for ground truth token. Using .contiguous() to ensure memory layout is optimal
+        
+        # Use log_probs we already computed
         ce_loss = -torch.gather(
             log_probs,
             dim=-1,
             index=target_tokens.unsqueeze(-1)
         ).squeeze(-1).contiguous()
-
-        return ce_loss
-
-    def _compute_jsd_loss(self, logits_p, logits_q, topk=None):
-        """
-        Compute Jensen-Shannon Divergence between two sets of logits.
-        """
-        # Truncate to match the same sequence alignment as in CE loss
-        logits_p = logits_p[:, :-1, :]
-        logits_q = logits_q[:, :-1, :]
-        if not topk:
-            return self.JSD(logits_p, logits_q)
-        else:
-           return  self.JSD_TopK(logits_p, logits_q)
+        
+        results['ce_loss'] = ce_loss
+        
+        return results        
 
 
     def run_inference(self):
@@ -130,38 +143,32 @@ class InferenceRunner:
         # Compute logits for all models in one pass
         logits = {name: model(batch) for name, model in self.model_manager.models.items()}
 
-        # Compute CE loss, gather model pred
-        ce_losses = {}
-        token_preds = {}
+        # Compute metrics
+        model_metrics = {}
         for model_name, model_logits in logits.items():
-            ce_loss = self._compute_ce_loss(model_logits, batch)
-            ce_losses[model_name] = ce_loss.cpu().numpy()
-            token_preds[model_name] = torch.argmax(model_logits[:, :-1, :], dim=-1).cpu().numpy()
+            model_metrics[model_name] = self._compute_metrics_from_logits(model_logits, batch)
 
-        # Compute CE loss differences
-        ce_diffs = {}
-        for model1, model2 in self.model_manager.model_pairs:
-            pair_name = f'{model1}_vs_{model2}'
-            ce_diffs[pair_name] = ce_losses[model1] - ce_losses[model2]
+        # Extract metrics for parquet storage
+        ce_losses = {name: metrics['ce_loss'].cpu().numpy() for name, metrics in model_metrics.items()}
+        entropies = {name: metrics['entropy'].cpu().numpy() for name, metrics in model_metrics.items()}
 
-        # Compute JSD
+        # Compute JSD using pre-computed probabilities
         jsd_losses = {}
-        topk_jsd_losses = {}
         for model1, model2 in self.model_manager.model_pairs:
             pair_name = f'{model1}_vs_{model2}'
-            jsd_losses[pair_name] = self._compute_jsd_loss(logits[model1], logits[model2]).cpu().numpy()
-            topk_jsd_losses[pair_name] = self._compute_jsd_loss(
-                    logits[model1], logits[model2], topk=self.config.jsd_topk).cpu().numpy()
+            jsd = self.JSD(
+                model_metrics[model1]['probs'],
+                model_metrics[model2]['probs']
+            )
+            jsd_losses[pair_name] = jsd.cpu().numpy()
 
         # Add batch data to parquet manager
         self.results_formatter.add_batch_data(
             batch_idx * self.config.batch_size, # To keep track of original sequence indices
             batch.cpu().numpy(),
             ce_losses,
-            token_preds,
-            ce_diffs,
             jsd_losses,
-            topk_jsd_losses,
+            entropies,            
         )
 
 
@@ -171,9 +178,9 @@ if __name__ == "__main__":
         dataset="luca-pile",
         models=["baseline", "finetuned", "noLN"],
         num_samples=5000,
-        max_sequence_length=512,
+        max_sequence_length=256,
         batch_size=10,
-        prepend_bos=False
+        prepend_bos=True
     )
 
     runner = InferenceRunner(config)
