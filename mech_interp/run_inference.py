@@ -177,10 +177,10 @@ if __name__ == "__main__":
     config = InferenceConfig(
         dataset="luca-pile",
         models=["baseline", "finetuned", "noLN"],
-        num_samples=5000,
-        max_sequence_length=256,
+        num_samples=1000,
+        max_sequence_length=512,
         batch_size=10,
-        prepend_bos=True
+        prepend_bos=False
     )
 
     runner = InferenceRunner(config)
