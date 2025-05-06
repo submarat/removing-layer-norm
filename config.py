@@ -124,7 +124,9 @@ def make_gpt2_standard_aux():
     start_eot = start_lnf + 2
     start_bos = start_eot + 10
 
-    aux_loss_weight = 0.1
+    aux_loss_weight = 0.001
+
+    early_stop_step = 40
     
     return FinetuneConfig(**locals())
 
@@ -355,7 +357,9 @@ def make_gpt2_medium_fasttune_aux():
     start_eot = start_lnf + 2
     start_bos = start_eot + 10
 
-    aux_loss_weight = 0.1
+    aux_loss_weight = 0.001
+
+    early_stop_step = 40
     
     return FinetuneConfig(**locals())
 
