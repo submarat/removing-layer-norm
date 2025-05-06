@@ -492,7 +492,7 @@ class MetricsSummary:
 # Example usage:
 if __name__ == "__main__":
     # Initialize with data path
-    data_path = '/workspace/removing-layer-norm/mech_interp/inference_logs/dataset_luca-pile_samples_5000_seqlen_256_prepend_True/inference_results.parquet'
+    data_path = '/workspace/removing-layer-norm/mech_interp/inference_logs/dataset_luca-pile_samples_1000_seqlen_512_prepend_False/inference_results.parquet'
     metrics_comparison = MetricsSummary(data_path, agg=False)
     # Generate and save all plots
     metrics_comparison.plot_all('figures')
