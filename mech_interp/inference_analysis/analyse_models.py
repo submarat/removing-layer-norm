@@ -283,17 +283,19 @@ class MetricsSummary:
         return fig
 
 
-    def plot_ce_hexplot(self, figsize: tuple = (8, 6),
+    def plot_ce_hexplot(self,
+                        models: List = ['baseline', 'noLN'],
+                        figsize: tuple = (8, 6),
                         sample_size: Optional[int] = None, 
                         save_path: Optional[str] = None):
 
         """
-        Plot a hexbin plot comparing CE loss
-        between baseline and noLN using Seaborn.
-        The color represents point density.
+        Plot a hexbin plot comparing CE loss between baseline and noLN.
         
         Parameters:
         -----------
+        models : list,
+            Models to analyse
         figsize : tuple, optional
             Figure size (width, height)
         sample_size : int, optional
@@ -317,8 +319,8 @@ class MetricsSummary:
 
         # Create the hexbin plot directly with matplotlib (for more control)
         hb = ax.hexbin(
-            sampled_df['ce_baseline'],
-            sampled_df['ce_noLN'],
+            sampled_df[f'ce_{models[0]}'],
+            sampled_df[f'ce_{models[1]}'],
             gridsize=50,
             cmap='viridis',
             bins='log',  # Use logarithmic binning
@@ -327,11 +329,11 @@ class MetricsSummary:
     
         # Add colorbar
         cbar = plt.colorbar(hb, ax=ax)
-        cbar.set_label('Log Count')
+        cbar.set_label('Count (log scale)')
     
         # Get min/max values with some padding but avoid extreme outliers
-        x_max = np.percentile(sampled_df['ce_baseline'], 99.5) * 1.05
-        y_max = np.percentile(sampled_df['ce_noLN'], 99.5) * 1.05
+        x_max = np.percentile(sampled_df[f'ce_{models[0]}'], 99.5) * 1.05
+        y_max = np.percentile(sampled_df[f'ce_{models[1]}'], 99.5) * 1.05
         max_lim = max(x_max, y_max)
     
         # Add diagonal line for reference
@@ -339,8 +341,8 @@ class MetricsSummary:
                 linewidth=1.5, zorder=10)
     
         # Set titles and labels
-        ax.set_xlabel('CE Loss (baseline)', fontsize=14)
-        ax.set_ylabel('CE Loss (noLN)', fontsize=14)
+        ax.set_xlabel(f'CE Loss ({models[0]})', fontsize=14)
+        ax.set_ylabel(f'CE Loss ({models[1]})', fontsize=14)
     
         # Set axis limits to focus on where most data is (avoiding outliers)
         ax.set_xlim(0, x_max)
@@ -354,6 +356,82 @@ class MetricsSummary:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             
         return fig    
+
+    
+    def plot_entropy_hexplot(self,
+                             models: List = ['baseline', 'noLN'],
+                             figsize: tuple = (8, 6),
+                             sample_size: Optional[int] = None, 
+                             save_path: Optional[str] = None):
+
+        """
+        Plot a hexbin plot comparing entropies between baseline and noLN.
+        
+        Parameters:
+        -----------
+         models : list,
+            Models to analyse
+        figsize : tuple, optional
+            Figure size (width, height)
+        sample_size : int, optional
+            Number of points to sample for faster rendering
+        save_path : str, optional
+            Path to save the figure
+            
+        Returns:
+        --------
+        matplotlib.figure.Figure
+            The generated figure
+        """
+           # Sample data if requested
+        if sample_size and len(self.df) > sample_size:
+            print(f"Sampling {sample_size} points from {len(self.df)} total points")
+            sampled_df = self.df.sample(n=sample_size, random_state=42)
+        else:
+            sampled_df = self.df
+        
+        fig, ax = plt.subplots(figsize=figsize)
+
+        # Create the hexbin plot directly with matplotlib (for more control)
+        hb = ax.hexbin(
+            sampled_df[f'entropy_{models[0]}'],
+            sampled_df[f'entropy_{models[1]}'],
+            gridsize=50,
+            cmap='viridis',
+            bins='log',  # Use logarithmic binning
+            mincnt=1     # Show bins with at least 1 point
+        )
+    
+        # Add colorbar
+        cbar = plt.colorbar(hb, ax=ax)
+        cbar.set_label('Count (log scale)')
+    
+        # Get min/max values with some padding but avoid extreme outliers
+        x_max = np.percentile(sampled_df[f'entropy_{models[0]}'], 99.5) * 1.05
+        y_max = np.percentile(sampled_df[f'entropy_{models[1]}'], 99.5) * 1.05
+        max_lim = max(x_max, y_max)
+    
+        # Add diagonal line for reference
+        ax.plot([0, max_lim], [0, max_lim], 'r--', alpha=0.7, 
+                linewidth=1.5, zorder=10)
+    
+        # Set titles and labels
+        ax.set_xlabel(f'Entropy ({models[0]})', fontsize=14)
+        ax.set_ylabel(f'Entropy ({models[1]})', fontsize=14)
+    
+        # Set axis limits to focus on where most data is (avoiding outliers)
+        ax.set_xlim(0, x_max)
+        ax.set_ylim(0, y_max)
+    
+        # Improve aesthetics
+        plt.tight_layout()
+    
+        # Save if path is provided
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            
+        return fig    
+
 
     def plot_all(self, output_dir: Optional[str] = None):
         """
@@ -392,9 +470,21 @@ class MetricsSummary:
         jsd_path = os.path.join(output_dir, f'jsd_histograms{metrics_str}.png')
         self.plot_jsd_histogram(save_path=jsd_path)
         
-        # CE hexplot
+        # CE hexplot (baseline vs noLN)
         ce_hex_path = os.path.join(output_dir, f'ce_hexplot{metrics_str}.png')
         self.plot_ce_hexplot(save_path=ce_hex_path)
+
+         # CE hexplot (finetuned vs noLN)
+        ce_hex_path = os.path.join(output_dir, f'ce_finetuned_hexplot{metrics_str}.png')
+        self.plot_ce_hexplot(models=['finetuned', 'noLN'], save_path=ce_hex_path)
+        
+        # Entropy hexplot (baseline vs noLN)
+        entropy_hex_path = os.path.join(output_dir, f'entropy_hexplot{metrics_str}.png')
+        self.plot_entropy_hexplot(save_path=entropy_hex_path)
+
+        # Entropy hexplot (finetuned vs noLN)
+        entropy_hex_path = os.path.join(output_dir, f'entropy_finetuned_hexplot{metrics_str}.png')
+        self.plot_entropy_hexplot(models=['finetuned', 'noLN'], save_path=entropy_hex_path)
        
         print(f"All figures saved to {output_dir}")
 
