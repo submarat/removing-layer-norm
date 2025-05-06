@@ -545,7 +545,7 @@ def make_gpt2_xl_aux():
     n_layers = 48
     
     # Training params
-    base_batch_size = 14
+    base_batch_size = 8
     max_steps = 1600
     block_size = 1024
     target_batch_tokens = 2**19

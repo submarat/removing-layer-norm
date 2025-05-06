@@ -324,15 +324,14 @@ class FakeLayerNorm(nn.Module):
         # LN for the QK and V paths separately.
         is_fake_value = self.attn_v_is_fake.item() if attn_v else self.is_fake.item()
 
+        self.recompute_average_std(input)
+        
         if (self.global_step - self.synced_step) == 1:
             avg_std = self.moving_var.get_mean()**0.5
             bos_std = self.moving_var_bos.get_mean()**0.5
             self.real_average_std.fill_(float(avg_std))
             self.real_bos_std.fill_(float(bos_std))
             self.synced_step = self.global_step
-
-        self.recompute_average_std(input)
-
 
         if is_fake_value:
             # Which std values to use: We use (1) average std (which is actually a vector of length
