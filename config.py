@@ -84,8 +84,6 @@ def make_gpt2_standard():
     start_lnf = start_ln1v + 12 * gap_ln1v
     start_eot = start_lnf + 2
     start_bos = start_eot + 10
-
-    early_stop_step = start_bos + 40
     
     return FinetuneConfig(**locals())
 
@@ -126,7 +124,7 @@ def make_gpt2_standard_aux():
 
     aux_loss_weight = 0.001
 
-    early_stop_step = 40
+    # early_stop_step = 40
     
     return FinetuneConfig(**locals())
 
@@ -196,7 +194,7 @@ def make_gpt2_test():
     start_eot = start_lnf + 2
     start_bos = start_eot + 1  # Shorter gap for testing
 
-    early_stop_step = start_bos + 1
+    # early_stop_step = start_bos + 1
     
     return FinetuneConfig(**locals())
 
@@ -319,7 +317,7 @@ def make_gpt2_medium_fasttune():
     start_eot = start_lnf + 2
     start_bos = start_eot + 10
 
-    early_stop_step = start_bos + 10
+    # early_stop_step = start_bos + 10
     
     return FinetuneConfig(**locals())
 
@@ -359,7 +357,7 @@ def make_gpt2_medium_fasttune_aux():
 
     aux_loss_weight = 0.001
 
-    early_stop_step = 40
+    # early_stop_step = 40
     
     return FinetuneConfig(**locals())
 
@@ -430,7 +428,7 @@ def make_gpt2_large():
     start_eot = start_lnf + 2
     start_bos = start_eot + 10
 
-    early_stop_step = start_bos + 10
+    # early_stop_step = start_bos + 10
     
     return FinetuneConfig(**locals())
 
@@ -504,7 +502,7 @@ def make_gpt2_large_test():
     start_eot = start_lnf + 2
     start_bos = start_eot + 1  # Shorter gap for testing
 
-    early_stop_step = start_bos + 10
+    # early_stop_step = start_bos + 10
     
     return FinetuneConfig(**locals())
 
