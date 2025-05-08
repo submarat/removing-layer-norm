@@ -1,11 +1,9 @@
 import os
-from typing import Dict, List, Optional, Union, Literal, Tuple
+from typing import List, Optional
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.colors import Normalize
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-import seaborn as sns
 
 
 class MetricsSummary:
@@ -430,7 +428,146 @@ class MetricsSummary:
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             
-        return fig    
+        return fig
+
+
+    def calculate_ece(self, confidences, accuracies, bin_edges):
+        """
+        Calculate the Expected Calibration Error (ECE).
+        
+        Parameters:
+        -----------
+        confidences : array-like
+            Model confidence scores
+        accuracies : array-like
+            Binary values indicating whether the prediction was correct (1) or not (0)
+        bin_edges : array-like
+            Edges of the bins for confidence scores
+            
+        Returns:
+        --------
+        float
+            Expected Calibration Error
+        list
+            Average confidence per bin
+        list
+            Average accuracy per bin
+        list
+            Fraction of samples in each bin
+        """
+        n_bins = len(bin_edges) - 1
+        bin_indices = np.digitize(confidences, bin_edges) - 1
+        
+        # Clip bin indices to valid range
+        bin_indices = np.clip(bin_indices, 0, n_bins - 1)
+        
+        # Initialize arrays for bin statistics
+        bin_confidences = np.zeros(n_bins)
+        bin_accuracies = np.zeros(n_bins)
+        bin_counts = np.zeros(n_bins)
+        
+        # Compute bin statistics
+        for i in range(n_bins):
+            mask = (bin_indices == i)
+            if np.any(mask):
+                bin_confidences[i] = np.mean(confidences[mask])
+                bin_accuracies[i] = np.mean(accuracies[mask])
+                bin_counts[i] = np.sum(mask)
+        
+        # Calculate ECE
+        total_samples = np.sum(bin_counts)
+        ece = np.sum(bin_counts / total_samples * np.abs(bin_confidences - bin_accuracies))
+        
+        # Calculate bin fractions
+        bin_fractions = bin_counts / total_samples
+        
+        return ece, bin_confidences, bin_accuracies, bin_fractions
+
+
+    def plot_calibration(self, 
+                         n_bins: int = 10, 
+                         equal_bins: bool = True,
+                         figsize: tuple = (10, 8), 
+                         save_path: Optional[str] = None):
+        """
+        Plot calibration curves for all models.
+        
+        Parameters:
+        -----------
+        n_bins : int, optional
+            Number of confidence bins
+        equal_bins : bool, optional
+            If True, bins have equal width (uniform spacing).
+            If False, bins have equal counts (quantile-based).
+        figsize : tuple, optional
+            Figure size (width, height)
+        save_path : str, optional
+            Path to save the figure
+            
+        Returns:
+        --------
+        matplotlib.figure.Figure
+            The generated figure
+        """
+        fig, ax = plt.subplots(figsize=figsize)
+        
+        # Add the diagonal perfect calibration line
+        ax.plot([0, 1], [0, 1], 'k--', label='Perfect calibration', alpha=0.8)
+        
+        # Process each model
+        for model in self.models:
+            # Extract max probabilities and accuracy (when max token = next token)
+            max_probs = self.df[f'max_prob_{model}'].values
+            correct_preds = (self.df[f'max_token_{model}'].values == self.df['next_token'].values).astype(int)
+            
+            # Create bins
+            if equal_bins:
+                # Equal width bins
+                bin_edges = np.linspace(0, 1, n_bins + 1)
+            else:
+                # Equal count bins (using quantiles)
+                quantiles = np.linspace(0, 1, n_bins + 1)
+                bin_edges = np.quantile(max_probs, quantiles)
+                # Ensure first bin starts at 0 and last bin ends at 1
+                bin_edges[0] = 0
+                bin_edges[-1] = 1
+            
+            # Calculate ECE and bin statistics
+            ece, bin_confidences, bin_accuracies, _ = self.calculate_ece(
+                max_probs, correct_preds, bin_edges
+            )
+            
+            # Plot calibration curve
+            ax.plot(
+                bin_confidences, 
+                bin_accuracies, 
+                marker='o', 
+                linestyle='-',
+                color=self.model_colors[model],
+                label=f'{model}, ECE: {ece:.4f}'
+            )
+        
+        # Set labels and title
+        ax.set_ylabel('Accuracy', fontsize=16)
+        ax.set_xlabel('Confidence (Max Probability)', fontsize=16)
+        ax.set_title(f'Calibration Plot for models', fontsize=16)
+        
+        # Set axis limits and grid
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.grid(alpha=0.3)
+        
+        # Add legend
+        ax.legend(fontsize=14, loc='lower right')
+        
+        # Improve aesthetics
+        plt.tight_layout()
+        
+        # Save if path is provided
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            
+        return fig
 
 
     def plot_all(self, output_dir: Optional[str] = None):
@@ -485,6 +622,10 @@ class MetricsSummary:
         # Entropy hexplot (finetuned vs noLN)
         entropy_hex_path = os.path.join(output_dir, f'entropy_finetuned_hexplot{metrics_str}.png')
         self.plot_entropy_hexplot(models=['finetuned', 'noLN'], save_path=entropy_hex_path)
+        
+        # Calibration plots with equal width bins
+        calib_equal_width_path = os.path.join(output_dir, f'calibration{metrics_str}.png')
+        self.plot_calibration(equal_bins=True, save_path=calib_equal_width_path)
        
         print(f"All figures saved to {output_dir}")
 

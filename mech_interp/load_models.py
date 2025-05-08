@@ -153,8 +153,8 @@ class ModelFactory:
         model_dir: str,
         device: Optional[DeviceType] = None,
         fold_ln: bool = True,
-        center_unembed: bool = False,
-        center_writing_weights: bool = False,
+        center_unembed: bool = True,
+        center_writing_weights: bool = True,
         eval_mode: bool = True
     ):
         """Initialize with specified models and load them."""

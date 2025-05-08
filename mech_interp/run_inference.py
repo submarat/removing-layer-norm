@@ -53,7 +53,7 @@ class InferenceRunner:
         self.config = config
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-        # Initialize various manag
+        # Initialize various managers
         self.model_manager = ModelFactory(
                 model_names=self.config.models,
                 model_dir=self.config.model_dir,
@@ -93,10 +93,15 @@ class InferenceRunner:
         
         # Apply softmax to get probabilities (only once!)
         probs = F.softmax(seq_logits, dim=-1)
+    
+        # Find maximum probabilities and corresponding tokens
+        max_probs, max_tokens = torch.max(probs, dim=-1)
         
         # Initialize result dictionary
         results = {
             'probs': probs,
+            'max_prob': max_probs,
+            'max_token': max_tokens
         }
         
         # Calculate entropy: -sum(p * log(p))
@@ -151,6 +156,8 @@ class InferenceRunner:
         # Extract metrics for parquet storage
         ce_losses = {name: metrics['ce_loss'].cpu().numpy() for name, metrics in model_metrics.items()}
         entropies = {name: metrics['entropy'].cpu().numpy() for name, metrics in model_metrics.items()}
+        max_probs = {name: metrics['max_prob'].cpu().numpy() for name, metrics in model_metrics.items()}
+        max_tokens = {name: metrics['max_token'].cpu().numpy() for name, metrics in model_metrics.items()}
 
         # Compute JSD using pre-computed probabilities
         jsd_losses = {}
@@ -168,7 +175,9 @@ class InferenceRunner:
             batch.cpu().numpy(),
             ce_losses,
             jsd_losses,
-            entropies,            
+            entropies,
+            max_probs,
+            max_tokens
         )
 
 
