@@ -595,14 +595,14 @@ class ResidualNorms:
 
 if __name__ == '__main__':
     data_paths = '/workspace/removing-layer-norm/mech_interp/inference_logs/dataset_luca-pile_samples_1000_seqlen_512_prepend_False/inference_results.parquet'
-    output_dir = 'figures/bos_vs_rest'
+    output_dir = 'figures/last_token'
     # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)
     
     analyzer = ResidualNorms(
         data_paths=data_paths,
         model_dir="../models",
-        last_token_only=False,
+        last_token_only=True,
     )
     
     # Run analysis and generate plots
