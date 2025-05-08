@@ -724,33 +724,33 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
             if not _USE_WANDB:
                 return control
 
-            for i, block in enumerate(model.transformer.h):
-                wandb.log({
-                    f"block_{i}_ln_1_real_average_std": block.ln_1.real_average_std_prop,
-                    f"block_{i}_ln_1_real_bos_std": block.ln_1.real_bos_std_prop,
-                    f"block_{i}_ln_1_average_std_0": block.ln_1.average_std_buffer[0],
-                    f"block_{i}_ln_1_average_std_1": block.ln_1.average_std_buffer[1],
-                    f"block_{i}_ln_1_bos_std_0": block.ln_1.bos_std_buffer[0],
-                    f"block_{i}_ln_1_bos_std_1": block.ln_1.bos_std_buffer[1],
-                })
+            # for i, block in enumerate(model.transformer.h):
+            #     wandb.log({
+            #         f"block_{i}_ln_1_real_average_std": block.ln_1.real_average_std_prop,
+            #         f"block_{i}_ln_1_real_bos_std": block.ln_1.real_bos_std_prop,
+            #         f"block_{i}_ln_1_average_std_0": block.ln_1.average_std_buffer[0],
+            #         f"block_{i}_ln_1_average_std_1": block.ln_1.average_std_buffer[1],
+            #         f"block_{i}_ln_1_bos_std_0": block.ln_1.bos_std_buffer[0],
+            #         f"block_{i}_ln_1_bos_std_1": block.ln_1.bos_std_buffer[1],
+            #     })
 
-                wandb.log({
-                    f"block_{i}_ln_2_real_average_std": block.ln_2.real_average_std_prop,
-                    f"block_{i}_ln_2_real_bos_std": block.ln_2.real_bos_std_prop,
-                    f"block_{i}_ln_2_average_std_0": block.ln_2.average_std_buffer[0],
-                    f"block_{i}_ln_2_average_std_1": block.ln_2.average_std_buffer[1],
-                    f"block_{i}_ln_2_bos_std_0": block.ln_2.bos_std_buffer[0],
-                    f"block_{i}_ln_2_bos_std_1": block.ln_2.bos_std_buffer[1],
-                })
+            #     wandb.log({
+            #         f"block_{i}_ln_2_real_average_std": block.ln_2.real_average_std_prop,
+            #         f"block_{i}_ln_2_real_bos_std": block.ln_2.real_bos_std_prop,
+            #         f"block_{i}_ln_2_average_std_0": block.ln_2.average_std_buffer[0],
+            #         f"block_{i}_ln_2_average_std_1": block.ln_2.average_std_buffer[1],
+            #         f"block_{i}_ln_2_bos_std_0": block.ln_2.bos_std_buffer[0],
+            #         f"block_{i}_ln_2_bos_std_1": block.ln_2.bos_std_buffer[1],
+            #     })
 
-            wandb.log({
-                f"ln_f_real_average_std": model.transformer.ln_f.real_average_std_prop,
-                f"ln_f_real_bos_std": model.transformer.ln_f.real_bos_std_prop,
-                f"ln_f_average_std_0": model.transformer.ln_f.average_std_buffer[0],
-                f"ln_f_average_std_1": model.transformer.ln_f.average_std_buffer[1],
-                f"ln_f_bos_std_0": model.transformer.ln_f.bos_std_buffer[0],
-                f"ln_f_bos_std_1": model.transformer.ln_f.bos_std_buffer[1],
-            })
+            # wandb.log({
+            #     f"ln_f_real_average_std": model.transformer.ln_f.real_average_std_prop,
+            #     f"ln_f_real_bos_std": model.transformer.ln_f.real_bos_std_prop,
+            #     f"ln_f_average_std_0": model.transformer.ln_f.average_std_buffer[0],
+            #     f"ln_f_average_std_1": model.transformer.ln_f.average_std_buffer[1],
+            #     f"ln_f_bos_std_0": model.transformer.ln_f.bos_std_buffer[0],
+            #     f"ln_f_bos_std_1": model.transformer.ln_f.bos_std_buffer[1],
+            # })
 
             return control 
     
@@ -768,18 +768,18 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
             print(f"  EXP_RECOMPUTE_STD_ON_REAL: {os.environ.get('EXP_RECOMPUTE_STD_ON_REAL', '0')}")
             print(f"  EXP_BOS_SPECIAL_TREATMENT: {os.environ.get('EXP_BOS_SPECIAL_TREATMENT', '0')}")
 
-            print("\nChecking if layers are fake after loading checkpoint:")
-            for i, block in enumerate(model.transformer.h):
-                print(f"Block {i}:")
-                print(f"  ln_1.is_fake_prop: {block.ln_1.is_fake_prop}")
-                print(f"  ln_1.attn_v_is_fake_prop: {block.ln_1.attn_v_is_fake_prop}")
-                print(f"  ln_1.bos_special_treatment_prop: {block.ln_1.bos_special_treatment_prop}")
-                print(f"  ln_2.is_fake_prop: {block.ln_2.is_fake_prop}")
-                print(f"  ln_2.bos_special_treatment_prop: {block.ln_2.bos_special_treatment_prop}")
+            # print("\nChecking if layers are fake after loading checkpoint:")
+            # for i, block in enumerate(model.transformer.h):
+            #     print(f"Block {i}:")
+            #     print(f"  ln_1.is_fake_prop: {block.ln_1.is_fake_prop}")
+            #     print(f"  ln_1.attn_v_is_fake_prop: {block.ln_1.attn_v_is_fake_prop}")
+            #     print(f"  ln_1.bos_special_treatment_prop: {block.ln_1.bos_special_treatment_prop}")
+            #     print(f"  ln_2.is_fake_prop: {block.ln_2.is_fake_prop}")
+            #     print(f"  ln_2.bos_special_treatment_prop: {block.ln_2.bos_special_treatment_prop}")
             
-            print(f"\nFinal ln_f.is_fake_prop: {model.transformer.ln_f.is_fake_prop}")
-            print(f"Final ln_f.bos_special_treatment_prop: {model.transformer.ln_f.bos_special_treatment_prop}")
-            print("========================================\n")
+            # print(f"\nFinal ln_f.is_fake_prop: {model.transformer.ln_f.is_fake_prop}")
+            # print(f"Final ln_f.bos_special_treatment_prop: {model.transformer.ln_f.bos_special_treatment_prop}")
+            # print("========================================\n")
             
             return control
 
