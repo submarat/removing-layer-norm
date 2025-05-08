@@ -20,7 +20,8 @@ os.makedirs('figures', exist_ok=True)
 # %%
 # Initialize model factory with all models
 model_names = ['baseline', 'finetuned', 'noLN']
-model_factory = ModelFactory(model_names, model_dir='../models/')
+model_factory = ModelFactory(model_names,
+                             model_dir='../models/')
 
 # Set up color schemes for consistent visualization
 colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
@@ -38,7 +39,7 @@ for model_name, model in model_factory.models.items():
     print(f"Processing model: {model_name}")
     
     # Set model to eval mode and freeze parameters
-    model = model.eval()
+    model = model
     for param in model.parameters():
         param.requires_grad_(False)
     
@@ -130,7 +131,7 @@ for model_name, model_results in results.items():
              color=model_colors[model_name])
 
 plt.xlim(0, 767)
-plt.ylim(0, 0.05)
+plt.ylim(0, 0.5)
 plt.ylabel('Normalised Singular Values')
 plt.xlabel('Singular Vector Index')
 plt.title('SVD Comparison - All Models')
@@ -158,4 +159,3 @@ plt.legend(loc='upper left')
 plt.tight_layout()
 plt.savefig('figures/all_models_SVD_comparison.png', dpi=300)
 plt.show()
-# %%
