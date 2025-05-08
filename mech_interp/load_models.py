@@ -134,7 +134,7 @@ class NoLNModelLoader(ModelLoader):
             center_unembed=center_unembed,
             device=self.device,
         )
-
+        
         hooked_model.removeLN()
         hooked_model.cfg.normalization_type = None
         
@@ -184,16 +184,16 @@ class ModelFactory:
             'finetuned': StandardModelLoader(
                 self.model_dir,
                 self.device, 
-                repo_id="apollo-research/gpt2_noLN", 
-                revision="vanilla_1200",
-                model_subdir="apollo_gpt2_finetuned",
+                repo_id="schaeff/gpt2-small_vanilla300", 
+                revision="main",
+                model_subdir="gpt2_finetuned",
             ),
             'noLN': NoLNModelLoader(
                 self.model_dir,
                 self.device,
-                repo_id="apollo-research/gpt2_noLN",
+                repo_id="submarat/gpt2-noln-ma-aux",
                 revision="main",
-                model_subdir="apollo_gpt2_noLN",
+                model_subdir="gpt2_noLN",
             )
         }
         
