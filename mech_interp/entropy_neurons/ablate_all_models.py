@@ -32,6 +32,8 @@ class AblationAnalyzer:
             batch_size: Batch size for processing to avoid OOM issues
         """
         self.model = model
+        self.n_layers = model.cfg.n_layers
+       
         for param in self.model.parameters():
             param.requires_grad_(False)
             
@@ -84,10 +86,10 @@ class AblationAnalyzer:
         """
         if hook_names is None:
             hook_names = [
-                "blocks.11.hook_resid_pre",
-                "blocks.11.hook_attn_out",
-                "blocks.11.mlp.hook_post",
-                "blocks.11.hook_mlp_out"
+                f"blocks.{self.n_layers - 1}.hook_resid_pre",
+                f"blocks.{self.n_layers - 1}.hook_attn_out",
+                f"blocks.{self.n_layers - 1}.mlp.hook_post",
+                f"blocks.{self.n_layers - 1}.hook_mlp_out"
             ]
         
         targets = []
@@ -110,9 +112,9 @@ class AblationAnalyzer:
                 target_token = batch[:, 1:].reshape(-1)
                 
                 # Extract the residual stream, attention out, and middle of mlp final
-                resid_pre = cache["blocks.11.hook_resid_pre"][:, :-1, :]
-                attn = cache["blocks.11.hook_attn_out"][:, :-1, :]
-                mid_mlp = cache["blocks.11.mlp.hook_post"][:, :-1, :]
+                resid_pre = cache[f"blocks.{self.n_layers - 1}.hook_resid_pre"][:, :-1, :]
+                attn = cache[f"blocks.{self.n_layers - 1}.hook_attn_out"][:, :-1, :]
+                mid_mlp = cache[f"blocks.{self.n_layers - 1}.mlp.hook_post"][:, :-1, :]
                 logits = logits[:, :-1, :]
                 
                 # Reshape to (batch * seq_len, ...)
@@ -443,13 +445,19 @@ def plot_model_comparison(model_results, save_path=None, metric='loss_effect'):
    
     
 if __name__ == "__main__":
-    entropy_neuron_indices = [584, 2123, 2870]  # Top-3 examples for analysis
+    #entropy_neuron_indices = [584, 2123, 2870]  # Small
+    entropy_neuron_indices = [3144, 1083, 1108] # Medium
     models = ['baseline', 'finetuned', 'noLN']
+    model_size = 'medium'
+    save_path = f'figures/{model_size}'
+    os.makedirs(save_path, exist_ok=True)
+
     model_results = {}
     for model_type in models:
         # Load each model individually to avoid OOM
         model = ModelFactory([model_type],
-                             model_dir='../models').models[model_type]
+                             model_dir='../models',
+                             model_size=model_size).models[model_type]
         # Create analyzer
         analyzer = AblationAnalyzer(model=model, model_name=model_type)
         # Run analysis
@@ -467,14 +475,14 @@ if __name__ == "__main__":
     # Plot loss effect
     plot_model_comparison(
         model_results, 
-        save_path='figures/all_models_loss_effect.png',
+        save_path=f'{save_path}/all_models_loss_effect.png',
         metric='loss_effect'
     )
     
     # Plot entropy effect
     plot_model_comparison(
         model_results, 
-        save_path='figures/all_models_entropy_effect.png',
+        save_path=f'{save_path}/all_models_entropy_effect.png',
         metric='entropy_effect'
     )
 # %%
