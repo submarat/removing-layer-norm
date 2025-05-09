@@ -18,6 +18,7 @@ from metrics import JSDivergence
 class InferenceConfig:
     """Configuration for model inference runs."""
     dataset: str
+    model_size: str
     models: List[str]
     num_samples: int
     max_sequence_length: int
@@ -34,7 +35,7 @@ class InferenceConfig:
         # Set up derived paths after initialization to correctly assign self.output_file
         self.folder = os.path.join(
             self.folder, 
-            f"dataset_{self.dataset}_samples_{self.num_samples}_" + \
+            f"gpt2-{self.model_size}_dataset_{self.dataset}_samples_{self.num_samples}_" + \
             f"seqlen_{self.max_sequence_length}_prepend_{self.prepend_bos}"
         )
         
@@ -57,6 +58,7 @@ class InferenceRunner:
         self.model_manager = ModelFactory(
                 model_names=self.config.models,
                 model_dir=self.config.model_dir,
+                model_size=self.config.model_size,
                 device=self.device)
         self.dataloader = DataLoader(
                 dataset_name=self.config.dataset,
@@ -186,6 +188,7 @@ if __name__ == "__main__":
     config = InferenceConfig(
         dataset="luca-pile",
         models=["baseline", "finetuned", "noLN"],
+        model_size='medium',
         num_samples=1000,
         max_sequence_length=512,
         batch_size=10,
