@@ -17,10 +17,6 @@ sys.path.append(parent_dir)
 from load_dataset import DataLoader
 from load_models import ModelFactory
 
-
-# Create output directories
-os.makedirs('figures', exist_ok=True)
-
     
 class AblationAnalyzer:
     def __init__(self, model, model_name, batch_size=512):
@@ -33,6 +29,7 @@ class AblationAnalyzer:
             batch_size: Batch size for processing to avoid OOM issues
         """
         self.model = model
+        self.n_layers = model.cfg.n_layers
         for param in self.model.parameters():
             param.requires_grad_(False)
             
@@ -85,10 +82,10 @@ class AblationAnalyzer:
         """
         if hook_names is None:
             hook_names = [
-                "blocks.11.hook_resid_pre",
-                "blocks.11.hook_attn_out",
-                "blocks.11.mlp.hook_post",
-                "blocks.11.hook_mlp_out"
+                f"blocks.{self.n_layers - 1}.hook_resid_pre",
+                f"blocks.{self.n_layers - 1}.hook_attn_out",
+                f"blocks.{self.n_layers - 1}.mlp.hook_post",
+                f"blocks.{self.n_layers - 1}.hook_mlp_out"
             ]
         
         targets = []
@@ -111,9 +108,9 @@ class AblationAnalyzer:
                 target_token = batch[:, 1:].reshape(-1)
                 
                 # Extract the residual stream, attention out, and middle of mlp final
-                resid_pre = cache["blocks.11.hook_resid_pre"][:, :-1, :]
-                attn = cache["blocks.11.hook_attn_out"][:, :-1, :]
-                mid_mlp = cache["blocks.11.mlp.hook_post"][:, :-1, :]
+                resid_pre = cache[f"blocks.{self.n_layers - 1}.hook_resid_pre"][:, :-1, :]
+                attn = cache[f"blocks.{self.n_layers - 1}.hook_attn_out"][:, :-1, :]
+                mid_mlp = cache[f"blocks.{self.n_layers - 1}.mlp.hook_post"][:, :-1, :]
                 logits = logits[:, :-1, :]
                 
                 # Reshape to (batch * seq_len, ...)
@@ -317,14 +314,19 @@ class AblationAnalyzer:
    
     
 if __name__ == "__main__":
-    entropy_neuron_indices = [584, 2123, 2870]
-    model_types = ['baseline', 'finetuned', 'noLN']
+    #entropy_neuron_indices = [584, 2123, 2870]  # Small
+    entropy_neuron_indices = [3144, 1083, 1108] # Medium
+    models = ['baseline', 'finetuned', 'noLN']
+    model_size = 'medium'
+    save_path = f'figures/{model_size}'
+    os.makedirs(save_path, exist_ok=True)
     model_results = {}
-    
-    for model_type in model_types: 
+
+    for model_type in models: 
         # Load each model individually to avoid OOM
         model = ModelFactory([model_type],
-                             model_dir='../models').models[model_type]
+                             model_dir='../models',
+                             model_size=model_size).models[model_type]
     
         # Create analyzer
         analyzer = AblationAnalyzer(model=model, model_name=model_type)
@@ -352,7 +354,7 @@ if __name__ == "__main__":
     # FIRST PLOT: Cross-Entropy Loss
     plt.figure(figsize=(10, 6))
     
-    for idx, model_type in enumerate(model_types):
+    for idx, model_type in enumerate(models):
         # Extract means and stds for loss
         ce_losses_mean = [r[0][0] for r in model_results[model_type]]  # r[0] is loss_stats, [0] is mean
         
@@ -375,13 +377,13 @@ if __name__ == "__main__":
     plt.tight_layout()
     
     # Save the CE Loss plot
-    plt.savefig('figures/cumulative_ce_ablation.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'{save_path}/cumulative_ce_ablation.png', dpi=300, bbox_inches='tight')
     plt.close()  # Close the figure to free memory
     
     # SECOND PLOT: Entropy
     plt.figure(figsize=(10, 6))
     
-    for idx, model_type in enumerate(model_types):
+    for idx, model_type in enumerate(models):
         # Extract means and stds for entropy
         entropies_mean = [r[1][0] for r in model_results[model_type]]  # r[1] is entropy_stats, [0] is mean
         
@@ -403,6 +405,6 @@ if __name__ == "__main__":
     plt.tight_layout()
     
     # Save the Entropy plot
-    plt.savefig('figures/cumulative_entropy_ablation.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'{save_path}/cumulative_entropy_ablation.png', dpi=300, bbox_inches='tight')
     plt.close()  # Close the figure to free memory
 # %%
