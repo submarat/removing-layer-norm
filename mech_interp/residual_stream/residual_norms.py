@@ -20,6 +20,7 @@ class ResidualNorms:
     def __init__(self,
                  data_paths: Union[str, Dict[str, str]],
                  model_dir: str = "../models",
+                 model_size: str = 'small',
                  num_samples: Optional[int] = None,
                  random_seed: int = 42,
                  last_token_only: bool = False,
@@ -50,7 +51,9 @@ class ResidualNorms:
         
         # Initialize model factory
         self.model_names = ['baseline', 'finetuned', 'noLN']
-        self.model_factory = ModelFactory(self.model_names, model_dir=model_dir)
+        self.model_factory = ModelFactory(self.model_names,
+                                          model_dir=model_dir,
+                                          model_size=model_size)
 
         # Set up color schemes for consistent visualization
         self.colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
@@ -317,7 +320,7 @@ class ResidualNorms:
         # Define positions for analysis
         if self.last_token_only:
             positions = [('first', 'Last Token Norm')]
-            fig, axes = plt.subplots(1, 1, figsize=(8, 8))
+            fig, axes = plt.subplots(1, 1, figsize=(14, 8))
             axes = np.array([[axes]])  # Make it 2D for consistent indexing
         else:
             positions = [('first', 'First Token Norm'), ('others', 'Other Token Norms')]
@@ -371,11 +374,12 @@ class ResidualNorms:
                                alpha=0.2, color=self.model_colors[model_name])
             
             # Set labels and title
+            readable_labels = create_readable_tick_labels(x_labels)
             ax.set_xlabel('Layer')
             ax.set_ylabel('L2 Norm')
             ax.set_title(f'{pos_title}')
             ax.set_xticks(np.arange(len(x_labels)))
-            ax.set_xticklabels(x_labels, rotation=45, ha='right')
+            ax.set_xticklabels(readable_labels, rotation=45, ha='right')
             ax.grid(True, linestyle='--', alpha=0.7)
             ax.legend()
 
@@ -470,9 +474,9 @@ class ResidualNorms:
             ax.set_title(f'{pos_title}')
             
             # Set x-ticks
+            readable_labels = create_readable_tick_labels(x_labels)
             ax.set_xticks(np.arange(len(x_labels)))
-            ax.set_xticklabels(x_labels, rotation=45, ha='right')
-            
+            ax.set_xticklabels(readable_labels, rotation=45, ha='right')
             ax.grid(True, linestyle='--', alpha=0.7)
             ax.legend()
             
@@ -503,7 +507,7 @@ class ResidualNorms:
         
         if self.last_token_only:
             positions = [('first', 'Last Token Norm Growth')]
-            fig, axes = plt.subplots(1, 1, figsize=(12, 8))
+            fig, axes = plt.subplots(1, 1, figsize=(14, 8))
             axes = np.array([[axes]])
         else:
             positions = [('first', 'First Token Norm Growth'), ('others', 'Other Token Norm Growth')]
@@ -574,11 +578,12 @@ class ResidualNorms:
             ax.axhline(y=1.0, color='black', linestyle='--', alpha=0.5)
             
             # Set labels and title
+            readable_labels = create_readable_tick_labels(x_labels)
             ax.set_xlabel('Layer Transition')
             ax.set_ylabel('L2 Norm Growth Ratio (Output/Input)')
             ax.set_title(f'{pos_title}')
             ax.set_xticks(np.arange(len(x_labels)))
-            ax.set_xticklabels(x_labels, rotation=45, ha='right')
+            ax.set_xticklabels(readable_labels, rotation=45, ha='right')
             ax.grid(True, linestyle='--', alpha=0.7)
             ax.legend()
 
@@ -593,16 +598,65 @@ class ResidualNorms:
         
         return fig
 
+def create_readable_tick_labels(layers):
+    """
+    Creates readable tick labels for transformer layers, ensuring:
+    - "Embed", "Pos_Embed", and "LN_final" are always shown
+    - Every second layer of other types is shown
+    - "Resid_mid" is displayed as "Attn out" and "Resid_post" as "FFN out" for clarity
+    
+    Args:
+        layers: List of layer names
+        
+    Returns:
+        List of cleaned up tick labels
+    """
+    readable_labels = []
+    
+    for i, layer in enumerate(layers):
+        # Always keep Embed, PosEmbed, and LN_Final
+        if layer == "Embed" or layer == "Pos_Embed" or layer == "LN_final":
+            readable_labels.append(layer)
+            continue
+            
+        # For the transformer block layers
+        if "Resid_mid" in layer:
+            # Extract the layer index
+            idx = layer.replace("Resid_mid_", "")
+            # Only show every second Attention layer
+            if int(idx) % 2 == 1:
+                readable_labels.append(f"Attn out {idx}")
+            else:
+                readable_labels.append("")
+        elif "Resid_pos" in layer:
+            # Extract the layer index
+            idx = layer.replace("Resid_post_", "")
+            # Only show every second FFN layer
+            if int(idx) % 2 == 1:
+                readable_labels.append(f"FFN out {idx}")
+            else:
+                readable_labels.append("")
+        else:
+            # Any other layer types, keep every second one
+            if i % 2 == 0:
+                readable_labels.append(layer)
+            else:
+                readable_labels.append("")
+                
+    return readable_labels
+
+
 if __name__ == '__main__':
-    data_paths = '/workspace/removing-layer-norm/mech_interp/inference_logs/dataset_luca-pile_samples_1000_seqlen_512_prepend_False/inference_results.parquet'
-    output_dir = 'figures/last_token'
+    data_paths = '/workspace/removing-layer-norm/mech_interp/inference_logs/gpt2-medium_dataset_luca-pile_samples_1000_seqlen_512_prepend_False/inference_results.parquet'
+    output_dir = 'figures/medium/bos_vs_rest'
     # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)
     
     analyzer = ResidualNorms(
         data_paths=data_paths,
         model_dir="../models",
-        last_token_only=True,
+        last_token_only=False,
+        model_size='medium'
     )
     
     # Run analysis and generate plots
