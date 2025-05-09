@@ -7,9 +7,11 @@ import os
 import random
 import torch
 from tqdm import tqdm
-from datasets import load_dataset, Dataset
+from datasets import load_dataset, Dataset, load_from_disk
 from transformers import AutoTokenizer, GPT2LMHeadModel
 from transformer_lens import HookedTransformer
+from docopt import docopt
+from prepare_dataset import prepare_dataset
 
 def preprocess_pile_dataset(dataset_name, model_name, num_samples=5000, cache_dir="processed_datasets", filter_subsets=True):
     """Preprocess dataset for evaluation using efficient batching"""
@@ -43,6 +45,12 @@ def preprocess_pile_dataset(dataset_name, model_name, num_samples=5000, cache_di
         if num_samples < len(dataset):
             # Sample randomly if num_samples is less than dataset size
             dataset = dataset.shuffle(seed=42).select(range(num_samples))
+    elif dataset_name == "openwebtext":
+        # Use prepare_dataset to get the test split
+        tokenized_dataset, _ = prepare_dataset(model_name)
+        dataset = tokenized_dataset["test"]
+        if num_samples < len(dataset):
+            dataset = dataset.shuffle(seed=42).select(range(num_samples))
     dataset = dataset.shuffle(seed=42)
     
     # Process without batching to avoid PyArrow errors
@@ -54,12 +62,16 @@ def preprocess_pile_dataset(dataset_name, model_name, num_samples=5000, cache_di
         # For pre-tokenized datasets
         for example in tqdm(dataset, desc="Processing"):
             all_tokens.extend(example["input_ids"])
+    elif dataset_name == "openwebtext":
+        # For pre-tokenized openwebtext dataset
+        for example in tqdm(dataset, desc="Processing"):
+            all_tokens.extend(example["input_ids"])
     else:
         # For text datasets
         for example in tqdm(dataset, desc="Processing"):
             # Filter out OpenWebText2 and books
             add_example = True
-            if filter_subsets:
+            if filter_subsets and dataset_name != "openwebtext":  # Don't filter for openwebtext dataset
                 try:
                     if example.get('meta', {}).get('pile_set_name') in ["OpenWebText2", "Books3", "BookCorpus2"]:
                         add_example = False
@@ -193,3 +205,50 @@ def convert_for_trainer(processed_examples, tokenizer, cache_dir="processed_data
     
     print(f"Converted to Trainer-compatible dataset with {len(dataset)} examples")
     return dataset 
+
+def main():
+    args = docopt(__doc__)
+    
+    # Parse arguments
+    model_path = args['--model']
+    format_type = args['--format']
+    dataset_name = args['--dataset']
+    num_samples = int(args['--num-samples'])
+    batch_size = int(args['--batch-size'])
+    model_name = args['--model-name'] or "gpt2"
+    
+    # Create cache directory if it doesn't exist
+    os.makedirs("processed_datasets", exist_ok=True)
+    
+    # Load model based on format
+    if format_type == 'transformers':
+        # Load model from huggingface or local, standard format
+        model = load_hf_model(model_path, model_name)
+    elif format_type == 'noLN_HF_model':
+        # Load model that has scale trick applied to disable layer norm
+        model = load_nln_hf_model(model_name=model_name, name=model_path)
+    elif format_type == 'fakeln_checkpoint':
+        # Load local model checkpoint assuming it has FakeLayerNorms and special state_dict
+        model = load_fakeln_checkpoint(model_name=model_name, ckpt_path=model_path)
+    else:
+        raise ValueError(f"Unknown format type: {format_type}")
+
+    model = model.to(device)
+
+    # Using shared preprocessing function or prepare_dataset for openwebtext
+    if dataset_name == "openwebtext":
+        tokenized_dataset, _ = prepare_dataset(model_name)
+        processed_examples = [torch.tensor(example["input_ids"]) for example in tokenized_dataset["test"]]
+        if num_samples < len(processed_examples):
+            processed_examples = processed_examples[:num_samples]
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokenizer.pad_token = tokenizer.eos_token
+    else:
+        processed_examples, tokenizer = preprocess_pile_dataset(dataset_name, model_name, num_samples)
+    
+    # Using shared evaluation function
+    ce_loss = evaluate_model_on_pile(model, processed_examples, tokenizer, batch_size)
+    print(f"Final Cross-Entropy Loss on {dataset_name}: {ce_loss:.4f}")
+
+if __name__ == "__main__":
+    main() 
