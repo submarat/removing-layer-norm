@@ -311,10 +311,6 @@ class AblationAnalyzer:
             effect_dict = self._perform_ablation([idx])
             self.results[str(idx)] = effect_dict
         
-        # Always run ablation on all neurons together
-        effect_dict = self._perform_ablation(neuron_indices)
-        self.results['All'] = effect_dict
-        
         return self.results        
 
 
@@ -352,7 +348,7 @@ def plot_model_comparison(model_results, save_path=None, metric='loss_effect'):
     neuron_indices = []
     for model_name in model_results:
         for key in model_results[model_name]:
-            if key != 'All' and key not in neuron_indices:
+            if key not in neuron_indices:
                 neuron_indices.append(key)
     
     # Sort neuron indices for consistent display
@@ -374,7 +370,7 @@ def plot_model_comparison(model_results, save_path=None, metric='loss_effect'):
     # Define width of bars and positions
     model_names = list(model_results.keys())
     n_models = len(model_names)
-    n_categories = len(neuron_indices) + 1  # +1 for "All"
+    n_categories = len(neuron_indices)
     width = 0.3 / n_models  # Width of each box
     
     # For each neuron (+ "All"), prepare data for all models
@@ -399,19 +395,6 @@ def plot_model_comparison(model_results, save_path=None, metric='loss_effect'):
                 all_data.append(model_results[model_name][neuron_idx][metric])
                 all_colors.append(model_colors[model_name])
                 all_labels.append(model_name)
-    
-    # Process "All neurons" data
-    category_center = len(neuron_indices) + 1
-    x_positions.append(category_center)
-    x_labels.append("All Neurons")
-    
-    for j, model_name in enumerate(model_names):
-        if 'All' in model_results[model_name]:
-            position = category_center + (j - n_models/2 + 0.5) * width
-            all_positions.append(position)
-            all_data.append(model_results[model_name]['All'][metric])
-            all_colors.append(model_colors[model_name])
-            all_labels.append(model_name)
     
     # Create boxplots
     bplots = []
@@ -460,7 +443,7 @@ def plot_model_comparison(model_results, save_path=None, metric='loss_effect'):
    
     
 if __name__ == "__main__":
-    entropy_neuron_indices = [584, 2123, 2870]  # Good examples for further analysis
+    entropy_neuron_indices = [584, 2123, 2870]  # Top-3 examples for analysis
     models = ['baseline', 'finetuned', 'noLN']
     model_results = {}
     for model_type in models:
