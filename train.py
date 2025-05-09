@@ -5,11 +5,13 @@ EXP_CORRECT_BOS: Use correct BOS special treatment
 EXP_RECOMPUTE_STD_ON_FAKE: Recompute std when FakeLayerNorm is fake - will recompute std on every forward pass
 EXP_RECOMPUTE_STD_ON_REAL: Recompute std when FakeLayerNorm is real - will freeze std when FakeLayerNorm goes fake
 EXP_NON_BOS_AVERAGE_STD: Compute average std based on input[1:] (i.e. non-BOS) positions
+EXP_BOS_SPECIAL_TREATMENT: Whether to use BOS special treatment where FakeLayerNorm will use a special std value for the first position in residual stream
 """
 import os
 
 import argparse
 import datasets
+import gc
 import numpy as np
 import torch
 import torch.nn as nn
@@ -45,10 +47,169 @@ torch.manual_seed(1337)
 
 _USE_WANDB = True
 
+class TensorDeque:
+    """
+    A fixed-size FIFO buffer for tensors, emulating a deque using torch tensors.
+    """
+    def __init__(self, maxlen):
+        self.maxlen = maxlen
+        self.buffer = torch.zeros(maxlen)
+        self.index = 0
+        self.full = False
+
+    def append(self, x):
+        self.buffer[self.index] = x
+        self.index = (self.index + 1) % self.maxlen
+        if self.index == 0:
+            self.full = True
+
+    def get_mean(self):
+        """
+        The moving window statistics are calculated according to:
+        https://stats.stackexchange.com/questions/25848/how-to-sum-a-standard-deviation
+        for the mean, the mean of the window is the mean of the means.
+        for the std, this is more complicated, but if we assume that all the minibatches 
+        have the same norm, the mean of the var is fine.
+        """
+        if self.full:
+            return self.buffer.mean()
+        else:
+            return self.buffer[:self.index].mean()
+        
+class CustomTrainer(Trainer):
+    """Trainer with auxiliary loss to encourage uniform residual norms."""
+    
+    def __init__(self, *args, aux_loss_weight=0.1, **kwargs):
+        """
+        CustomTrainer with auxiliary loss to encourage uniform residual norms.
+        
+        Args:
+            aux_loss_weight: Weight of the auxiliary loss for uniform residual norms.
+                             Set to 0 to disable the auxiliary loss.
+        """
+        super().__init__(*args, **kwargs)
+        self.aux_loss_weight = aux_loss_weight
+        self.pre_ln_f_activations = None
+        
+        # Register a hook to capture activations if we're using auxiliary loss
+        if self.aux_loss_weight > 0 and hasattr(self.model, 'transformer'):
+            # Register forward hook to capture activations before ln_f
+            def pre_ln_f_hook(module, input):
+                # Store the input to ln_f (which is what we want to normalize)
+                self.pre_ln_f_activations = input[0]
+                return input
+                
+            # Register the hook on the final layer norm
+            self.model.transformer.ln_f.register_forward_pre_hook(pre_ln_f_hook)
+        
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        """Compute CE loss with an auxiliary loss to encourage uniform residual norms."""
+        # Regular forward pass - hook will capture activations before ln_f
+        outputs = model(**inputs)
+        loss = outputs.loss
+        
+        # Skip auxiliary loss calculation if weight is 0 or no activations captured
+        if self.aux_loss_weight == 0 or self.pre_ln_f_activations is None:
+            return (loss, outputs) if return_outputs else loss
+        
+        # Get input_ids for identifying special tokens
+        input_ids = inputs["input_ids"]
+        
+        # Identify BOS and EOS tokens
+        # BOS is the first token (position 0)
+        bos_positions = torch.zeros_like(input_ids, dtype=torch.bool)
+        bos_positions[:, 0] = True
+        
+        # For GPT-2, the EOS token ID is 50256
+        eos_token_id = 50256  # GPT-2 specific EOS token ID
+        eos_positions = (input_ids == eos_token_id)
+        
+        # Create a mask for non-BOS/EOS positions
+        non_special_positions = ~(bos_positions | eos_positions)
+        
+        # Calculate norm statistics from the captured activations
+        # We need to reshape the activations to match the input_ids shape for masking
+        hidden_states = self.pre_ln_f_activations
+        
+        # Compute std along feature dimension for each position
+        with torch.no_grad():  # Only for computing statistics, not affecting gradients
+            mean = hidden_states.mean(dim=-1, keepdim=True)
+            # Compute variance 
+            var = ((hidden_states - mean) ** 2).mean(dim=-1)
+            # Compute standard deviation
+            std = torch.sqrt(var + 1e-5)  # Adding epsilon for numerical stability
+            
+            # Get target std from non-special positions
+            # Create flattened masks aligned with the std tensor
+            batch_size, seq_len = input_ids.size()
+            flat_std = std.view(-1)
+            flat_non_special = non_special_positions.view(-1)
+            
+            # Extract valid standard deviations using the mask
+            valid_stds = flat_std[flat_non_special]
+            
+            if valid_stds.numel() > 0:
+                target_std = valid_stds.mean()
+            else:
+                # Fallback if no valid positions
+                target_std = torch.tensor(1.0, device=std.device)
+        
+        # Now compute the loss with gradients
+        # Recompute mean and std with gradient tracking enabled
+        mean_with_grad = hidden_states.mean(dim=-1, keepdim=True)
+        centered = hidden_states - mean_with_grad
+        var_with_grad = (centered ** 2).mean(dim=-1)
+        std_with_grad = torch.sqrt(var_with_grad + 1e-5)
+        
+        # Calculate auxiliary loss - MSE to encourage uniform norms
+        # Computing this using the gradable tensors
+        aux_loss = self.aux_loss_weight * ((std_with_grad - target_std) ** 2).mean()
+        
+        # Free up memory - important to avoid OOM errors
+        self.pre_ln_f_activations = None
+        
+        # Log statistics if using wandb
+        if _USE_WANDB:
+            try:
+                is_main_process = torch.distributed.get_rank() == 0 if torch.distributed.is_initialized() else True
+            except:
+                is_main_process = True
+                
+            if is_main_process:
+                # Compute statistics for logging using the already computed values
+                with torch.no_grad():
+                    flat_bos = bos_positions.view(-1)
+                    flat_eos = eos_positions.view(-1)
+                    
+                    bos_std_val = flat_std[flat_bos].mean().item() if flat_bos.any() else 0
+                    eos_std_val = flat_std[flat_eos].mean().item() if flat_eos.any() else 0
+                    
+                    wandb.log({
+                        "target_std": target_std.item(),
+                        "avg_std": std.mean().item(),
+                        "bos_std": bos_std_val,
+                        "eos_std": eos_std_val,
+                        "aux_loss": aux_loss.item(),
+                        "main_loss": loss.item()
+                    })
+        
+        # Free up memory for other tensors we no longer need
+        del std, var
+        if _USE_WANDB:
+            with torch.no_grad():
+                del flat_bos, flat_eos
+        torch.cuda.empty_cache()  # Explicitly clear cache if using CUDA
+        gc.collect() # Collect garbage to free up memory sometimes this does magic
+        
+        # Add auxiliary loss to main loss
+        loss = loss + aux_loss
+        
+        return (loss, outputs) if return_outputs else loss
+
 class FakeLayerNorm(nn.Module):
     """LayerNorm using a fixed std instead of the actual standard deviation."""
 
-    def __init__(self, n_embd, n_ctx, layer, bias, init_average_std, init_bos_std):
+    def __init__(self, n_embd, n_ctx, layer, bias, init_average_std, init_bos_std, grad_acc_steps=1, bos_special_treatment=False):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(n_embd))
         self.bias = nn.Parameter(torch.zeros(n_embd)) if bias else None
@@ -62,10 +223,14 @@ class FakeLayerNorm(nn.Module):
         # Using naming without underscore to be compatible with old checkpoints
         self.register_buffer("is_fake", torch.tensor(False))
         self.register_buffer("attn_v_is_fake", torch.tensor(False))
-        self.register_buffer("bos_special_treatment", torch.tensor(True))
+        self.register_buffer("bos_special_treatment", torch.tensor(bos_special_treatment))
         self.register_buffer("real_average_std", torch.tensor(float(init_average_std)))
         self.register_buffer("real_bos_std", torch.tensor(float(init_bos_std)))
-
+        self.register_buffer("grad_acc_steps", torch.tensor(grad_acc_steps))
+        self.register_buffer("synced_step", torch.tensor(0))
+        self.register_buffer("global_step", torch.tensor(0))
+        self.moving_var = TensorDeque(grad_acc_steps)
+        self.moving_var_bos = TensorDeque(grad_acc_steps)
         if os.environ.get("EXP_CORRECT_BOS", "0") == "1":
             std_dim = n_ctx
         else:
@@ -73,13 +238,13 @@ class FakeLayerNorm(nn.Module):
             
         # Register non-parameter tensors as buffers so they're saved in state_dict
         self.register_buffer("average_std_buffer", torch.ones(std_dim, device=device) * init_average_std)
-        self.register_buffer("bos_std_buffer", torch.ones(std_dim, device=device) * init_bos_std)
         
-        # Special handling for position 0
-        self.average_std_buffer[0] = init_bos_std
-
-        self.iteration = 0
-        self.update_freq = 1
+        if self.bos_special_treatment.item():
+            # Special handling for position 0
+            self.average_std_buffer[0] = init_bos_std
+            self.register_buffer("bos_std_buffer", torch.ones(std_dim, device=device) * init_bos_std)        
+        else:
+            self.register_buffer("bos_std_buffer", torch.ones(std_dim, device=device) * init_average_std)
     
     def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
         # Call parent method to load most of the state
@@ -159,20 +324,15 @@ class FakeLayerNorm(nn.Module):
         # LN for the QK and V paths separately.
         is_fake_value = self.attn_v_is_fake.item() if attn_v else self.is_fake.item()
 
-        # Refresh std values for the first iteration
-        # Useful for different average_std recomputation schemes
-        if self.iteration == 0:
-            avg_std, bos_std = self.recompute_average_std(input)
+        if (self.global_step - self.synced_step) == 1:
+            avg_std = self.moving_var.get_mean()**0.5
+            bos_std = self.moving_var_bos.get_mean()**0.5
             self.real_average_std.fill_(float(avg_std))
             self.real_bos_std.fill_(float(bos_std))
-            self.sync_std()
-        
-        self.iteration += 1
-        # Calculate the std of the input
-        if self.iteration % self.update_freq == 0:
-            avg_std, bos_std = self.recompute_average_std(input)
-            self.real_average_std.fill_(float(avg_std))
-            self.real_bos_std.fill_(float(bos_std))
+            self.synced_step = self.global_step
+
+        self.recompute_average_std(input)
+
 
         if is_fake_value:
             # Which std values to use: We use (1) average std (which is actually a vector of length
@@ -211,15 +371,25 @@ class FakeLayerNorm(nn.Module):
                 input, self.weight.shape, self.weight, self.bias, 1e-5
             )
     
+    @torch.no_grad()
     def recompute_average_std(self, x):
-        with torch.no_grad():
-            std = x.var(dim=(0, -1))**0.5
+        if self.bos_special_treatment.item():
+            # JS: If we do no BOS special treatment at all, it would be
+            # nicer to just estimate the var across all dimensions.
+            # Then we don't need to take the mean anymore, 
+            # which is only justified if all variances belong to variables with the same mean.
+            var = x.var(dim=(0, -1))
             if os.environ.get("EXP_NON_BOS_AVERAGE_STD", "0") == "1":
-                average_std = std[1:].mean().detach().item()
+                average_var = var[1:].mean().detach().item()
             else:
-                average_std = std.mean().detach().item()
-            bos_std = std[0].detach().item()
-        return average_std, bos_std
+                average_var = var.mean().detach().item()
+            bos_var = var[0].detach().item()
+            self.moving_var.append(average_var)
+            self.moving_var_bos.append(bos_var)
+        else:
+            var = x.var()
+            self.moving_var.append(var)
+            self.moving_var_bos.append(var)
     
     def sync_std(self):
         """Sync the average and bos std values (that are used in the forward pass) with the real std values."""
@@ -258,7 +428,7 @@ class FakeLayerNorm(nn.Module):
             self.bos_std_buffer[0] = self.bos_std_buffer[1]
 
 
-def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict):
+def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_acc_steps=1):
     n_layers = model.config.n_layer
     n_embd = model.transformer.h[0].ln_1.weight.shape[0]
     n_ctx = model.config.n_ctx
@@ -281,7 +451,8 @@ def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict):
             layer=layer,
             bias=block.ln_1.bias is not None,
             init_average_std=std_dict[layer],
-            init_bos_std=std_bos_dict[layer])
+            init_bos_std=std_bos_dict[layer],
+            grad_acc_steps=grad_acc_steps)
 
         layer = f"blocks.{i}.hook_resid_mid"
         block.ln_2 = FakeLayerNorm(
@@ -290,7 +461,8 @@ def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict):
             layer=layer,
             bias=block.ln_2.bias is not None,
             init_average_std=std_dict[layer],
-            init_bos_std=std_bos_dict[layer])
+            init_bos_std=std_bos_dict[layer],
+            grad_acc_steps=grad_acc_steps)
         
         # Restore weights
         block.ln_1.weight = nn.Parameter(ln_1_weight)
@@ -377,7 +549,8 @@ def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict):
         layer=layer,
         bias=ln_f.bias is not None,
         init_average_std=std_dict[layer],
-        init_bos_std=std_bos_dict[layer]
+        init_bos_std=std_bos_dict[layer],
+        grad_acc_steps=grad_acc_steps
     )
     model.transformer.ln_f.weight = nn.Parameter(ln_f_weight)
     if ln_f_bias is not None:
@@ -424,21 +597,20 @@ def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict):
     
     model.transformer.forward = make_transformer_forward(model.transformer.forward)
 
-def load_model(model_name="gpt2", remove_ln=False):
+def load_model(model_name="gpt2", remove_ln=False, grad_acc_steps=1):
     model = transformers.GPT2LMHeadModel.from_pretrained(
         model_name,
         cache_dir=f"{model_name}_cache",
-        config=transformers.GPT2Config.from_pretrained(
-            model_name, dropout=0.0, attn_pdrop=0.0, embd_pdrop=0.0, resid_pdrop=0.0
-        ),
+        config=transformers.GPT2Config.from_pretrained(model_name),
     )
-
+    # attn_pdrop=0.1, embd_pdrop=0.1, resid_pdrop=0.1: Default values for GPT2, can be changed with kwargs
+    
     if remove_ln:
         # Replace all LayerNorm instances with FakeLayerNorm
         std_dict = std_dicts[model_name]["std_dict"]
         std_bos_dict = std_dicts[model_name]["std_bos_dict"]
 
-        replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict)
+        replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_acc_steps=grad_acc_steps)
     
     return model
 
@@ -475,6 +647,8 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
     print(f"  EXP_CORRECT_BOS: {os.environ.get('EXP_CORRECT_BOS', '0')}")
     print(f"  EXP_RECOMPUTE_STD_ON_FAKE: {os.environ.get('EXP_RECOMPUTE_STD_ON_FAKE', '0')}")
     print(f"  EXP_RECOMPUTE_STD_ON_REAL: {os.environ.get('EXP_RECOMPUTE_STD_ON_REAL', '0')}")
+    print(f"  EXP_BOS_SPECIAL_TREATMENT: {os.environ.get('EXP_BOS_SPECIAL_TREATMENT', '0')}")
+
     
     for i, block in enumerate(model.transformer.h):
         print(f"\nBlock {i}:")
@@ -593,7 +767,8 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
             print(f"  EXP_CORRECT_BOS: {os.environ.get('EXP_CORRECT_BOS', '0')}")
             print(f"  EXP_RECOMPUTE_STD_ON_FAKE: {os.environ.get('EXP_RECOMPUTE_STD_ON_FAKE', '0')}")
             print(f"  EXP_RECOMPUTE_STD_ON_REAL: {os.environ.get('EXP_RECOMPUTE_STD_ON_REAL', '0')}")
-            
+            print(f"  EXP_BOS_SPECIAL_TREATMENT: {os.environ.get('EXP_BOS_SPECIAL_TREATMENT', '0')}")
+
             print("\nChecking if layers are fake after loading checkpoint:")
             for i, block in enumerate(model.transformer.h):
                 print(f"Block {i}:")
@@ -637,6 +812,16 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
                     wandb.log({"custom_checkpoint": state.global_step})
                     
             return control
+    
+    class GlobalStepSetterCallback(TrainerCallback):
+        def on_step_begin(self, args, state, control, **kwargs):
+            model = kwargs.get("model", None)
+            for i, block in enumerate(model.transformer.h):
+                block.ln_1.global_step = torch.tensor(state.global_step)
+                block.ln_2.global_step = torch.tensor(state.global_step)
+            model.transformer.ln_f.global_step = torch.tensor(state.global_step)
+            return control
+    
 
             
     class StopAfterNStepsCallback(TrainerCallback):
@@ -658,14 +843,16 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
         LNRemover(training_config.start_ln1v, training_config.gap_ln1v, disable_ln_1v),
         LNRemover(training_config.start_lnf, training_config.gap_lnf, disable_ln_f),
         LNRemover(training_config.start_eot, training_config.gap_eot, disable_eot_std),
-        LNRemover(training_config.start_bos, training_config.gap_bos, disable_bos_std),
     ]
 
+    if os.environ.get("EXP_CORRECT_BOS", "0") == "1":
+        ln_removers.append(LNRemover(training_config.start_bos, training_config.gap_bos, disable_bos_std))
 
     callbacks = [
         LogFakeLayerNormState(),
         CheckFakeLayerNormStateAfterLoading(),
         StopAfterNStepsCallback(config.early_stop_step),
+        GlobalStepSetterCallback(),
     ]
     if remove_ln:
         callbacks.append(LNRemoverCallback(ln_removers))
@@ -683,15 +870,28 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
         }
     else:
         eval_datasets = tokenized["test"]
+
+    aux_loss_weight = config.aux_loss_weight
     
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=tokenized["train"],
-        eval_dataset=eval_datasets,
-        data_collator=data_collator,
-        callbacks=callbacks,
-    )
+    if aux_loss_weight != 0:
+        trainer = CustomTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=tokenized["train"],
+            eval_dataset=eval_datasets,
+            data_collator=data_collator,
+            callbacks=callbacks,
+            aux_loss_weight=aux_loss_weight,
+        )
+    else:
+        trainer = Trainer(
+            model=model,
+            args=training_args,
+            train_dataset=tokenized["train"],
+            eval_dataset=eval_datasets,
+            data_collator=data_collator,
+            callbacks=callbacks,
+        )
 
     trainer.train(
         resume_from_checkpoint=training_args.resume_from_checkpoint
@@ -785,6 +985,7 @@ def main():
         per_device_train_batch_size=config.batch_size,
         per_device_eval_batch_size=4,
         gradient_accumulation_steps=config.gradient_accumulation_steps,
+        gradient_checkpointing=config.gradient_checkpointing,
         warmup_steps=config.warmup_steps,
         weight_decay=config.weight_decay,
         learning_rate=config.learning_rate,
@@ -816,7 +1017,7 @@ def main():
         print(checkpoint_message)
     
     # Initialize model
-    model = load_model(model_name, remove_ln=args.mode == "without_ln")
+    model = load_model(model_name, remove_ln=args.mode == "without_ln", grad_acc_steps=config.gradient_accumulation_steps)
     
     print("Begin training")
     print(model)

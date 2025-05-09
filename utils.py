@@ -26,15 +26,16 @@ def extract_std_from_checkpoint(model_name, ckpt_path):
         print(f"Missing keys when loading checkpoint: {len(missing)} keys")
     if unexpected:
         print(f"Unexpected keys when loading checkpoint: {len(unexpected)} keys")
-    
+
     state_dict = ckpt_model.state_dict()
 
     std_dict = {}
+    # Extract 1st index in case there is BOS special treatment applied
     for id, block in enumerate(ckpt_model.transformer.h):
         # add std to the dict with appropriate key.
-        std_dict[f'blocks.{id}.hook_resid_pre'] = state_dict[f'transformer.h.{id}.ln_1.average_std_buffer'][0].item()
-        std_dict[f'blocks.{id}.hook_resid_mid'] = state_dict[f'transformer.h.{id}.ln_2.average_std_buffer'][0].item()
-    std_dict[f'blocks.{id}.hook_resid_post'] = state_dict['transformer.ln_f.average_std_buffer'][0].item()
+        std_dict[f'blocks.{id}.hook_resid_pre'] = state_dict[f'transformer.h.{id}.ln_1.average_std_buffer'][1].item()
+        std_dict[f'blocks.{id}.hook_resid_mid'] = state_dict[f'transformer.h.{id}.ln_2.average_std_buffer'][1].item()
+    std_dict[f'blocks.{id}.hook_resid_post'] = state_dict['transformer.ln_f.average_std_buffer'][1].item()
 
     return std_dict
 
