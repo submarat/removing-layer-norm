@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import torch as t
 import matplotlib.pylab as plt
+from matplotlib.ticker import MaxNLocator
 import einops
 from tqdm.auto import tqdm
 
@@ -284,10 +285,16 @@ class AblationAnalyzer:
             total_entropy_ablated.append(batch_entropy)
             
         # Combine results
-        total_loss_ablated = t.cat(total_loss_ablated, dim=0).mean().cpu().item()
-        total_entropy_ablated = t.cat(total_entropy_ablated, dim=0).mean().cpu().item()
+        total_loss_ablated = t.cat(total_loss_ablated, dim=0)
+        total_entropy_ablated = t.cat(total_entropy_ablated, dim=0)
             
-        return total_loss_ablated, total_entropy_ablated
+        loss_mean = total_loss_ablated.mean().cpu().item()
+        loss_std = total_loss_ablated.std().cpu().item()
+        entropy_mean = total_entropy_ablated.mean().cpu().item()
+        entropy_std = total_entropy_ablated.std().cpu().item()
+            
+        return (loss_mean, loss_std), (entropy_mean, entropy_std)    
+    
     
     def run_ablation(self, neuron_indices):
         """
@@ -310,10 +317,10 @@ class AblationAnalyzer:
    
     
 if __name__ == "__main__":
-    entropy_neuron_indices = [584, 2123, 2870, 2378, 1611, 2910, 2044, 553, 2227, 1927, 598,\
-                              2604, 1577, 541, 2256]
+    entropy_neuron_indices = [584, 2123, 2870]
     model_types = ['baseline', 'finetuned', 'noLN']
     model_results = {}
+    
     for model_type in model_types: 
         # Load each model individually to avoid OOM
         model = ModelFactory([model_type],
@@ -324,60 +331,78 @@ if __name__ == "__main__":
         # Run analysis
         analyzer.extract_activations()
         analyzer.run_simulation()
-        model_results[model_type] = [[analyzer.simulated_loss.mean().item(),
-                                      analyzer.simulated_entropy.mean().item()]]
+        
+        # Store initial stats - format: [loss_stats, entropy_stats]
+        # Each stats is a tuple of (mean, std)
+        loss_stats = (analyzer.simulated_loss.mean().item(), analyzer.simulated_loss.std().item())
+        entropy_stats = (analyzer.simulated_entropy.mean().item(), analyzer.simulated_entropy.std().item())
+        model_results[model_type] = [[loss_stats, entropy_stats]]
+        
         for idx in tqdm(range(1, len(entropy_neuron_indices) + 1), desc="Neuron Ablations"):
             indices = entropy_neuron_indices[:idx]
-            res = analyzer.run_ablation(indices)
-            model_results[model_type].append(res)
+            
+            # Get loss and entropy statistics as tuples
+            loss_stats, entropy_stats = analyzer.run_ablation(indices)
+            model_results[model_type].append([loss_stats, entropy_stats])
             
     # %% 
-    
-    # Create the figure and axis
-    plt.figure(figsize=(10, 6))
-    
     # Get default matplotlib colors
     colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
     
+    # FIRST PLOT: Cross-Entropy Loss
+    plt.figure(figsize=(10, 6))
+    
     for idx, model_type in enumerate(model_types):
-        ce_losses = [r[0] for r in model_results[model_type][:6]]
-        entropies = [r[1] for r in model_results[model_type][:6]]
+        # Extract means and stds for loss
+        ce_losses_mean = [r[0][0] for r in model_results[model_type]]  # r[0] is loss_stats, [0] is mean
         
-        # Plot the connected line with smaller points
-        plt.plot(ce_losses, entropies, '-', lw=2,
-                color=colors[idx], alpha=0.7)
+        # Create x-axis values (number of ablated neurons)
+        num_ablated = list(range(len(ce_losses_mean)))
         
-        # Plot points with increasing size based on number of ablated neurons
-        sizes = [30 + i*5 for i in range(len(ce_losses))]
-        plt.scatter(ce_losses, entropies, s=sizes, 
-                   color=colors[idx], alpha=0.8, label=model_type)
+        # Plot CE Loss
+        plt.plot(num_ablated, ce_losses_mean, 'o-', lw=2,
+                 color=colors[idx], alpha=0.8, label=model_type)
+    
+    plt.gca().xaxis.set_major_locator(MaxNLocator(integer=True))
+    plt.xlabel('Number of Entropy Neurons Ablated', fontsize=14)
+    plt.ylabel('Cross-Entropy Loss', fontsize=14)
+    plt.title('Effect of Neuron Ablation on Cross-Entropy Loss', fontsize=16)
+    plt.tick_params(axis='both', which='major', labelsize=12)
+    plt.grid(True, linestyle='--', alpha=0.7)
+    plt.legend(fontsize=16)
+    
+    # Adjust layout
+    plt.tight_layout()
+    
+    # Save the CE Loss plot
+    plt.savefig('figures/cumulative_ce_ablation.png', dpi=300, bbox_inches='tight')
+    plt.close()  # Close the figure to free memory
+    
+    # SECOND PLOT: Entropy
+    plt.figure(figsize=(10, 6))
+    
+    for idx, model_type in enumerate(model_types):
+        # Extract means and stds for entropy
+        entropies_mean = [r[1][0] for r in model_results[model_type]]  # r[1] is entropy_stats, [0] is mean
         
-        # Annotate the first and last points
-        plt.annotate("0", (ce_losses[0], entropies[0]), 
-                    xytext=(5, 5), textcoords='offset points',
-                    fontsize=12)
-        plt.annotate(str(len(ce_losses)), 
-                    (ce_losses[-1], entropies[-1]), 
-                    xytext=(5, -15), textcoords='offset points',
-                    fontsize=12)
-   
-    # Add labels and title
-    plt.xlabel('Cross-Entropy Loss', fontsize=14)
+        # Create x-axis values (number of ablated neurons)
+        num_ablated = list(range(len(entropies_mean)))
+        
+        # Plot Entropy
+        plt.plot(num_ablated, entropies_mean, 'o-', lw=2,
+                 color=colors[idx], alpha=0.8, label=model_type)    
+
+    plt.gca().xaxis.set_major_locator(MaxNLocator(integer=True))
+    plt.xlabel('Number of Entropy Neurons Ablated', fontsize=14)
     plt.ylabel('Entropy', fontsize=14)
-    plt.title(f'Cumulative entropy neuron ablation (top-{len(ce_losses)})',
-              fontsize=16)
-    
-    # Increase tick label font size
-    plt.tick_params(axis='both', which='major', labelsize=12) 
-    # Add legend
-    plt.legend(fontsize=14)
-    
-    # Add grid for better readability
+    plt.title('Effect of Neuron Ablation on Entropy', fontsize=16)
+    plt.tick_params(axis='both', which='major', labelsize=12)
     plt.grid(True, linestyle='--', alpha=0.7)
     
-    # Show the plot
+    # Adjust layout
     plt.tight_layout()
-    plt.savefig('figures/cumulative_ablation.png', dpi=300)
-    plt.show() 
     
+    # Save the Entropy plot
+    plt.savefig('figures/cumulative_entropy_ablation.png', dpi=300, bbox_inches='tight')
+    plt.close()  # Close the figure to free memory
 # %%
