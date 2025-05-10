@@ -465,7 +465,7 @@ def make_gpt2_large_aux():
 
     # Calculate layernorm schedule
     gap_ln2 = 4
-    gap_ln1qk = 4
+    gap_ln1qk = 2
     gap_ln1v = 6
     gap_lnf = None
     gap_eot = 0
@@ -584,7 +584,7 @@ def make_gpt2_xl_aux():
     
     # Calculate layernorm schedule
     gap_ln2 = 5
-    gap_ln1qk = 5
+    gap_ln1qk = 2
     gap_ln1v = 6
     gap_lnf = None
     gap_eot = 0
@@ -597,7 +597,7 @@ def make_gpt2_xl_aux():
     start_eot = start_lnf + 2
     start_bos = start_eot + 10
     
-    aux_loss_weight = 0.025
+    aux_loss_weight = 0.1
 
     return FinetuneConfig(**locals())
 
