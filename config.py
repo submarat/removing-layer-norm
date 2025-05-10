@@ -89,7 +89,7 @@ def make_gpt2_standard():
     start_eot = start_lnf + 2
     start_bos = start_eot + 10
 
-    early_stop_step = start_bos + 40
+    # early_stop_step = start_bos + 40
     
     return FinetuneConfig(**locals())
 
@@ -165,7 +165,7 @@ def make_gpt2_medium_fasttune():
     start_eot = start_lnf + 2
     start_bos = start_eot + 10
 
-    early_stop_step = start_bos + 10
+    # early_stop_step = start_bos + 10
     
     return FinetuneConfig(**locals())
 
@@ -246,7 +246,7 @@ def make_gpt2_large():
     start_eot = start_lnf + 2
     start_bos = start_eot + 10
 
-    early_stop_step = start_bos + 10
+    # early_stop_step = start_bos + 10
     
     return FinetuneConfig(**locals())
 
