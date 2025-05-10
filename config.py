@@ -213,7 +213,7 @@ def make_gpt2_large():
     n_layers = 36
     
     # Training params
-    base_batch_size = 22
+    base_batch_size = 14
     max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
@@ -223,7 +223,7 @@ def make_gpt2_large():
     batch_size = base_batch_size
     desired_batch_size = target_batch_tokens / block_size
     gradient_accumulation_steps = int(desired_batch_size // batch_size)
-    warmup_steps = 15
+    gradient_checkpointing = False
 
     learning_rate: float = 1e-4
     lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
@@ -256,7 +256,7 @@ def make_gpt2_large_aux():
     n_layers = 36
     
     # Training params
-    base_batch_size = 22
+    base_batch_size = 12
     max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
@@ -266,7 +266,6 @@ def make_gpt2_large_aux():
     batch_size = base_batch_size
     desired_batch_size = target_batch_tokens / block_size
     gradient_accumulation_steps = int(desired_batch_size // batch_size)
-    
     gradient_checkpointing = False
     
     learning_rate: float = 1e-4
@@ -305,17 +304,18 @@ def make_gpt2_xl():
     block_size = 1024
     target_batch_tokens = 2**19
     save_steps = 150
-    
-    # Calculate derived training params
-    batch_size = base_batch_size
-    desired_batch_size = target_batch_tokens / block_size
-    gradient_accumulation_steps = int(desired_batch_size // batch_size)
 
     learning_rate: float = 5e-5
     lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
     lr_scheduler_kwargs: dict = {"min_lr": 2e-5}
     warmup_steps = 20
     momentum = 0.9**(base_batch_size/32)
+    
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    gradient_checkpointing = False
     
     # Calculate layernorm schedule
     gap_ln2 = 2
@@ -356,7 +356,6 @@ def make_gpt2_xl_aux():
     batch_size = base_batch_size
     desired_batch_size = target_batch_tokens / block_size
     gradient_accumulation_steps = int(desired_batch_size // batch_size)
-
     gradient_checkpointing = False
     
     # Calculate layernorm schedule
