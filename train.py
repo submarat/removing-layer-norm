@@ -21,7 +21,9 @@ import transformers
 import wandb
 from datetime import datetime
 from config import FINETUNE_CONFIGS
+from jaxtyping import Float
 from prepare_dataset import prepare_dataset
+from torch import Tensor
 from torch.utils.data import Dataset
 from transformers import (
     AutoTokenizer,
@@ -333,21 +335,28 @@ class FakeLayerNorm(nn.Module):
             )
     
     @torch.no_grad()
-    def recompute_average_std(self, x):
+    def recompute_average_std(self, x: Float[Tensor, "batch posn d_model"]):
         if self.bos_special_treatment.item():
-            var = x.var(dim=(0, -1))
+            # Taking std over model dim
+            std = (x.var(dim=-1, unbiased=False) + 1e-5).sqrt()
+            # averaging over the batch dimentaion
+            std = std.mean(dim=0) 
+            # averaging over sequence postions
             if os.environ.get("EXP_NON_BOS_AVERAGE_STD", "0") == "1":
-                average_var = var[1:].mean().detach().item()
+                average_std = std[1:].mean().detach().item()
             else:
-                average_var = var.mean().detach().item()
-            bos_var = var[0].detach().item()
+                average_std = std.mean().detach().item()
+            bos_std = std[0].detach().item()
 
-            self.real_average_std_prop = (1 - self.momentum) * self.real_average_std_prop + self.momentum * average_var**0.5
-            self.real_bos_std_prop = (1 - self.momentum) * self.real_bos_std_prop + self.momentum * bos_var**0.5
+            self.real_average_std_prop = (1 - self.momentum) * self.real_average_std_prop + self.momentum * average_std
+            self.real_bos_std_prop = (1 - self.momentum) * self.real_bos_std_prop + self.momentum * bos_std
         else:
-            var = x.var()
-            self.real_average_std_prop = (1 - self.momentum) * self.real_average_std_prop + self.momentum * var.detach().item()**0.5
-            self.real_bos_std_prop = (1 - self.momentum) * self.real_bos_std_prop + self.momentum * var.detach().item()**0.5
+            # Taking std over model dim
+            std = (x.var(dim=-1, unbiased=False) + 1e-5).sqrt()
+            # Averaging over everything else
+            mean_std = std.mean().detach().item()
+            self.real_average_std_prop = (1 - self.momentum) * self.real_average_std_prop + self.momentum * mean_std
+            self.real_bos_std_prop = (1 - self.momentum) * self.real_bos_std_prop + self.momentum * mean_std
 
     def sync_std(self):
         """Sync the average and bos std values (that are used in the forward pass) with the real std values."""
