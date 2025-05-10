@@ -39,7 +39,8 @@ class FinetuneConfig(BaseModel):
     gradient_checkpointing: bool = Field(default=False, description="Use gradient checkpointing to save memory")
 
     # Momentum for recomputing the moving average std which will be fixed at LN removal
-    momentum: float = Field(default=0.1, description="Recompute momentum")
+    # low momentum: 
+    momentum: float = Field(default=0.9, description="Recompute momentum")
 
     # Layernorm schedule params
     gap_ln2: Optional[int]
@@ -413,6 +414,11 @@ def make_gpt2_large():
     desired_batch_size = target_batch_tokens / block_size
     gradient_accumulation_steps = int(desired_batch_size // batch_size)
     warmup_steps = 10
+
+    learning_rate: float = 1e-4
+    lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
+    lr_scheduler_kwargs: dict = {"min_lr": 5e-5}
+    momentum = 0.9**(base_batch_size/32)
     
     # Calculate layernorm schedule
     gap_ln2 = 4
@@ -439,7 +445,7 @@ def make_gpt2_large_aux():
     n_layers = 36
     
     # Training params
-    base_batch_size = 15
+    base_batch_size = 12
     max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
@@ -450,7 +456,12 @@ def make_gpt2_large_aux():
     gradient_accumulation_steps = int(desired_batch_size // batch_size)
     warmup_steps = 10
     
-    gradient_checkpointing = True
+    gradient_checkpointing = False
+    
+    learning_rate: float = 1e-4
+    lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
+    lr_scheduler_kwargs: dict = {"min_lr": 5e-5}
+    momentum = 0.9**(base_batch_size/32)
 
     # Calculate layernorm schedule
     gap_ln2 = 4
@@ -524,6 +535,11 @@ def make_gpt2_xl():
     batch_size = base_batch_size
     desired_batch_size = target_batch_tokens / block_size
     gradient_accumulation_steps = int(desired_batch_size // batch_size)
+
+    learning_rate: float = 5e-5
+    lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
+    lr_scheduler_kwargs: dict = {"min_lr": 2e-5}
+    momentum = 0.9**(base_batch_size/32)
     
     # Calculate layernorm schedule
     gap_ln2 = 2
@@ -552,6 +568,11 @@ def make_gpt2_xl_aux():
     max_steps = 1600
     block_size = 1024
     target_batch_tokens = 2**19
+
+    learning_rate: float = 5e-5
+    lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
+    lr_scheduler_kwargs: dict = {"min_lr": 2e-5}
+    momentum = 0.9**(base_batch_size/32)
     
     # Calculate derived training params
     batch_size = base_batch_size

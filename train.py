@@ -348,15 +348,15 @@ class FakeLayerNorm(nn.Module):
                 average_std = std.mean().detach().item()
             bos_std = std[0].detach().item()
 
-            self.real_average_std_prop = (1 - self.momentum) * self.real_average_std_prop + self.momentum * average_std
-            self.real_bos_std_prop = (1 - self.momentum) * self.real_bos_std_prop + self.momentum * bos_std
+            self.real_average_std_prop = self.momentum * self.real_average_std_prop + (1-self.momentum) * average_std
+            self.real_bos_std_prop = self.momentum * self.real_bos_std_prop + (1-self.momentum) * bos_std
         else:
             # Taking std over model dim
             std = (x.var(dim=-1, unbiased=False) + 1e-5).sqrt()
             # Averaging over everything else
             mean_std = std.mean().detach().item()
-            self.real_average_std_prop = (1 - self.momentum) * self.real_average_std_prop + self.momentum * mean_std
-            self.real_bos_std_prop = (1 - self.momentum) * self.real_bos_std_prop + self.momentum * mean_std
+            self.real_average_std_prop = self.momentum * self.real_average_std_prop +  (1-self.momentum) * mean_std
+            self.real_bos_std_prop = self.momentum * self.real_bos_std_prop +  (1-self.momentum) * mean_std
 
     def sync_std(self):
         """Sync the average and bos std values (that are used in the forward pass) with the real std values."""
