@@ -172,8 +172,8 @@ class CustomTrainer(Trainer):
         if _USE_WANDB:
             with torch.no_grad():
                 del flat_bos, flat_eos
-        torch.cuda.empty_cache()  # Explicitly clear cache if using CUDA
-        gc.collect() # Collect garbage to free up memory sometimes this does magic
+        # torch.cuda.empty_cache()  # Explicitly clear cache if using CUDA
+        # gc.collect() # Collect garbage to free up memory sometimes this does magic
         
         # Add auxiliary loss to main loss
         loss = loss + aux_loss
