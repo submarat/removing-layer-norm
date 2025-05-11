@@ -50,3 +50,13 @@ venv.bak/
 openwebtext
 results
 wandb
+
+# Misc
+mech_interp/experiments/attribution_patching/figures/
+mech_interp/models/
+*.png
+mech_interp/experiments/attribution_patching/*.pt
+*.parquet
+*.csv
+*.pt
+*.txt
