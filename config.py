@@ -268,16 +268,16 @@ def make_gpt2_large_aux():
     gradient_accumulation_steps = int(desired_batch_size // batch_size)
     gradient_checkpointing = False
     
-    learning_rate: float = 6e-5
+    learning_rate: float = 8e-5
     lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
-    lr_scheduler_kwargs: dict = {"min_lr": 1e-5}
+    lr_scheduler_kwargs: dict = {"min_lr": 2e-5}
     warmup_steps = 15
     momentum = 0.9**(base_batch_size/32)
 
     # Calculate layernorm schedule
     gap_ln2 = 4
-    gap_ln1qk = 1
-    gap_ln1v = 4
+    gap_ln1qk = 2
+    gap_ln1v = 6
     gap_lnf = None
     gap_eot = 0
     gap_bos = 0
@@ -289,7 +289,7 @@ def make_gpt2_large_aux():
     start_eot = start_lnf + 2
     start_bos = start_eot + 10
     
-    aux_loss_weight = 0.025
+    aux_loss_weight = 0.05
 
     return FinetuneConfig(**locals())
 
