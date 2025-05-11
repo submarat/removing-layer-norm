@@ -340,7 +340,7 @@ def make_gpt2_xl_aux():
     n_layers = 48
     
     # Training params
-    base_batch_size = 4
+    base_batch_size = 18
     max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
@@ -360,8 +360,8 @@ def make_gpt2_xl_aux():
     
     # Calculate layernorm schedule
     gap_ln2 = 4
-    gap_ln1qk = 1
-    gap_ln1v = 4
+    gap_ln1qk = 2
+    gap_ln1v = 6
     gap_lnf = None
     gap_eot = 0
     gap_bos = 0
