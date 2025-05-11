@@ -307,7 +307,7 @@ def make_gpt2_xl():
 
     learning_rate: float = 5e-5
     lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
-    lr_scheduler_kwargs: dict = {"min_lr": 2e-5}
+    lr_scheduler_kwargs: dict = {"min_lr": 1e-5}
     warmup_steps = 20
     momentum = 0.9**(base_batch_size/32)
     
@@ -348,7 +348,7 @@ def make_gpt2_xl_aux():
         
     learning_rate: float = 5e-5
     lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
-    lr_scheduler_kwargs: dict = {"min_lr": 2e-5}
+    lr_scheduler_kwargs: dict = {"min_lr": 1e-5}
     warmup_steps = 20
     momentum = 0.9**(base_batch_size/32)
     
@@ -360,20 +360,20 @@ def make_gpt2_xl_aux():
     
     # Calculate layernorm schedule
     gap_ln2 = 4
-    gap_ln1qk = 2
-    gap_ln1v = 6
+    gap_ln1qk = 1
+    gap_ln1v = 4
     gap_lnf = None
     gap_eot = 0
     gap_bos = 0
     
-    start_ln2 = 90
+    start_ln2 = 50
     start_ln1qk = start_ln2 + n_layers * gap_ln2
     start_ln1v = start_ln1qk + n_layers * gap_ln1qk
     start_lnf = start_ln1v + n_layers * gap_ln1v
     start_eot = start_lnf + 2
     start_bos = start_eot + 10
     
-    aux_loss_weight = 0.025
+    aux_loss_weight = 0.02
 
     return FinetuneConfig(**locals())
 
