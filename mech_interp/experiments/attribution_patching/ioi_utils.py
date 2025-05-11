@@ -3,7 +3,6 @@ from ioi_dataset import IOIDataset
 import sys
 import pickle
 sys.path.append("/workspace/removing-layer-norm/")
-from mech_interp.load_models import load_nln_model, load_finetuned_model
 
 def reorder_list(items, n, order):
     result = []
