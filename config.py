@@ -348,7 +348,7 @@ def make_gpt2_xl_aux():
         
     learning_rate: float = 5e-5
     lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
-    lr_scheduler_kwargs: dict = {"min_lr": 1e-5}
+    lr_scheduler_kwargs: dict = {"min_lr": 2e-5}
     warmup_steps = 20
     momentum = 0.9**(base_batch_size/32)
     
