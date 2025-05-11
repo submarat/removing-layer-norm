@@ -143,7 +143,7 @@ def make_gpt2_medium_fasttune():
     block_size = 1024
     target_batch_tokens = 2**19
     warmup_steps = 10  # Shorter warmup due to accelerated schedule
-    save_steps = 150 
+    save_steps = 100
 
     # Calculate derived training params
     batch_size = base_batch_size
@@ -217,7 +217,7 @@ def make_gpt2_large():
     max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
-    save_steps = 150
+    save_steps = 100
     
     # Calculate derived training params
     batch_size = base_batch_size
@@ -256,11 +256,11 @@ def make_gpt2_large_aux():
     n_layers = 36
     
     # Training params
-    base_batch_size = 12
+    base_batch_size = 20
     max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
-    save_steps = 150
+    save_steps = 100
     
     # Calculate derived training params
     batch_size = base_batch_size
@@ -268,28 +268,28 @@ def make_gpt2_large_aux():
     gradient_accumulation_steps = int(desired_batch_size // batch_size)
     gradient_checkpointing = False
     
-    learning_rate: float = 1e-4
+    learning_rate: float = 6e-5
     lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
-    lr_scheduler_kwargs: dict = {"min_lr": 5e-5}
+    lr_scheduler_kwargs: dict = {"min_lr": 1e-5}
     warmup_steps = 15
     momentum = 0.9**(base_batch_size/32)
 
     # Calculate layernorm schedule
     gap_ln2 = 4
-    gap_ln1qk = 2
-    gap_ln1v = 6
+    gap_ln1qk = 0
+    gap_ln1v = 4
     gap_lnf = None
     gap_eot = 0
     gap_bos = 0
     
     start_ln2 = 30
     start_ln1qk = start_ln2 + n_layers * gap_ln2
-    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
+    start_ln1v = start_ln1qk + n_layers # * gap_ln1qk
     start_lnf = start_ln1v + n_layers * gap_ln1v
     start_eot = start_lnf + 2
     start_bos = start_eot + 10
     
-    aux_loss_weight = 0.05
+    aux_loss_weight = 0.025
 
     return FinetuneConfig(**locals())
 
@@ -303,7 +303,7 @@ def make_gpt2_xl():
     max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
-    save_steps = 150
+    save_steps = 100
 
     learning_rate: float = 5e-5
     lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
@@ -344,7 +344,7 @@ def make_gpt2_xl_aux():
     max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
-    save_steps = 150
+    save_steps = 100
         
     learning_rate: float = 5e-5
     lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
