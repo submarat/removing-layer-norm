@@ -48,33 +48,31 @@ def ioi_metric(logits, answer_token_indices, mean=None, corrupted_baseline=-3.61
 
 
 # # # %%
-# for i in range(0, 30):
-#     # generate prompts
-#     prompts, answers = get_bisymmetric_prompts_and_answers(
-#         total_N=4,
-#         nb_templates=1
-#     )
-#     print(prompts)
-#     print(answers)
-#     import pickle
-#     import os
-#     os.makedirs(f"/workspace/removing-layer-norm/mech_interp/experiments/attribution_patching/results/prompts_{i}", exist_ok=True)
-#     with open(f"/workspace/removing-layer-norm/mech_interp/experiments/attribution_patching/results/prompts_{i}/prompts.pkl", "wb") as f:
-#         pickle.dump({"prompts": prompts, "answers": answers}, f)
+if __name__ == "__main__":
+for i in range(0, 30):
+    # generate prompts
+    prompts, answers = get_bisymmetric_prompts_and_answers(
+        total_N=4,
+        nb_templates=1
+    )
+    print(prompts)
+    print(answers)
+    import pickle
+    import os
+    os.makedirs(f"/workspace/removing-layer-norm/mech_interp/experiments/attribution_patching/results/prompts_{i}", exist_ok=True)
+    with open(f"/workspace/removing-layer-norm/mech_interp/experiments/attribution_patching/results/prompts_{i}/prompts.pkl", "wb") as f:
+        pickle.dump({"prompts": prompts, "answers": answers}, f)
 
-# import os
-# prompts, answers = get_bisymmetric_prompts_and_answers(500, 1)
-# path = "/workspace/removing-layer-norm/mech_interp/experiments/attribution_patching/results/final/prompts.pkl"
-# os.makedirs(os.path.dirname(path), exist_ok=True)
-# with open(path, "wb") as f:
-#     pickle.dump({"prompts": prompts, "answers": answers}, f)
+    # import os
+    # prompts, answers = get_bisymmetric_prompts_and_answers(500, 1)
+    # path = "/workspace/removing-layer-norm/mech_interp/experiments/attribution_patching/results/final/prompts.pkl"
+    # os.makedirs(os.path.dirname(path), exist_ok=True)
+    # with open(path, "wb") as f:
+    #     pickle.dump({"prompts": prompts, "answers": answers}, f)
 
-# import os
-# prompts, answers = get_bisymmetric_prompts_and_answers(16, 1)
-# path = "/workspace/removing-layer-norm/mech_interp/experiments/attribution_patching/results/final/prompts_small.pkl"
-# os.makedirs(os.path.dirname(path), exist_ok=True)
-# with open(path, "wb") as f:
-#     pickle.dump({"prompts": prompts, "answers": answers}, f)
-# # %%
-
-# %%
+    # import os
+    # prompts, answers = get_bisymmetric_prompts_and_answers(16, 1)
+    # path = "/workspace/removing-layer-norm/mech_interp/experiments/attribution_patching/results/final/prompts_small.pkl"
+    # os.makedirs(os.path.dirname(path), exist_ok=True)
+    # with open(path, "wb") as f:
+    #     pickle.dump({"prompts": prompts, "answers": answers}, f)
