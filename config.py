@@ -143,7 +143,7 @@ def make_gpt2_medium_fasttune():
     block_size = 1024
     target_batch_tokens = 2**19
     warmup_steps = 10  # Shorter warmup due to accelerated schedule
-    save_steps = 150 
+    save_steps = 100
 
     # Calculate derived training params
     batch_size = base_batch_size
@@ -217,7 +217,7 @@ def make_gpt2_large():
     max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
-    save_steps = 150
+    save_steps = 100
     
     # Calculate derived training params
     batch_size = base_batch_size
@@ -260,7 +260,7 @@ def make_gpt2_large_aux():
     max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
-    save_steps = 150
+    save_steps = 100
     
     # Calculate derived training params
     batch_size = base_batch_size
@@ -303,7 +303,7 @@ def make_gpt2_xl():
     max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
-    save_steps = 150
+    save_steps = 100
 
     learning_rate: float = 5e-5
     lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
@@ -344,7 +344,7 @@ def make_gpt2_xl_aux():
     max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
-    save_steps = 150
+    save_steps = 100
         
     learning_rate: float = 5e-5
     lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
