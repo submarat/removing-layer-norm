@@ -360,7 +360,7 @@ def make_gpt2_xl_aux():
     
     # Calculate layernorm schedule
     gap_ln2 = 4
-    gap_ln1qk = 2
+    gap_ln1qk = 4
     gap_ln1v = 6
     gap_lnf = None
     gap_eot = 0
