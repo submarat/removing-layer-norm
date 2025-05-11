@@ -10,7 +10,9 @@ matplotlib==3.8.2
 seaborn==0.13.0
 transformer_lens==2.14.0
 scipy==1.15.2
-ipdb
-runpod
-zstandard
-devtools
+plotly==6.0.1
+circuitsvis==1.43.3
+ipdb====0.13.13
+runpod==1.7.9
+zstandard==0.23.0
+devtools==0.12.2
