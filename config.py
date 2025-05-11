@@ -213,7 +213,7 @@ def make_gpt2_large():
     n_layers = 36
     
     # Training params
-    base_batch_size = 10
+    base_batch_size = 12
     max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
@@ -225,9 +225,9 @@ def make_gpt2_large():
     gradient_accumulation_steps = int(desired_batch_size // batch_size)
     gradient_checkpointing = False
 
-    learning_rate: float = 1e-4
+    learning_rate: float = 6e-5
     lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
-    lr_scheduler_kwargs: dict = {"min_lr": 5e-5}
+    lr_scheduler_kwargs: dict = {"min_lr": 1e-5}
     warmup_steps = 15
     momentum = 0.9**(base_batch_size/32)
     
@@ -256,7 +256,7 @@ def make_gpt2_large_aux():
     n_layers = 36
     
     # Training params
-    base_batch_size = 20
+    base_batch_size = 12
     max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
@@ -276,7 +276,7 @@ def make_gpt2_large_aux():
 
     # Calculate layernorm schedule
     gap_ln2 = 4
-    gap_ln1qk = 0
+    gap_ln1qk = 1
     gap_ln1v = 4
     gap_lnf = None
     gap_eot = 0
@@ -284,7 +284,7 @@ def make_gpt2_large_aux():
     
     start_ln2 = 30
     start_ln1qk = start_ln2 + n_layers * gap_ln2
-    start_ln1v = start_ln1qk + n_layers # * gap_ln1qk
+    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
     start_lnf = start_ln1v + n_layers * gap_ln1v
     start_eot = start_lnf + 2
     start_bos = start_eot + 10
