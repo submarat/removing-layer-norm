@@ -1,0 +1,395 @@
+import os
+import argparse
+import datasets
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import tqdm
+import transformers
+import wandb
+from prepare_dataset import prepare_dataset
+from torch.utils.data import Dataset
+from transformers import (
+    AutoTokenizer,
+    DataCollatorForLanguageModeling,
+    Trainer,
+    TrainerCallback,
+    TrainingArguments,
+)
+
+from std_dicts import std_dict
+
+# TODO: support multi-GPU. If multiple GPUs are available, this will select the first one.
+device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
+
+torch.manual_seed(1337)
+# torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
+# torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
+
+_MAX_STEPS = 1200
+_BATCH_SIZE = 40
+_BLOCK_SIZE = 1024
+_DESIRED_BATCH_SIZE= 2**19 / _BLOCK_SIZE
+_GRADIENT_ACCUMULATION_STEPS=_DESIRED_BATCH_SIZE = int(_DESIRED_BATCH_SIZE // _BATCH_SIZE)
+_USE_WANDB = True
+
+
+def load_model(model_name="gpt2"):
+    model = transformers.GPT2LMHeadModel.from_pretrained(
+        model_name,
+        cache_dir=f"{model_name}_cache",
+        config=transformers.GPT2Config.from_pretrained(
+            model_name, dropout=0.0, attn_pdrop=0.0, embd_pdrop=0.0, resid_pdrop=0.0
+        ),
+    )
+    return model
+
+
+def finetune_with_ln(model, training_args, tokenized, data_collator, aux_weight):
+    # Create auxiliary loss hook
+    aux_hook = AuxiliaryLossHook(model, weight=aux_weight)  # Adjust weight as needed
+    aux_hook.register_hooks()
+    
+    # Create trainer with auxiliary loss callback
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=tokenized["train"],
+        eval_dataset=tokenized["test"],
+        data_collator=data_collator,
+        callbacks=[AuxiliaryLossCallback(aux_hook)],
+    )
+
+    # Override compute_loss to include auxiliary loss
+    original_compute_loss = trainer.compute_loss
+    
+    def compute_loss_with_aux(model, inputs, return_outputs=False):
+        loss, outputs = original_compute_loss(model, inputs, return_outputs=True)
+        
+        # Add auxiliary loss if it exists
+        if hasattr(trainer.state, 'aux_loss'):
+            loss = loss + trainer.state.aux_loss
+            
+        return (loss, outputs) if return_outputs else loss
+        
+    trainer.compute_loss = compute_loss_with_aux
+    
+    trainer.train()
+    
+    # Clean up hooks
+    aux_hook.remove_hooks()
+
+def finetune_without_ln(model, training_args, tokenized, data_collator):
+    class FakeLayerNorm(nn.Module):
+        """LayerNorm using a fixed std instead of the actual standard deviation."""
+
+        def __init__(self, ndim, layer, bias):
+            super().__init__()
+            self.weight = nn.Parameter(torch.ones(ndim))
+            self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None
+            # Flag whether the LayerNorm is enabled ("real") or disabled ("fake")
+            self.mode = "real"
+            self.attn_v_mode = "real"
+            # Use single std value for all positions
+            self.std = torch.ones(ndim, device=device) * std_dict[layer]
+
+        def forward(self, input, std_type="avg", attn_v=False):
+            # We want all the enable / disable information to be in this class, but the class is re-used
+            # for both the QK and V paths. Thus we add the attn_v flag to the call that is True only for
+            # the V path. Thus we get to have flags `mode` and `attn_v_mode` to enable / disable the
+            # LN for the QK and V paths separately.
+            mode = self.attn_v_mode if attn_v else self.mode
+            if mode == "fake":
+                # Which std values to use: We use (1) average std (which is actually a vector of length
+                # n_ctx for most of the time*) [a, b, b, ...] where a is the average std for position 1,
+                # and b is the average std for all other positions. We also have the option to use (2)
+                # the bos std [a, a, a, ...] for all positions, which we do if the input token is EOT.
+                # Note that we could differentiate between EOT and BOS, but I didn't need it here.
+                # *at the end (with disable_eot_std) we make the latter be like the former, and with
+                # disable_bos_std we make both vectors to be [b, b, b, ...], equivalent to scalars.
+                assert std_type in ["avg", "bos"]
+                std = self.average_std if std_type == "avg" else self.bos_std
+                return (
+                    (input - input.mean(-1, keepdim=True)) / self.std * self.weight
+                    + self.bias
+                    if self.bias is not None
+                    else input * self.weight
+                )
+            elif mode == "real":
+                return F.layer_norm(
+                    input, self.weight.shape, self.weight, self.bias, 1e-5
+                )
+            else:
+                raise ValueError(f"Unknown mode {mode}")
+
+    def replace_layernorm_with_fake_layernorm(model, std):
+        n_layers = 12
+        n_embd = model.transformer.h[0].ln_1.weight.shape[0]
+        # Replace ln_1 and ln_2 with FakeLayerNorm
+        for i in range(n_layers):
+            block = model.transformer.h[i]
+            ln_1_weight = block.ln_1.weight.clone().detach()
+            ln_1_bias = block.ln_1.bias.clone().detach()
+
+            block.ln_1 = FakeLayerNorm(
+                ndim=n_embd,
+                layer=f"blocks.{i}.hook_resid_pre",
+                bias=block.ln_1.bias is not None,
+            )
+            block.ln_1.weight = nn.Parameter(ln_1_weight)
+            block.ln_1.bias = nn.Parameter(ln_1_bias)
+
+            ln_2_weight = block.ln_2.weight.clone().detach()
+            ln_2_bias = block.ln_2.bias.clone().detach()
+
+            block.ln_2 = FakeLayerNorm(
+                ndim=n_embd,
+                layer=f"blocks.{i}.hook_resid_mid",
+                bias=block.ln_2.bias is not None,
+            )
+            block.ln_2.weight = nn.Parameter(ln_2_weight)
+            block.ln_2.bias = nn.Parameter(ln_2_bias)
+
+        # Replace ln_f with FakeLayerNorm
+        ln_f = model.transformer.ln_f
+        ln_f_weight = ln_f.weight.clone().detach()
+        ln_f_bias = ln_f.bias.clone().detach()
+        model.transformer.ln_f = FakeLayerNorm(
+            ndim=n_embd,
+            layer=f"blocks.11.hook_resid_post",
+            bias=model.transformer.ln_f.bias is not None,
+        )
+        model.transformer.ln_f.weight = nn.Parameter(ln_f_weight)
+        model.transformer.ln_f.bias = nn.Parameter(ln_f_bias)
+
+    # Replace all LayerNorm instances with FakeLayerNorm
+    replace_layernorm_with_fake_layernorm(model, std=1.0)
+
+    def disable_ln_2(block_index):
+        model.transformer.h[block_index].ln_2.mode = "fake"
+        print(f"disabled ln_2 for block {block_index}")
+
+    def disable_ln_1qk(block_index):
+        model.transformer.h[block_index].ln_1.mode = "fake"
+        print(f"disabled ln_1 for block {block_index}")
+
+    def disable_ln_1v(block_index):
+        model.transformer.h[block_index].ln_1.attn_v_mode = "fake"
+        print(f"disabled ln_1v for block {block_index}")
+
+    def disable_ln_f():
+        model.transformer.ln_f.mode = "fake"
+        print("disabled ln_f")
+
+    gap_ln2 = 20
+    gap_ln1qk = 20
+    gap_ln1v = 30
+    gap_lnf = None
+
+    n_ln2 = 200
+    n_ln1qk = n_ln2 + 12 * gap_ln2
+    n_ln1v = n_ln1qk + 12 * gap_ln1qk
+    n_lnf = n_ln1v + 12 * gap_ln1v
+
+    class LNRemover:
+        """
+        Schedules the "removal" of LayerNorms by calling the disable function.
+        """
+
+        def __init__(self, start_step, layer_gap_steps, function):
+            self.n_layers = 12
+            self.start_step = start_step
+            self.layer_gap_steps = layer_gap_steps
+            self.function = function
+
+        def __call__(self, step):
+            if self.layer_gap_steps is None:
+                # LN functions without layer (i.e. ln_f)
+                if step == self.start_step:
+                    print(f"step {step}")
+                    self.function()
+            elif self.layer_gap_steps == 0:
+                # LNs where we disable all layers at once
+                if step == self.start_step:
+                    print(f"step {step}")
+                    [self.function(i) for i in range(self.n_layers)]
+            elif (step - self.start_step) % self.layer_gap_steps == 0:
+                # LNs where we disable one layer at a time
+                layer_index = (step - self.start_step) // self.layer_gap_steps
+                if 0 <= layer_index < self.n_layers:
+                    print(f"step {step}")
+                    self.function(layer_xindex)
+            else:
+                # Not at a step where we need to disable a LN
+                pass
+
+        def log(self, wandb):
+            name = self.function.__name__
+            if _USE_WANDB:
+                wandb.log(
+                    {
+                        f"{name}.start_step": self.start_step,
+                        f"{name}.layer_gap_steps": self.layer_gap_steps,
+                    }
+                )
+
+    class LNRemoverCallback(TrainerCallback):
+        def __init__(self, ln_removers):
+            self.ln_removers = ln_removers
+
+        def on_step_begin(self, args, state, control, **kwargs):
+            # Iterate over the ln_removers
+            for ln_remover in self.ln_removers:
+                ln_remover(state.global_step)
+                ln_remover.log(wandb)
+            return control
+
+    ln_removers = [
+        LNRemover(n_ln2, gap_ln2, disable_ln_2),
+        LNRemover(n_ln1qk, gap_ln1qk, disable_ln_1qk),
+        LNRemover(n_ln1v, gap_ln1v, disable_ln_1v),
+        LNRemover(n_lnf, gap_lnf, disable_ln_f),
+    ]
+
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=tokenized["train"],
+        eval_dataset=tokenized["test"],
+        data_collator=data_collator,
+        callbacks=[LNRemoverCallback(ln_removers)],
+    )
+
+    trainer.train()
+
+class AuxiliaryLossHook:
+    def __init__(self, model, weight=1.0):
+        self.model = model
+        self.weight = weight
+        self.activations = {}
+        self.hooks = []
+        
+    def forward_hook(self, module, input, output):
+        # Store the input activations
+        self.activations[module] = input[0].detach()
+        
+    def compute_loss(self):
+        total_loss = 0.0
+        for module, activations in self.activations.items():
+            # Compute std for each position
+            stds = torch.std(activations, dim=-1)  # shape: [batch, seq_len]
+            
+            # Compute mean std across all positions except BOS
+            mean_std = torch.mean(stds[:, 1:])
+            
+            # Compute max std (usually at BOS position)
+            max_std = torch.max(stds)
+            
+            # Loss is the squared difference between max and mean
+            loss = (max_std - mean_std) ** 2
+            total_loss += loss
+            
+        return self.weight * total_loss
+    
+    def register_hooks(self):
+        # Register hooks on all LayerNorm inputs
+        for name, module in self.model.named_modules():
+            if isinstance(module, nn.LayerNorm):
+                hook = module.register_forward_hook(self.forward_hook)
+                self.hooks.append(hook)
+                
+    def remove_hooks(self):
+        for hook in self.hooks:
+            hook.remove()
+        self.hooks = []
+        self.activations = {}
+
+class AuxiliaryLossCallback(TrainerCallback):
+    def __init__(self, hook):
+        self.hook = hook
+        
+    def on_step_begin(self, args, state, control, **kwargs):
+        self.hook.activations = {}  # Clear previous activations
+        return control
+        
+    def on_step_end(self, args, state, control, **kwargs):
+        # Compute and add auxiliary loss
+        aux_loss = self.hook.compute_loss()
+        if aux_loss is not None:
+            state.aux_loss = aux_loss
+        return control
+
+def main():
+    model_name = "gpt2"
+    tokenized, data_collator = prepare_dataset(model_name)
+    model = load_model(model_name)
+
+    parser = argparse.ArgumentParser(
+        description="Finetune model with or without layer normalization"
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["with_ln", "without_ln", "both"],
+        required=True,
+        help="Finetuning mode",
+    )
+    parser.add_argument(
+        "--save",
+        action="store_true",
+        help="Save the model to disk",
+    )
+    parser.add_argument(
+        "--aux_weight",
+        type=float,
+        default=0.1,
+        help="Weight for the auxiliary loss that regularizes activation stds",
+    )
+    args = parser.parse_args()
+
+    if args.save:
+        tokenizer = AutoTokenizer.from_pretrained("gpt2")
+        tokenizer.pad_token = tokenizer.eos_token
+
+    training_args = TrainingArguments(
+        output_dir="./results",
+        # fp16=True, # Use for mixed precision training
+        save_safetensors=False,
+        max_steps=_MAX_STEPS,
+        per_device_train_batch_size=_BATCH_SIZE,
+        per_device_eval_batch_size=4,
+        gradient_accumulation_steps=_GRADIENT_ACCUMULATION_STEPS,
+        warmup_steps=100,
+        weight_decay=0.01,
+        max_grad_norm=1.0,
+        logging_dir="./logs",
+        prediction_loss_only=True,
+        learning_rate=6e-4,
+        lr_scheduler_type="cosine",
+        report_to="wandb" if _USE_WANDB else "none",
+        run_name="gpt2-openwebtext_luca_aux",
+        logging_steps=1,
+        logging_first_step=True,
+        remove_unused_columns=False,
+        dataloader_num_workers=4,
+        dataloader_pin_memory=True,
+        dataloader_prefetch_factor=2,
+        dataloader_persistent_workers=True
+    )
+
+    if args.mode == "with_ln":
+        finetune_with_ln(model, training_args, tokenized, data_collator, args.aux_weight)
+        if args.save:
+            model.save_pretrained("model-with-ln")
+            tokenizer.save_pretrained("model-with-ln")
+    elif args.mode == "without_ln":
+        finetune_without_ln(model, training_args, tokenized, data_collator)
+        if args.save:
+            model.save_pretrained("model-without-ln")
+            tokenizer.save_pretrained("model-without-ln")
+    else:
+        raise ValueError(f"Unknown mode {args.mode}")
+    
+
+if __name__ == "__main__":
+    main()
