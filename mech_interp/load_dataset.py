@@ -3,7 +3,7 @@ import torch
 from torch.utils.data import DataLoader as TorchDataLoader
 
 
-class DataLoader:
+class DataManager:
     def __init__(self,
                  dataset_name='apollo-pile',
                  batch_size=10,
@@ -20,7 +20,10 @@ class DataLoader:
         if self.dataset_name == 'apollo-pile':
             dataset = load_dataset('apollo-research/monology-pile-uncopyrighted-tokenizer-gpt2', 
                                  streaming=True, split="train")
-        elif dataset_name == 'apollo-owt':
+        if self.dataset_name == 'luca-pile':
+            dataset = load_dataset('lucabaroni/apollo-pile-filtered-10k', 
+                                 streaming=True, split="train")
+        elif self.dataset_name == 'apollo-owt':
             dataset = load_dataset('apollo-research/Skylion007-openwebtext-tokenizer-gpt2', 
                                  streaming=True, split="train")
         else:

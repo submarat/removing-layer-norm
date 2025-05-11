@@ -23,7 +23,7 @@ class FormatInference:
 
     def _process_sequence(self, args):
         """Process a single sequence and return all its subsequence records."""
-        seq_idx, seq_input, ce_losses, ce_diffs, jsd_losses, topk_jsd_losses, tokenizer = args
+        seq_idx, seq_input, ce_losses, ce_diffs, jsd_losses, topk_jsd_losses, symmetric_kl_losses, tokenizer = args
         
         seq_len = len(seq_input)
         records = []
@@ -64,19 +64,19 @@ class FormatInference:
                 record[f'ce_diff_{pair_name}'] = float(ce_diffs[pair_name][seq_idx][pos])
                 record[f'jsd_{pair_name}'] = float(jsd_losses[pair_name][seq_idx][pos])
                 record[f'topk_jsd_{pair_name}'] = float(topk_jsd_losses[pair_name][seq_idx][pos])
-            
+                record[f'symmetric_kl_{pair_name}'] = float(symmetric_kl_losses[pair_name][seq_idx][pos])
             records.append(record)
             
         return records
 
-    def add_batch_data(self, input_seqs, ce_losses, ce_diffs, jsd_losses, topk_jsd_losses):
+    def add_batch_data(self, input_seqs, ce_losses, ce_diffs, jsd_losses, topk_jsd_losses, symmetric_kl_losses):
         """Process batch data using thread pool for parallel sequence processing."""
         batch_size = input_seqs.shape[0]
         
         # Create tasks for the thread pool - one task per sequence
         tasks = []
         for seq_idx in range(batch_size):
-            # Each task is a tuple of (seq_idx, seq_input, ce_losses, ce_diffs, jsd_losses, topk_jsd_losses, tokenizer)
+            # Each task is a tuple of (seq_idx, seq_input, ce_losses, ce_diffs, jsd_losses, topk_jsd_losses, symmetric_kl_losses, tokenizer)
             task = (
                 seq_idx, 
                 input_seqs[seq_idx], 
@@ -84,6 +84,7 @@ class FormatInference:
                 ce_diffs, 
                 jsd_losses, 
                 topk_jsd_losses,
+                symmetric_kl_losses,
                 self.tokenizer
             )
             tasks.append(task)
