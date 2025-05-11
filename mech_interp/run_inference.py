@@ -7,11 +7,10 @@ import itertools
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
-
 from load_models import load_baseline, load_finetuned_model, load_nln_model
-from load_dataset import DataLoader
+from load_dataset import DataManager
 from format_results import FormatInference 
-from metrics import JSDivergence
+from metrics import JSDivergence, SymmetricKL
 
 
 @dataclass
@@ -23,7 +22,7 @@ class InferenceConfig:
     max_sequence_length: int
     batch_size: int
     save_text: bool = False
-    folder: Union[str, Path] = field(default="/workspace/removing-layer-norm/mech_interp/inference_logs/")
+    folder: Union[str, Path] = field(default="/workspace/removing-layer-norm/mech_interp/inference_logs_symmetric_kl/")
     output_file: Optional[str] = None
     num_threads: Optional[int] = None
     jsd_topk: int = 50
@@ -82,7 +81,7 @@ class InferenceRunner:
 
         # Initialize various manag
         self.model_manager = ModelManager(self.config.models, self.device)
-        self.dataloader = DataLoader(
+        self.data_manager = DataManager(
                 self.config.dataset,
                 self.config.batch_size,
                 self.config.max_sequence_length,
@@ -96,6 +95,7 @@ class InferenceRunner:
                 )
         self.JSD = JSDivergence()
         self.JSD_TopK = JSDivergence(topk=self.config.jsd_topk)
+        self.SymmetricKL = SymmetricKL()
 
 
     def _compute_ce_loss(self, logits, targets):
@@ -128,12 +128,19 @@ class InferenceRunner:
             return self.JSD(logits_p, logits_q)
         else:
            return  self.JSD_TopK(logits_p, logits_q)
-
-
+        
+    def _compute_symmetric_kl(self, logits_p, logits_q):
+        """
+        Compute symmetrized KL divergence between two sets of logits.
+        """
+        logits_p = logits_p[:, :-1, :]
+        logits_q = logits_q[:, :-1, :]
+        return self.SymmetricKL(logits_p, logits_q)
+    
     def run_inference(self):
         # Calculate total number of batches
         total_batches = (self.config.num_samples + self.config.batch_size - 1) // self.config.batch_size
-        batched_data = self.dataloader.create_dataloader()
+        batched_data = self.data_manager.create_dataloader()
 
         # Run inference
         with torch.no_grad():  # Ensure no gradients are computed, this scope applies to all within
@@ -167,9 +174,11 @@ class InferenceRunner:
         # Compute JSD
         jsd_losses = {}
         topk_jsd_losses = {}
+        symmetric_kl_losses = {}
         for model1, model2 in self.model_manager.model_pairs:
             pair_name = f'{model1}_vs_{model2}'
             jsd_losses[pair_name] = self._compute_jsd_loss(logits[model1], logits[model2]).cpu().numpy()
+            symmetric_kl_losses[pair_name] = self._compute_symmetric_kl(logits[model1], logits[model2]).cpu().numpy()
             topk_jsd_losses[pair_name] = self._compute_jsd_loss(
                     logits[model1], logits[model2], topk=self.config.jsd_topk).cpu().numpy()
 
@@ -180,6 +189,7 @@ class InferenceRunner:
             ce_diffs,
             jsd_losses,
             topk_jsd_losses,
+            symmetric_kl_losses
         )
 
 
@@ -188,7 +198,7 @@ if __name__ == "__main__":
     config = InferenceConfig(
         dataset="apollo-pile",
         models=["baseline", "finetuned", "noLN"],
-        num_samples=100,
+        num_samples=10000,
         max_sequence_length=512,
         batch_size=10,
     )
