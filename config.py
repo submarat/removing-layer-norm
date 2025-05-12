@@ -346,7 +346,7 @@ def make_gpt2_xl_aux():
     target_batch_tokens = 2**19
     save_steps = 100
         
-    learning_rate: float = 5e-5
+    learning_rate: float = 2e-6
     lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
     lr_scheduler_kwargs: dict = {"min_lr": 2e-5}
     warmup_steps = 20
