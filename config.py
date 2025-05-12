@@ -268,7 +268,7 @@ def make_gpt2_large_aux():
     gradient_accumulation_steps = int(desired_batch_size // batch_size)
     gradient_checkpointing = False
     
-    learning_rate: float = 8e-5
+    learning_rate: float = 1e-4
     lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
     lr_scheduler_kwargs: dict = {"min_lr": 2e-5}
     warmup_steps = 15
