@@ -293,6 +293,135 @@ def make_gpt2_large_aux():
 
     return FinetuneConfig(**locals())
 
+def make_gpt2_large_aux2():
+    # Architecture params
+    model_name = "gpt2-large"
+    n_layers = 36
+    
+    # Training params
+    base_batch_size = 12
+    max_steps = 1200
+    block_size = 1024
+    target_batch_tokens = 2**19
+    save_steps = 100
+    
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    gradient_checkpointing = False
+    
+    learning_rate: float = 2e-4
+    lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
+    lr_scheduler_kwargs: dict = {"min_lr": 2e-5}
+    warmup_steps = 15
+    momentum = 0.9**(base_batch_size/32)
+
+    # Calculate layernorm schedule
+    gap_ln2 = 4
+    gap_ln1qk = 2
+    gap_ln1v = 6
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+    
+    start_ln2 = 30
+    start_ln1qk = start_ln2 + n_layers * gap_ln2
+    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
+    start_lnf = start_ln1v + n_layers * gap_ln1v
+    start_eot = start_lnf + 2
+    start_bos = start_eot + 10
+    
+    aux_loss_weight = 0.025
+
+    return FinetuneConfig(**locals())
+
+def make_gpt2_large_aux4():
+    # Architecture params
+    model_name = "gpt2-large"
+    n_layers = 36
+    
+    # Training params
+    base_batch_size = 12
+    max_steps = 1200
+    block_size = 1024
+    target_batch_tokens = 2**19
+    save_steps = 100
+    
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    gradient_checkpointing = False
+    
+    learning_rate: float = 4e-4
+    lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
+    lr_scheduler_kwargs: dict = {"min_lr": 2e-5}
+    warmup_steps = 15
+    momentum = 0.9**(base_batch_size/32)
+
+    # Calculate layernorm schedule
+    gap_ln2 = 4
+    gap_ln1qk = 2
+    gap_ln1v = 6
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+    
+    start_ln2 = 30
+    start_ln1qk = start_ln2 + n_layers * gap_ln2
+    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
+    start_lnf = start_ln1v + n_layers * gap_ln1v
+    start_eot = start_lnf + 2
+    start_bos = start_eot + 10
+    
+    aux_loss_weight = 0.025
+
+    return FinetuneConfig(**locals())
+
+def make_gpt2_large_aux6():
+    # Architecture params
+    model_name = "gpt2-large"
+    n_layers = 36
+    
+    # Training params
+    base_batch_size = 12
+    max_steps = 1200
+    block_size = 1024
+    target_batch_tokens = 2**19
+    save_steps = 100
+    
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    gradient_checkpointing = False
+    
+    learning_rate: float = 6e-4
+    lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
+    lr_scheduler_kwargs: dict = {"min_lr": 2e-5}
+    warmup_steps = 15
+    momentum = 0.9**(base_batch_size/32)
+
+    # Calculate layernorm schedule
+    gap_ln2 = 4
+    gap_ln1qk = 2
+    gap_ln1v = 6
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+    
+    start_ln2 = 30
+    start_ln1qk = start_ln2 + n_layers * gap_ln2
+    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
+    start_lnf = start_ln1v + n_layers * gap_ln1v
+    start_eot = start_lnf + 2
+    start_bos = start_eot + 10
+    
+    aux_loss_weight = 0.025
+
+    return FinetuneConfig(**locals())
+
 def make_gpt2_xl():
     # Architecture params
     model_name = "gpt2-xl"
@@ -384,6 +513,9 @@ FINETUNE_CONFIGS = {
     "gpt2-medium_fasttune_aux": make_gpt2_medium_fasttune_aux(),
     "gpt2-large": make_gpt2_large(),
     "gpt2-large_aux": make_gpt2_large_aux(),
+    "gpt2-large_aux2": make_gpt2_large_aux2(),
+    "gpt2-large_aux4": make_gpt2_large_aux4(),
+    "gpt2-large_aux6": make_gpt2_large_aux6(),
     "gpt2-xl": make_gpt2_xl(),
     "gpt2-xl_aux": make_gpt2_xl_aux(),
 }
