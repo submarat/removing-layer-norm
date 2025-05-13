@@ -12,7 +12,8 @@ transformer_lens==2.14.0
 scipy==1.15.2
 plotly==6.0.1
 circuitsvis==1.43.3
-ipdb====0.13.13
+ipdb==0.13.13
+kaleido==0.2.1
 runpod==1.7.9
 zstandard==0.23.0
 devtools==0.12.2
