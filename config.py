@@ -213,7 +213,7 @@ def make_gpt2_large():
     n_layers = 36
     
     # Training params
-    base_batch_size = 12
+    base_batch_size = 28
     max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
@@ -224,10 +224,10 @@ def make_gpt2_large():
     desired_batch_size = target_batch_tokens / block_size
     gradient_accumulation_steps = int(desired_batch_size // batch_size)
     gradient_checkpointing = False
-
-    learning_rate: float = 6e-5
+    
+    learning_rate: float = 3e-4
     lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
-    lr_scheduler_kwargs: dict = {"min_lr": 1e-5}
+    lr_scheduler_kwargs: dict = {"min_lr": 4e-5}
     warmup_steps = 15
     momentum = 0.9**(base_batch_size/32)
     
