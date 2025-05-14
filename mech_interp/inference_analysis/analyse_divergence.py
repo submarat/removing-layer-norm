@@ -1,20 +1,23 @@
-# %%
 import os
 from typing import List, Optional
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
+import seaborn as sns
 
 
-# %%
 class DivergenceSummary:
     """
     A class for visualizing model comparison metrics across baseline, finetuned, and noLN models.
     Provides methods for filtering data and creating various visualization types.
     """
     
-    def __init__(self, data_path: str, min_seq_length: Optional[int] = None, agg: bool = False):
+    def __init__(self,
+                 data_path: str,
+                 min_seq_length: Optional[int] = None,
+                 agg: bool = False,
+                 model_type: str = 'Small'):
         """
         Initialize the ModelComparison class.
         
@@ -37,8 +40,18 @@ class DivergenceSummary:
         # Store the model names for consistent reference
         self.models = ['baseline', 'finetuned', 'noLN']
         
+        # Store model type
+        self.model_type = model_type.capitalize()
+        
+        # Create model display labels based on model_type
+        self.model_labels = {
+            'baseline': f'{self.model_type} original',
+            'finetuned': f'{self.model_type} FT',
+            'noLN': f'{self.model_type} LN-free'
+        }
+        
         # Set up color schemes for consistent visualization
-        self.colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+        self.colors = sns.color_palette("colorblind")
         self.model_colors = {
             'baseline': self.colors[0],
             'finetuned': self.colors[1],
@@ -93,78 +106,6 @@ class DivergenceSummary:
 
         self.df = aggregated_df
 
-    def plot_ce_hexplot(self,
-                        models: List = ['baseline', 'noLN'],
-                        figsize: tuple = (8, 6),
-                        sample_size: Optional[int] = None, 
-                        save_path: Optional[str] = None):
-        """
-        Plot a hexbin plot comparing CE loss between baseline and noLN.
-        
-        Parameters:
-        -----------
-        models : list,
-            Models to analyse
-        figsize : tuple, optional
-            Figure size (width, height)
-        sample_size : int, optional
-            Number of points to sample for faster rendering
-        save_path : str, optional
-            Path to save the figure
-            
-        Returns:
-        --------
-        matplotlib.figure.Figure
-            The generated figure
-        """
-        # Sample data if requested
-        if sample_size and len(self.df) > sample_size:
-            print(f"Sampling {sample_size} points from {len(self.df)} total points")
-            sampled_df = self.df.sample(n=sample_size, random_state=42)
-        else:
-            sampled_df = self.df
-        
-        fig, ax = plt.subplots(figsize=figsize)
-
-        # Create the hexbin plot directly with matplotlib (for more control)
-        hb = ax.hexbin(
-            sampled_df[f'ce_{models[0]}'],
-            sampled_df[f'ce_{models[1]}'],
-            gridsize=50,
-            cmap='viridis',
-            bins='log',  # Use logarithmic binning
-            mincnt=1     # Show bins with at least 1 point
-        )
-    
-        # Add colorbar
-        cbar = plt.colorbar(hb, ax=ax)
-        cbar.set_label('Count (log scale)')
-    
-        # Get min/max values with some padding but avoid extreme outliers
-        x_max = np.percentile(sampled_df[f'ce_{models[0]}'], 99.5) * 1.05
-        y_max = np.percentile(sampled_df[f'ce_{models[1]}'], 99.5) * 1.05
-        max_lim = max(x_max, y_max)
-    
-        # Add diagonal line for reference
-        ax.plot([0, max_lim], [0, max_lim], 'r--', alpha=0.7, 
-                linewidth=1.5, zorder=10)
-    
-        # Set titles and labels
-        ax.set_xlabel(f'CE Loss ({models[0]})', fontsize=14)
-        ax.set_ylabel(f'CE Loss ({models[1]})', fontsize=14)
-    
-        # Set axis limits to focus on where most data is (avoiding outliers)
-        ax.set_xlim(0, x_max)
-        ax.set_ylim(0, y_max)
-    
-        # Improve aesthetics
-        plt.tight_layout()
-    
-        # Save if path is provided
-        if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            
-        return fig
 
     def analyze_ce_loss_regions(self, 
                                models: List = ['baseline', 'noLN'],
@@ -391,9 +332,9 @@ class DivergenceSummary:
         ax.plot([0, max_lim], [-epsilon, max_lim - epsilon], 'k:', alpha=0.5)
         
         # Labels and title
-        ax.set_xlabel(f'CE Loss ({models[0]})', fontsize=12)
-        ax.set_ylabel(f'CE Loss ({models[1]})', fontsize=12)
-        ax.set_title(f'CE Loss Comparison: {models[1]} vs {models[0]}', fontsize=14)
+        ax.set_xlabel(f'CE Loss ({self.model_labels[models[0]]})', fontsize=12)
+        ax.set_ylabel(f'CE Loss ({self.model_labels[models[1]]})', fontsize=12)
+        #ax.set_title(f'CE Loss Comparison: {models[1]} vs {models[0]}', fontsize=14)
         
         # Set axis limits
         ax.set_xlim(0, x_max)
@@ -413,10 +354,10 @@ class DivergenceSummary:
 # Example usage:
 if __name__ == "__main__":
     # Initialize with data path
-    model_str = 'medium'
+    model_str = 'small'
     fig_path = f'figures/{model_str}/divergence_contribution.png'
     data_path = f'/workspace/removing-layer-norm/mech_interp/inference_logs/gpt2-{model_str}_dataset_luca-pile_samples_1000_seqlen_512_prepend_False/inference_results.parquet'
-    divergences = DivergenceSummary(data_path, agg=False)
+    divergences = DivergenceSummary(data_path, agg=False, model_type=model_str)
     # Generate and save all plots
     fig, results = divergences.visualize_loss_regions(epsilon=3.5, save_path=fig_path)
     fig.show()

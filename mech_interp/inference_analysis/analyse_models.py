@@ -3,6 +3,7 @@ from typing import List, Optional
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 
@@ -12,7 +13,11 @@ class MetricsSummary:
     Provides methods for filtering data and creating various visualization types.
     """
     
-    def __init__(self, data_path: str, min_seq_length: Optional[int] = None, agg : bool = False):
+    def __init__(self,
+                 data_path: str,
+                 min_seq_length: Optional[int] = None,
+                 agg : bool = False,
+                 model_type: str = 'small'):
         """
         Initialize the ModelComparison class.
         
@@ -33,8 +38,18 @@ class MetricsSummary:
         # Store the model names for consistent reference
         self.models = ['baseline', 'finetuned', 'noLN']
         
+        # Store model type
+        self.model_type = model_type.capitalize()
+        
+        # Create model display labels based on model_type
+        self.model_labels = {
+            'baseline': f'{self.model_type} original',
+            'finetuned': f'{self.model_type} FT',
+            'noLN': f'{self.model_type} LN-free'
+        }
+        
         # Set up color schemes for consistent visualization
-        self.colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+        self.colors = sns.color_palette("colorblind")
         self.model_colors = {
             'baseline': self.colors[0],
             'finetuned': self.colors[1],
@@ -126,7 +141,7 @@ class MetricsSummary:
                 histtype='step',
                 linewidth=2,
                 alpha=alpha,
-                label=f'{model}, mean: {mean_val:.3f}',
+                label=f'{self.model_labels[model]} - mean: {mean_val:.3f}',
                 color=self.model_colors[model]
             )
             ax.axvline(
@@ -136,7 +151,7 @@ class MetricsSummary:
                 linewidth=1.5,
             )
         
-        ax.set_title('Cross-Entropy Loss Distribution Across Models', fontsize=16)
+        #ax.set_title('Cross-Entropy Loss Distribution Across Models', fontsize=16)
         ax.set_xlabel('Cross-Entropy Loss', fontsize=14)
         ax.set_ylabel('Count', fontsize=14)
         if logscale:
@@ -187,7 +202,7 @@ class MetricsSummary:
                 histtype='step',
                 linewidth=2,
                 alpha=alpha,
-                label=f'{model}, mean: {mean_val:.3f}',
+                label=f'{self.model_labels[model]} - mean: {mean_val:.3f}',
                 color=self.model_colors[model]
             )
             ax.axvline(
@@ -197,7 +212,7 @@ class MetricsSummary:
                 linewidth=1.5,
             )
         
-        ax.set_title('Entropy Distribution Across Models', fontsize=16)
+        #ax.set_title('Entropy Distribution Across Models', fontsize=16)
         ax.set_xlabel('Entropy', fontsize=14)
         ax.set_ylabel('Count', fontsize=14)
         if logscale:
@@ -240,6 +255,11 @@ class MetricsSummary:
             The generated figure
         """
         model_pairs = [('baseline', 'finetuned'), ('baseline', 'noLN'), ('finetuned', 'noLN')]
+        pair_labels = [
+            f'{self.model_labels["baseline"]} vs {self.model_labels["finetuned"]}',
+            f'{self.model_labels["baseline"]} vs {self.model_labels["noLN"]}',
+            f'{self.model_labels["finetuned"]} vs {self.model_labels["noLN"]}'
+        ]
         pair_colors = [self.colors[i] for i in range(len(model_pairs))]
         
         fig, axes = plt.subplots(1, 1, figsize=figsize)
@@ -254,7 +274,7 @@ class MetricsSummary:
                 histtype='step',
                 linewidth=2,
                 alpha=alpha,
-                label=f'{pair}, mean: {mean_val:.3f}',
+                label=f'{pair_labels[i]} - mean: {mean_val:.3f}',
                 color=pair_colors[i]
                 )
             axes.axvline(
@@ -264,7 +284,7 @@ class MetricsSummary:
                 linewidth=1.5,
                 )
         # Set titles and labels
-        axes.set_title('Jensen-Shannon Divergence', fontsize=16)
+        #axes.set_title('Jensen-Shannon Divergence', fontsize=16)
         axes.set_xlabel('JSD', fontsize=14)
         axes.set_ylabel('Count', fontsize=14)
         axes.legend(fontsize=12)
@@ -339,8 +359,8 @@ class MetricsSummary:
                 linewidth=1.5, zorder=10)
     
         # Set titles and labels
-        ax.set_xlabel(f'CE Loss ({models[0]})', fontsize=14)
-        ax.set_ylabel(f'CE Loss ({models[1]})', fontsize=14)
+        ax.set_xlabel(f'CE Loss ({self.model_labels[models[0]]})', fontsize=14)
+        ax.set_ylabel(f'CE Loss ({self.model_labels[models[1]]})', fontsize=14)
     
         # Set axis limits to focus on where most data is (avoiding outliers)
         ax.set_xlim(0, x_max)
@@ -414,8 +434,8 @@ class MetricsSummary:
                 linewidth=1.5, zorder=10)
     
         # Set titles and labels
-        ax.set_xlabel(f'Entropy ({models[0]})', fontsize=14)
-        ax.set_ylabel(f'Entropy ({models[1]})', fontsize=14)
+        ax.set_xlabel(f'Entropy ({self.model_labels[models[0]]})', fontsize=14)
+        ax.set_ylabel(f'Entropy ({self.model_labels[models[1]]})', fontsize=14)
     
         # Set axis limits to focus on where most data is (avoiding outliers)
         ax.set_xlim(0, x_max)
@@ -544,13 +564,13 @@ class MetricsSummary:
                 marker='o', 
                 linestyle='-',
                 color=self.model_colors[model],
-                label=f'{model}, ECE: {ece:.4f}'
+                label=f'{self.model_labels[model]} - ECE: {ece:.4f}'
             )
         
         # Set labels and title
         ax.set_ylabel('Accuracy', fontsize=16)
         ax.set_xlabel('Confidence (Max Probability)', fontsize=16)
-        ax.set_title(f'Calibration Plot for models', fontsize=16)
+        #ax.set_title(f'Calibration Plot for models', fontsize=16)
         
         # Set axis limits and grid
         ax.set_xlim(0, 1)
@@ -569,7 +589,191 @@ class MetricsSummary:
             
         return fig
 
-
+    
+    def plot_ce_by_seq_length(self, 
+                              seq_bins: list = [0, 25, 50, 75, 100, 150, 512],
+                              figsize: tuple = (12, 6),
+                              save_path: Optional[str] = None):
+            """
+            Create a seaborn boxplot to visualize how CE loss changes across different
+            sequence length ranges for all models.
+            
+            Parameters:
+            -----------
+            seq_bins : list, optional
+                Sequence length bin edges for categorization
+            figsize : tuple, optional
+                Figure size (width, height)
+            save_path : str, optional
+                Path to save the figure
+                
+            Returns:
+            --------
+            matplotlib.figure.Figure
+                The generated figure
+            """
+            
+            # Create a copy of the data to avoid modifying the original
+            df_plot = self.df.copy()
+            
+            # Create sequence length bins
+            df_plot['seq_length_bin'] = pd.cut(
+                df_plot['sequence_length'], 
+                bins=seq_bins, 
+                labels=[f'{seq_bins[i]}-{seq_bins[i+1]}' for i in range(len(seq_bins)-1)]
+            )
+            
+            # Prepare data for boxplot - melt the dataframe
+            ce_columns = [f'ce_{model}' for model in self.models]
+            df_melt = pd.melt(df_plot, 
+                              id_vars=['seq_length_bin'], 
+                              value_vars=ce_columns,
+                              var_name='model', 
+                              value_name='ce_loss')
+            
+            # Convert model names from 'ce_modelname' to just 'modelname'
+            df_melt['model'] = df_melt['model'].apply(lambda x: x.split('_')[1])
+            model_display_map = {model: self.model_labels[model] for model in self.models}
+            df_melt['model_display'] = df_melt['model'].map(model_display_map)
+            
+            # Create boxplot
+            fig, ax = plt.subplots(figsize=figsize)
+            
+            # Use Seaborn's boxplot
+            sns.boxplot(
+                data=df_melt,
+                x='seq_length_bin',
+                y='ce_loss',
+                hue='model_display',
+                palette=self.colors,
+                showfliers=False,  # Don't show outliers for cleaner visualization
+                ax=ax
+            )
+            
+            # Add individual data points for better visualization
+            sns.stripplot(
+                data=df_melt,
+                x='seq_length_bin',
+                y='ce_loss',
+                hue='model_display',
+                palette=self.colors,
+                dodge=True,
+                size=3,
+                alpha=0.2,
+                ax=ax,
+                legend=False
+            )
+            
+            # Customize plot
+            #ax.set_title('Cross-Entropy Loss Distribution by Sequence Length', fontsize=16)
+            ax.set_xlabel('Sequence Length Range', fontsize=14)
+            ax.set_ylabel('Cross-Entropy Loss', fontsize=14)
+            ax.legend(fontsize=12, title_fontsize=13)
+            
+            # Add grid for better readability
+            ax.grid(axis='y', alpha=0.3)
+            
+            plt.tight_layout()
+            
+            # Save if path is provided
+            if save_path:
+                plt.savefig(save_path, dpi=300, bbox_inches='tight')
+                
+            return fig
+   
+    
+    def plot_entropy_by_seq_length(self, 
+                                   seq_bins: list = [0, 25, 50, 75, 100, 150, 512],
+                                   figsize: tuple = (12, 6),
+                                   save_path: Optional[str] = None):
+        """
+        Create a seaborn boxplot to visualize how entropy changes across different
+        sequence length ranges for all models.
+        
+        Parameters:
+        -----------
+        seq_bins : list, optional
+            Sequence length bin edges for categorization
+        figsize : tuple, optional
+            Figure size (width, height)
+        save_path : str, optional
+            Path to save the figure
+            
+        Returns:
+        --------
+        matplotlib.figure.Figure
+            The generated figure
+        """
+        
+        # Create a copy of the data to avoid modifying the original
+        df_plot = self.df.copy()
+        
+        # Create sequence length bins
+        df_plot['seq_length_bin'] = pd.cut(
+            df_plot['sequence_length'], 
+            bins=seq_bins, 
+            labels=[f'{seq_bins[i]}-{seq_bins[i+1]}' for i in range(len(seq_bins)-1)]
+        )
+        
+        # Prepare data for boxplot - melt the dataframe
+        entropy_columns = [f'entropy_{model}' for model in self.models]
+        df_melt = pd.melt(df_plot, 
+                          id_vars=['seq_length_bin'], 
+                          value_vars=entropy_columns,
+                          var_name='model', 
+                          value_name='entropy')
+        
+        # Convert model names from 'entropy_modelname' to just 'modelname'
+        df_melt['model'] = df_melt['model'].apply(lambda x: x.split('_')[1])
+        model_display_map = {model: self.model_labels[model] for model in self.models}
+        df_melt['model_display'] = df_melt['model'].map(model_display_map)
+        
+        # Create boxplot
+        fig, ax = plt.subplots(figsize=figsize)
+        
+        # Use Seaborn's boxplot
+        sns.boxplot(
+            data=df_melt,
+            x='seq_length_bin',
+            y='entropy',
+            hue='model_display',
+            palette=self.colors,
+            showfliers=False,  # Don't show outliers for cleaner visualization
+            ax=ax
+        )
+        
+        # Add individual data points for better visualization
+        sns.stripplot(
+            data=df_melt,
+            x='seq_length_bin',
+            y='entropy',
+            hue='model_display',
+            palette=self.colors,
+            dodge=True,
+            size=3,
+            alpha=0.2,
+            ax=ax,
+            legend=False
+        )
+        
+        # Customize plot
+        #ax.set_title('Entropy Distribution by Sequence Length', fontsize=16)
+        ax.set_xlabel('Sequence Length Range', fontsize=14)
+        ax.set_ylabel('Entropy', fontsize=14)
+        ax.legend(fontsize=12, title_fontsize=13)
+        
+        # Add grid for better readability
+        ax.grid(axis='y', alpha=0.3)
+        
+        plt.tight_layout()
+        
+        # Save if path is provided
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            
+        return fig
+   
+    
     def plot_all(self, output_dir: Optional[str] = None):
         """
         Generate and save all visualization types.
@@ -626,6 +830,14 @@ class MetricsSummary:
         # Calibration plots with equal width bins
         calib_equal_width_path = os.path.join(output_dir, f'calibration{metrics_str}.png')
         self.plot_calibration(equal_bins=True, save_path=calib_equal_width_path)
+        
+        # CE by sequence length barplot
+        ce_seq_length_path = os.path.join(output_dir, f'ce_seq_length{metrics_str}.png')
+        self.plot_ce_by_seq_length(save_path=ce_seq_length_path)
+        
+        # Entropy by sequence length barplot
+        entropy_seq_length_path = os.path.join(output_dir, f'entropy_seq_length{metrics_str}.png')
+        self.plot_entropy_by_seq_length(save_path=entropy_seq_length_path)        
        
         print(f"All figures saved to {output_dir}")
 
@@ -633,7 +845,8 @@ class MetricsSummary:
 # Example usage:
 if __name__ == "__main__":
     # Initialize with data path
-    data_path = '/workspace/removing-layer-norm/mech_interp/inference_logs/gpt2-medium_dataset_luca-pile_samples_1000_seqlen_512_prepend_False/inference_results.parquet'
-    metrics_comparison = MetricsSummary(data_path, agg=False)
+    model_str = 'medium'
+    data_path = f'/workspace/removing-layer-norm/mech_interp/inference_logs/gpt2-{model_str}_dataset_luca-pile_samples_1000_seqlen_512_prepend_False/inference_results.parquet'
+    metrics_comparison = MetricsSummary(data_path, model_type=model_str, agg=False)
     # Generate and save all plots
-    metrics_comparison.plot_all('figures/medium')
+    metrics_comparison.plot_all(f'figures/{model_str}')
