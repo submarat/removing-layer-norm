@@ -3,9 +3,10 @@ import sys
 import copy
 import os
 import numpy as np
-import pandas as pd
 import torch as t
 import matplotlib.pylab as plt
+from matplotlib.patches import Patch
+import seaborn as sns
 import einops
 from tqdm.auto import tqdm
 
@@ -44,7 +45,7 @@ class AblationAnalyzer:
                 dataset_name="luca-pile",
                 batch_size=5,
                 max_context=512,
-                num_samples=1000,
+                num_samples=250,
                 prepend_bos=False
                 ).create_dataloader()        
         
@@ -213,7 +214,7 @@ class AblationAnalyzer:
         self.simulated_entropy = t.cat(all_entropies)
         
         # Check that loss from original model is close to our 'simulation'
-        print(f"Reference loss: {self.ref_loss.mean().item():.4f}, Simulated loss: {self.simulated_loss.mean().item():.4f}")
+        print(f"Reference loss: {self.simulated_loss.mean().item():.4f}, Simulated loss: {self.simulated_loss.mean().item():.4f}")
         print(f"Simulated entropy: {self.simulated_entropy.mean().item():.4f}")
  
         return self
@@ -292,7 +293,8 @@ class AblationAnalyzer:
         total_effect_entropy = (self.simulated_entropy - total_entropy_ablated).abs().cpu().numpy()
             
         return {'loss_effect' : total_effect_loss,
-                'entropy_effect': total_effect_entropy}
+                'entropy_effect': total_effect_entropy
+        }
     
     def run_ablation(self, neuron_indices):
         """
@@ -316,7 +318,7 @@ class AblationAnalyzer:
         return self.results        
 
 
-def plot_model_comparison(model_results, save_path=None, metric='loss_effect'):
+def plot_model_comparison(model_results, model_type='small', save_path=None, metric='loss_effect'):
     """
     Create a single box plot comparing total effects across models for each neuron.
     
@@ -335,6 +337,12 @@ def plot_model_comparison(model_results, save_path=None, metric='loss_effect'):
         'legend.fontsize': 16,     # Legend font size
         'legend.title_fontsize': 16  # Legend title font size
     }) 
+    model_type = model_type.capitalize()
+    model_labels = {
+            'baseline': f'{model_type} original',
+            'finetuned': f'{model_type} FT',
+            'noLN': f'{model_type} LN-free'
+        }
     
     # Set plot strings based on metric
     if metric == 'loss_effect':
@@ -357,7 +365,7 @@ def plot_model_comparison(model_results, save_path=None, metric='loss_effect'):
     neuron_indices = sorted(neuron_indices, key=lambda x: int(x))
     
     # Get default matplotlib colors
-    colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+    colors = sns.color_palette("colorblind")
     
     # Set up explicit colors for each model using default matplotlib colors
     model_colors = {
@@ -419,7 +427,7 @@ def plot_model_comparison(model_results, save_path=None, metric='loss_effect'):
     
     # Set axis labels and limits
     ax.set_ylabel(y_label)
-    ax.set_title(title)
+    #ax.set_title(title)
     
     # Set x-ticks at category centers
     ax.set_xticks(x_positions)
@@ -430,25 +438,73 @@ def plot_model_comparison(model_results, save_path=None, metric='loss_effect'):
         ax.axvline(x=i + 0.5, color='gray', linestyle='-', alpha=0.3)
     
     # Add legend
-    from matplotlib.patches import Patch
     legend_elements = [
-        Patch(facecolor=model_colors[model_name], edgecolor='black', label=model_name)
+        Patch(facecolor=model_colors[model_name],
+              edgecolor='black',
+              label=model_labels[model_name])
         for model_name in model_names
     ]
-    ax.legend(handles=legend_elements, title="Models", loc='upper right')
+    ax.legend(handles=legend_elements, loc='upper right')
     
     fig.tight_layout()
     if save_path:
         fig.savefig(save_path, dpi=300)
     
     return fig
+
+def print_ablation_summary(model_results):
+    """
+    Simple function to print ablation summary with relative changes.
+    
+    Args:
+        model_results: Dictionary of ablation results per model and neuron
+        analyzers: Dictionary mapping model names to AblationAnalyzer instances 
+                  (or just their reference metrics)
+    """
+    
+    print("\n=== ABLATION EFFECTS SUMMARY ===\n")
+    
+    # Get neuron indices
+    neuron_indices = []
+    for model_name in model_results:
+        for key in model_results[model_name]:
+            if key not in neuron_indices:
+                neuron_indices.append(key)
+    
+    # Sort neuron indices
+    neuron_indices = sorted(neuron_indices, key=lambda x: int(x))
+    
+    for neuron_idx in neuron_indices:
+        print(f"NEURON {neuron_idx}:")
+        
+        for model_name in model_results:
+            print(f"Model name : {model_name}")
+            if neuron_idx in model_results[model_name]:
+                # Get absolute effect values
+                loss_effect = model_results[model_name][neuron_idx]['loss_effect']
+                entropy_effect = model_results[model_name][neuron_idx]['entropy_effect']
+                
+                # Calculate statistics for absolute effects
+                loss_median = np.median(loss_effect)
+                loss_q1 = np.percentile(loss_effect, 25)
+                loss_q3 = np.percentile(loss_effect, 75)
+                
+                entropy_median = np.median(entropy_effect)
+                entropy_q1 = np.percentile(entropy_effect, 25)
+                entropy_q3 = np.percentile(entropy_effect, 75)
+                
+                # Print absolute change
+                print(f"    CE Loss Abs:   {loss_median:.4f} [{loss_q1:.4f} - {loss_q3:.4f}]")
+                print(f"    Entropy Abs:   {entropy_median:.4f} [{entropy_q1:.4f} - {entropy_q3:.4f}]") 
+            print()  # Empty line between models
+        print()  # Empty line between neurons 
    
     
 if __name__ == "__main__":
-    #entropy_neuron_indices = [584, 2123, 2870]  # Small
-    entropy_neuron_indices = [3144, 1083, 1108] # Medium
+    entropy_neuron_indices = [584, 2123, 2870]  # Small
+    #entropy_neuron_indices = [3144, 1083, 1108] # Medium
     models = ['baseline', 'finetuned', 'noLN']
-    model_size = 'medium'
+    model_size = 'small'
     save_path = f'figures/{model_size}'
     os.makedirs(save_path, exist_ok=True)
 
@@ -471,17 +527,22 @@ if __name__ == "__main__":
         # Free up cache for next model
         del model, analyzer
         t.cuda.empty_cache()
+
+    # Print summary results
+    print_ablation_summary(model_results)
     
     # Plot loss effect
     plot_model_comparison(
-        model_results, 
+        model_results,
+        model_size,
         save_path=f'{save_path}/all_models_loss_effect.png',
         metric='loss_effect'
     )
     
     # Plot entropy effect
     plot_model_comparison(
-        model_results, 
+        model_results,
+        model_size,
         save_path=f'{save_path}/all_models_entropy_effect.png',
         metric='entropy_effect'
     )

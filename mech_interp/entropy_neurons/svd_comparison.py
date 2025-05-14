@@ -5,8 +5,8 @@ import numpy as np
 import pandas as pd
 import torch as t
 import matplotlib.pylab as plt
+import seaborn as sns
 import einops
-from datasets import load_dataset
 
 # Add parent directory to path
 parent_dir = os.path.abspath(os.path.join(os.getcwd(), '..'))
@@ -14,10 +14,11 @@ sys.path.append(parent_dir)
 
 from load_models import ModelFactory
 
+
 # %%
 num_neurons = 7
-save_path = 'figures/medium'
-model_size = 'medium'
+model_size = 'small'
+save_path = f'figures/{model_size}'
 os.makedirs(save_path, exist_ok=True)
 
 # %%
@@ -28,7 +29,15 @@ model_factory = ModelFactory(model_names,
                              model_size=model_size)
 
 # Set up color schemes for consistent visualization
-colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+colors = sns.color_palette("colorblind")
+
+model_type = model_size.capitalize()
+model_labels = {
+            'baseline': f'{model_type} original',
+            'finetuned': f'{model_type} FT',
+            'noLN': f'{model_type} LN-free'
+        }
+
 model_colors = {
     'baseline': colors[0],
     'finetuned': colors[1],
@@ -106,11 +115,12 @@ for i, (model_name, model_results) in enumerate(results.items()):
     plt.scatter(L2_Wout[top_indices[:num_neurons]], var[top_indices[:num_neurons]], 
                 color='red', s=30, label='Entropy')
     
-    plt.xlabel('||w_out||')
-    plt.ylabel('LogitVar(w_out)')
+    plt.xlabel('||w_out||', fontsize=14)
+    if i == 0:
+        plt.ylabel('LogitVar(w_out)', fontsize=14)
     plt.yscale('log')
-    plt.title(f'{model_name}')
-    plt.legend()
+    plt.title(f'{model_labels[model_name]}', fontsize=14)
+    plt.legend(loc='upper right', fontsize=12)
 
 plt.tight_layout()
 plt.savefig(f'{save_path}/all_models_neurons.png', dpi=300)
@@ -118,27 +128,10 @@ plt.show()
 
 # %%
 # Create SVD plots with all models on the same plot - two columns: full and zoomed
-plt.figure(figsize=(15, 6))
+plt.figure(figsize=(8, 8))
 
 # Plot 1: Full SVD for all models
-plt.subplot(1, 2, 1)
-
-for model_name, model_results in results.items():
-    norm_S = model_results['norm_S']
-    x_vals = t.arange(norm_S.shape[0]).cpu().numpy()
-    
-    plt.plot(x_vals, norm_S.cpu().numpy(), 
-             lw=2, label=f'{model_name}', 
-             color=model_colors[model_name])
-
-plt.ylim(0, 0.5)
-plt.ylabel('Normalised Singular Values')
-plt.xlabel('Singular Vector Index')
-plt.title('SVD Comparison - All Models')
-plt.legend(loc='upper right')
-
-# Plot 2: Zoomed SVD for all models
-plt.subplot(1, 2, 2)
+plt.subplot(1, 1, 1)
 
 for model_name, model_results in results.items():
     S = model_results['S']
@@ -146,19 +139,20 @@ for model_name, model_results in results.items():
     x_vals = t.arange(norm_S.shape[0]).cpu().numpy()
     
     plt.plot(x_vals, norm_S.cpu().numpy(), 
-             lw=2, label=f'{model_name}', 
+             lw=2, label=f'{model_labels[model_name]}', 
              color=model_colors[model_name])
 
 plt.ylim(0, 0.001)
-plt.xlim(residual_stream_dim - 15, residual_stream_dim - 1)
-plt.ylabel('Normalised Singular Values')
-plt.xlabel('Singular Vector Index')
-plt.title('SVD Comparison - Zoomed')
-plt.legend(loc='upper left')
+plt.xlim(residual_stream_dim - 19, residual_stream_dim - 1)
+plt.ylabel('Normalised Singular Values', fontsize=14)
+plt.xlabel('Singular Vector Index', fontsize=14)
+#plt.title('SVD Comparison - Nullspace')
+plt.legend(loc='upper right', fontsize=12)
 
 plt.tight_layout()
 plt.savefig(f'{save_path}/all_models_SVD_comparison.png', dpi=300)
 plt.show()
 
 # %%
-print(results['baseline']['top_indices'][:10])
+arr = results['baseline']['top_indices'][:50]
+print(str(arr.tolist()).replace(' ', ''))

@@ -7,7 +7,6 @@ import pandas as pd
 import torch as t
 import matplotlib.pylab as plt
 from matplotlib.ticker import MaxNLocator
-import seaborn as sns
 import einops
 from tqdm.auto import tqdm
 
@@ -19,7 +18,7 @@ from load_dataset import DataLoader
 from load_models import ModelFactory
 
     
-class CumulativeAblation:
+class AblationAnalyzer:
     def __init__(self, model, model_name, batch_size=512):
         """
         Initialize the AblationAnalyzer with either a model or a model_loader.
@@ -33,7 +32,6 @@ class CumulativeAblation:
         self.n_layers = model.cfg.n_layers
         for param in self.model.parameters():
             param.requires_grad_(False)
-       
             
         self.model_name = model_name
         self.batch_size = batch_size
@@ -42,7 +40,7 @@ class CumulativeAblation:
                 dataset_name="luca-pile",
                 batch_size=5,
                 max_context=512,
-                num_samples=250,
+                num_samples=1000,
                 prepend_bos=False
                 ).create_dataloader()        
         
@@ -315,9 +313,12 @@ class CumulativeAblation:
         return loss, entropy
    
 if __name__ == "__main__":
-    entropy_neuron_indices = [584, 2123, 2870]  # Small
-    #entropy_neuron_indices = [3144, 1083, 1108] # Medium
-    models = ['baseline', 'finetuned', 'noLN']
+    entropy_neuron_indices = ([
+        584,2123,2870,2378,1611,2910,2044,553,1927,598,2227,2604,541,1577,2256,2928,2462,2032,2727,2377,2129,1480,1245,411,1186,2484,2301,2460,1078,2173,1322,1506,459,2172,2873,274,1157,60,480,421,2294,1486,350,376,435,2957,2837,2769,2489,2013
+    ])
+    noLN_ce = 3.045
+    noLN_entropy = 2.784
+    models = ['finetuned']
     model_size = 'small'
     save_path = f'figures/{model_size}'
     os.makedirs(save_path, exist_ok=True)
@@ -330,7 +331,7 @@ if __name__ == "__main__":
                              model_size=model_size).models[model_type]
     
         # Create analyzer
-        analyzer = CumulativeAblation(model=model, model_name=model_type)
+        analyzer = AblationAnalyzer(model=model, model_name=model_type)
         # Run analysis
         analyzer.extract_activations()
         analyzer.run_simulation()
@@ -349,23 +350,8 @@ if __name__ == "__main__":
             model_results[model_type].append([loss_stats, entropy_stats])
             
     # %% 
-    plt.rcParams.update({
-        'font.size': 16,           # Base font size
-        'axes.titlesize': 20,      # Title font size
-        'axes.labelsize': 18,      # Axis label font size
-        'xtick.labelsize': 16,     # X tick label size
-        'ytick.labelsize': 16,     # Y tick label size
-        'legend.fontsize': 16,     # Legend font size
-        'legend.title_fontsize': 16  # Legend title font size
-    }) 
-    model_str = model_size.capitalize()
-    model_labels = {
-            'baseline': f'{model_str} original',
-            'finetuned': f'{model_str} FT',
-            'noLN': f'{model_str} LN-free'
-        }    
     # Get default matplotlib colors
-    colors = sns.color_palette("colorblind")
+    colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
     
     # FIRST PLOT: Cross-Entropy Loss (relative change)
     plt.figure(figsize=(10, 6))
@@ -373,21 +359,18 @@ if __name__ == "__main__":
     for idx, model_type in enumerate(models):
         # Extract means for loss
         ce_losses_mean = [r[0][0] for r in model_results[model_type]]  # r[0] is loss_stats, [0] is mean
-        
-        # Calculate relative change compared to first index (0 ablated neurons)
-        baseline_ce = ce_losses_mean[0]
-        ce_relative_change = [(ce - baseline_ce) / baseline_ce * 100 for ce in ce_losses_mean]
         # Create x-axis values (number of ablated neurons)
         num_ablated = list(range(len(ce_losses_mean)))
         
         # Plot relative CE Loss change
-        plt.plot(num_ablated, ce_relative_change, 'o-', lw=2,
-                 color=colors[idx], alpha=0.8, label=model_labels[model_type])
+        plt.plot(num_ablated, ce_losses_mean, 'o-', lw=2,
+                 color=colors[idx], alpha=0.8, label=model_type)
     
+    plt.axhline(y=noLN_ce, linestyle='--', lw=3, color='k', label='noLN CE')
     plt.gca().xaxis.set_major_locator(MaxNLocator(integer=True))
-    plt.xlabel('Number of Neurons Ablated', fontsize=14)
-    plt.ylabel('Change in Cross-Entropy Loss (%)', fontsize=14)
-    #plt.title('Relative Effect of Neuron Ablation on Cross-Entropy Loss', fontsize=16)
+    plt.xlabel('Number of Entropy Neurons Ablated', fontsize=14)
+    plt.ylabel('Cross-Entropy', fontsize=14)
+    plt.title('Cumulative entropy neuron ablation (CE Loss)', fontsize=16)
     plt.tick_params(axis='both', which='major', labelsize=12)
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.legend(fontsize=16)
@@ -395,8 +378,8 @@ if __name__ == "__main__":
     # Adjust layout
     plt.tight_layout()
     
-    # Save the CE Loss plot
-    plt.savefig(f'{save_path}/cumulative_ce_ablation.png', dpi=300, bbox_inches='tight')
+    # Save the CE Loss plots
+    plt.savefig(f'{save_path}/transform_baseline_ce.png', dpi=300, bbox_inches='tight')
     plt.close()  # Close the figure to free memory
     
     # SECOND PLOT: Entropy (relative change)
@@ -406,21 +389,18 @@ if __name__ == "__main__":
         # Extract means for entropy
         entropies_mean = [r[1][0] for r in model_results[model_type]]  # r[1] is entropy_stats, [0] is mean
         
-        # Calculate relative change compared to first index (0 ablated neurons)
-        baseline_entropy = entropies_mean[0]
-        entropy_relative_change = [(e - baseline_entropy) / baseline_entropy * 100 for e in entropies_mean]
-       
         # Create x-axis values (number of ablated neurons)
         num_ablated = list(range(len(entropies_mean)))
         
         # Plot relative Entropy change
-        plt.plot(num_ablated, entropy_relative_change, 'o-', lw=2,
-                 color=colors[idx], alpha=0.8, label=model_labels[model_type])    
+        plt.plot(num_ablated, entropies_mean, 'o-', lw=2,
+                 color=colors[idx], alpha=0.8, label=model_type)    
 
+    plt.axhline(y=noLN_entropy, linestyle='--', lw=3, color='k', label='noLN CE')
     plt.gca().xaxis.set_major_locator(MaxNLocator(integer=True))
-    plt.xlabel('Number of Neurons Ablated', fontsize=14)
-    plt.ylabel('Change in Entropy (%)', fontsize=14)
-    #plt.title('Relative Effect of Neuron Ablation on Entropy', fontsize=16)
+    plt.xlabel('Number of Entropy Neurons Ablated', fontsize=14)
+    plt.ylabel('Entropy', fontsize=14)
+    plt.title('Cumulative entropy neuron ablation (Entropy)', fontsize=16)
     plt.tick_params(axis='both', which='major', labelsize=12)
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.legend(fontsize=16)
@@ -429,7 +409,6 @@ if __name__ == "__main__":
     plt.tight_layout()
     
     # Save the Entropy plot
-    plt.savefig(f'{save_path}/cumulative_entropy_ablation.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'{save_path}/transform_baseline_entropy.png', dpi=300, bbox_inches='tight')
     plt.close()  # Close the figure to free memory 
-
 # %%
