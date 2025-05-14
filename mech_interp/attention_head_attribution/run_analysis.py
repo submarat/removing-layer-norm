@@ -64,8 +64,12 @@ class AttentionAttributionAnalysis:
         self.max_context = max_context
         self.num_samples = num_samples
         self.prepend_bos = prepend_bos
-        self.num_heads = 12
-        self.num_layers = 12
+        if self.model_size == 'small':
+            self.num_heads = 12
+            self.num_layers = 12
+        elif self.model_size == 'medium':
+            self.num_heads = 16
+            self.num_layers = 24
         
         self.device = utils.get_device()
         self.model_results = {model: {} for model in model_types}
@@ -228,20 +232,23 @@ class AttentionAttributionAnalysis:
             save_dir: Directory to save the plots
             outlier_range: Tuple of (low, high) percentiles to filter outliers per model
         """
+        colors = sns.color_palette("colorblind")
+        model_colors = {
+            'baseline': colors[0],
+            'finetuned': colors[1],
+            'noLN': colors[2]
+        }
+        model_str = self.model_size.capitalize()
+        model_labels = {
+                    'baseline': f'{model_str} original',
+                    'finetuned': f'{model_str} FT',
+                    'noLN': f'{model_str} LN-free'
+                }
+      
         for metric in ['absolute', 'relative']:
             # The order of models to display
             model_order = self.model_types
-            
-            # Get default matplotlib colors
-            colors = sns.color_palette("colorblind")
-            
-            # Set up explicit colors for each model using default matplotlib colors
-            model_colors = {
-                model: colors[i % len(colors)] for i, model in enumerate(model_order)
-            }
-            
             plt.figure(figsize=(10, 6))
-            
             # Calculate statistics and plot each model
             for model in model_order:
                 # Get flattened data for this model
@@ -266,9 +273,9 @@ class AttentionAttributionAnalysis:
                 
                 # Create label with interval bounds
                 if metric == 'relative':
-                    label_str = f"{model}: {median:.2f}% [{q25:.2f}, {q75:.2f}]%"
+                    label_str = f"{model_labels[model]}: {median:.2f}% [{q25:.2f}, {q75:.2f}]%"
                 else:
-                    label_str = f"{model}: {median:.3f} [{q25:.3f}, {q75:.3f}]"
+                    label_str = f"{model_labels[model]}: {median:.3f} [{q25:.3f}, {q75:.3f}]"
                 
                 # Plot histogram
                 plt.hist(
@@ -328,7 +335,7 @@ class AttentionAttributionAnalysis:
                     median_per_head[model] = median_per_head[model].reshape(self.num_layers, self.num_heads)
                 else:
                     # If there's a mismatch, just use what we have
-                    print(f"Warning: Expected {n_layers * n_heads} heads for {model}, but got {len(median_per_head[model])}")
+                    print(f"Warning: Expected {self.num_layers * self.num_heads} heads for {model}, but got {len(median_per_head[model])}")
             
             # Determine global colorscale range
             all_values = np.concatenate([median_per_head[model].flatten() for model in model_order])
@@ -356,7 +363,14 @@ class AttentionAttributionAnalysis:
                         zmid=0 if metric == 'relative' else None,
                         zmin=vmin,
                         zmax=vmax,
-                        showscale=i == len(model_order) - 1,  # Only show colorbar for last model
+                        showscale=i == len(model_order) - 1,
+                        colorbar=dict(
+                            title=dict(
+                                text="Relative change in logit (%)",
+                                side="right",
+                                font=dict(size=14)
+                                )
+                            )
                     ),
                     row=1, col=i+1
                 )
@@ -419,18 +433,19 @@ class AttentionAttributionAnalysis:
 
 if __name__ == '__main__':
     # Example usage
+    model_str = 'small'
     analyzer = AttentionAttributionAnalysis(
         model_types=['baseline', 'finetuned', 'noLN'],
         model_dir="../models",
-        model_size="small"
+        model_size=model_str,
     )
     
     # Run the analysis
     results = analyzer.run_analysis()
     
     # Plot the results
-    analyzer.plot_histograms(save_dir='figures')
-    analyzer.plot_heatmaps(save_dir='figures')
+    analyzer.plot_histograms(save_dir=f'figures/{model_str}')
+    analyzer.plot_heatmaps(save_dir=f'figures/{model_str}')
     
     # Get summary statistics
     stats = analyzer.get_summary_statistics()
