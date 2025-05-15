@@ -2,11 +2,10 @@ import os
 import sys
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.animation as animation
 import torch
-from typing import Dict, List, Optional, Union, Literal, Tuple
-from transformer_lens import HookedTransformer
+import matplotlib.pyplot as plt
+import seaborn as sns
+from typing import Dict, Optional, Union
 from tqdm import tqdm
 
 # Add parent directory to path
@@ -56,12 +55,18 @@ class ResidualNorms:
                                           model_size=model_size)
 
         # Set up color schemes for consistent visualization
-        self.colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+        self.colors = sns.color_palette("colorblind")
         self.model_colors = {
             'baseline': self.colors[0],
             'finetuned': self.colors[1],
             'noLN': self.colors[2]
         }
+        model_str = model_size.capitalize()
+        self.model_labels = {
+                    'baseline': f'GPT2-{model_str} original',
+                    'finetuned': f'GPT2-{model_str} vanilla FT',
+                    'noLN': f'GPT2-{model_str} LN-free FT'
+                }
 
         self.l2_norms = {model_name: {} for model_name in self.model_names}
         self.norm_growth_results = {model_name: {} for model_name in self.model_names}
@@ -367,7 +372,8 @@ class ResidualNorms:
                 
                 # Plot with shaded uncertainty region
                 x = np.arange(len(means))
-                ax.plot(x, means, 'o-', label=model_name, color=self.model_colors[model_name])
+                ax.plot(x, means, 'o-', label=self.model_labels[model_name],
+                        color=self.model_colors[model_name])
                 ax.fill_between(x, 
                                [m - s for m, s in zip(means, stds)],
                                [m + s for m, s in zip(means, stds)],
@@ -375,13 +381,13 @@ class ResidualNorms:
             
             # Set labels and title
             readable_labels = create_readable_tick_labels(x_labels)
-            ax.set_xlabel('Layer')
-            ax.set_ylabel('L2 Norm')
-            ax.set_title(f'{pos_title}')
+            ax.set_xlabel('Layer', fontsize=12)
+            ax.set_ylabel('L2 Norm', fontsize=12)
+            #ax.set_title(f'{pos_title}')
             ax.set_xticks(np.arange(len(x_labels)))
             ax.set_xticklabels(readable_labels, rotation=45, ha='right')
             ax.grid(True, linestyle='--', alpha=0.7)
-            ax.legend()
+            ax.legend(loc='upper right', fontsize=14)
 
             # Set consistent y-axis limits for both subplots
             ax.set_ylim(global_min * 0.9, global_max * 1.1)
@@ -462,23 +468,24 @@ class ResidualNorms:
                         stds.append(std)
                 
                 # Plot with shaded uncertainty region
-                ax.plot(x, means, 'o-', label=model_name, color=self.model_colors[model_name])
+                ax.plot(x, means, 'o-', label=self.model_labels[model_name],
+                        color=self.model_colors[model_name])
                 ax.fill_between(x,
                                [max(0, m - s) for m, s in zip(means, stds)],  # Ensure lower bound >= 0
                                [min(1, m + s) for m, s in zip(means, stds)],  # Ensure upper bound <= 1
                                alpha=0.2, color=self.model_colors[model_name])
             
             # Set labels and title
-            ax.set_xlabel('Layer Output')
-            ax.set_ylabel('Cosine Similarity')
-            ax.set_title(f'{pos_title}')
+            ax.set_xlabel('Layer Output', fontsize=12)
+            ax.set_ylabel('Cosine Similarity', fontsize=12)
+            #ax.set_title(f'{pos_title}',)
             
             # Set x-ticks
             readable_labels = create_readable_tick_labels(x_labels)
             ax.set_xticks(np.arange(len(x_labels)))
             ax.set_xticklabels(readable_labels, rotation=45, ha='right')
             ax.grid(True, linestyle='--', alpha=0.7)
-            ax.legend()
+            ax.legend(fontsize=14)
             
             # Set y-axis limits between 0 and 1
             ax.set_ylim(0, 1)
@@ -568,7 +575,8 @@ class ResidualNorms:
                         stds.append(std)
                 
                 # Plot with shaded uncertainty region
-                ax.plot(x, means, 'o-', label=model_name, color=self.model_colors[model_name])
+                ax.plot(x, means, 'o-', label=self.model_labels[model_name],
+                        color=self.model_colors[model_name])
                 ax.fill_between(x, 
                                [m - s for m, s in zip(means, stds)],
                                [m + s for m, s in zip(means, stds)],
@@ -579,13 +587,13 @@ class ResidualNorms:
             
             # Set labels and title
             readable_labels = create_readable_tick_labels(x_labels)
-            ax.set_xlabel('Layer Transition')
-            ax.set_ylabel('L2 Norm Growth Ratio (Output/Input)')
-            ax.set_title(f'{pos_title}')
+            ax.set_xlabel('Layer Transition', fontsize=12)
+            ax.set_ylabel('L2 Norm Growth Ratio (Output/Input)', fontsize=12)
+            #ax.set_title(f'{pos_title}')
             ax.set_xticks(np.arange(len(x_labels)))
             ax.set_xticklabels(readable_labels, rotation=45, ha='right')
             ax.grid(True, linestyle='--', alpha=0.7)
-            ax.legend()
+            ax.legend(fontsize=14)
 
             # Set consistent y-axis limits for both subplots
             ax.set_ylim(global_min * 0.9, global_max * 1.1)
@@ -647,16 +655,17 @@ def create_readable_tick_labels(layers):
 
 
 if __name__ == '__main__':
-    data_paths = '/workspace/removing-layer-norm/mech_interp/inference_logs/gpt2-medium_dataset_luca-pile_samples_1000_seqlen_512_prepend_False/inference_results.parquet'
-    output_dir = 'figures/medium/bos_vs_rest'
+    model_str = 'small'
+    data_paths = f'/workspace/removing-layer-norm/mech_interp/inference_logs/gpt2-{model_str}_dataset_luca-pile_samples_1000_seqlen_512_prepend_False/inference_results.parquet'
+    output_dir = 'figures/medium/last_token'
     # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)
     
     analyzer = ResidualNorms(
         data_paths=data_paths,
         model_dir="../models",
-        last_token_only=False,
-        model_size='medium'
+        last_token_only=True,
+        model_size=model_str
     )
     
     # Run analysis and generate plots
