@@ -395,7 +395,7 @@ class ResidualNorms:
             # Set consistent y-axis limits for both subplots
             ax.set_ylim(global_min * 0.9, global_max * 1.1)
         
-        plt.tight_layout(pad=0.5, rect=[0, 0.1, 1, 1])
+        plt.tight_layout()
         if save_path:
             plt.savefig(save_path, dpi=200)
         else:
@@ -664,7 +664,7 @@ def create_readable_tick_labels(layers):
 
 
 if __name__ == '__main__':
-    model_str = 'small'
+    model_str = 'medium'
     data_paths = f'/workspace/removing-layer-norm/mech_interp/inference_logs/gpt2-{model_str}_dataset_luca-pile_samples_1000_seqlen_512_prepend_False/inference_results.parquet'
     output_dir = f'figures/{model_str}/bos_vs_rest'
     # Ensure output directory exists
