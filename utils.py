@@ -78,7 +78,6 @@ def calculate_sink_rate(model, attentions, eps=0.3):
     # Calculate the sink rate for each input in the batch
     sink_rate = torch.zeros((B,), device=attentions[0].device)
     for attn in attentions:
-        print(attn.shape)
         # Heads attending to sink
         y = attn[:,:,:,0] > eps # Bool[B, T, H]
         # Number of heads attending to sink for each position
