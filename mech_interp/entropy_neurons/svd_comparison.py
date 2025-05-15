@@ -17,7 +17,7 @@ from load_models import ModelFactory
 
 # %%
 num_neurons = 7
-model_size = 'small'
+model_size = 'medium'
 save_path = f'figures/{model_size}'
 os.makedirs(save_path, exist_ok=True)
 
@@ -33,9 +33,9 @@ colors = sns.color_palette("colorblind")
 
 model_type = model_size.capitalize()
 model_labels = {
-            'baseline': f'{model_type} original',
-            'finetuned': f'{model_type} FT',
-            'noLN': f'{model_type} LN-free'
+            'baseline': f'GPT2-{model_type} original',
+            'finetuned': f'GPT2-{model_type} vanilla FT',
+            'noLN': f'GPT2-{model_type} LN-free FT'
         }
 
 model_colors = {
