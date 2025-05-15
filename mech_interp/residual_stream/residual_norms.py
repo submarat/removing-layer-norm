@@ -20,7 +20,7 @@ class ResidualNorms:
                  data_paths: Union[str, Dict[str, str]],
                  model_dir: str = "../models",
                  model_size: str = 'small',
-                 num_samples: Optional[int] = None,
+                 num_samples: Optional[int] = 1000,
                  random_seed: int = 42,
                  last_token_only: bool = False,
                  device: Optional[str] = None):
@@ -325,11 +325,11 @@ class ResidualNorms:
         # Define positions for analysis
         if self.last_token_only:
             positions = [('first', 'Last Token Norm')]
-            fig, axes = plt.subplots(1, 1, figsize=(14, 8))
+            fig, axes = plt.subplots(1, 1, figsize=(10, 8))
             axes = np.array([[axes]])  # Make it 2D for consistent indexing
         else:
             positions = [('first', 'First Token Norm'), ('others', 'Other Token Norms')]
-            fig, axes = plt.subplots(1, 2, figsize=(20, 8))
+            fig, axes = plt.subplots(1, 2, figsize=(16, 6))
             axes = axes.reshape(1, -1)  # Make it 2D for consistent indexing
 
         # Calculate global min and max values for consistent y-axis scaling
@@ -381,18 +381,21 @@ class ResidualNorms:
             
             # Set labels and title
             readable_labels = create_readable_tick_labels(x_labels)
-            ax.set_xlabel('Layer', fontsize=12)
-            ax.set_ylabel('L2 Norm', fontsize=12)
-            ax.set_title(f'{pos_title}')
+            if pos_idx == 0:
+                ax.set_ylabel('L2 Norm', fontsize=16)
+            ax.tick_params(axis='y', labelsize=12)
+            #ax.set_title(f'{pos_title}')
             ax.set_xticks(np.arange(len(x_labels)))
-            ax.set_xticklabels(readable_labels, rotation=45, ha='right')
-            ax.grid(True, linestyle='--', alpha=0.7)
-            ax.legend(loc='upper right', fontsize=14)
+            ax.set_xticklabels(readable_labels, rotation=80, ha='center', va='top',
+                               fontsize=12)
+            ax.grid(axis='x', linestyle='--', alpha=0.7)
+            if pos_idx == 1:
+                ax.legend(loc='upper right', fontsize=16)
 
             # Set consistent y-axis limits for both subplots
             ax.set_ylim(global_min * 0.9, global_max * 1.1)
         
-        plt.tight_layout()
+        plt.tight_layout(pad=0.5, rect=[0, 0.1, 1, 1])
         if save_path:
             plt.savefig(save_path, dpi=200)
         else:
@@ -416,11 +419,11 @@ class ResidualNorms:
     
         if self.last_token_only:
             positions = [('first', 'Last Token Cosine Similarity')]
-            fig, axes = plt.subplots(1, 1, figsize=(14, 8))
+            fig, axes = plt.subplots(1, 1, figsize=(10, 8))
             axes = np.array([[axes]])
         else:
             positions = [('first', 'First Token Cosine Similarity'), ('others', 'Other Token Cosine Similarity')]
-            fig, axes = plt.subplots(1, 2, figsize=(28, 8))
+            fig, axes = plt.subplots(1, 2, figsize=(16, 6))
             axes = axes.reshape(1, -1)
             
         # Compute cosine similarity for each model and pair
@@ -476,16 +479,19 @@ class ResidualNorms:
                                alpha=0.2, color=self.model_colors[model_name])
             
             # Set labels and title
-            ax.set_xlabel('Layer Output', fontsize=12)
-            ax.set_ylabel('Cosine Similarity', fontsize=12)
-            ax.set_title(f'{pos_title}')
-            
+            #ax.set_title(f'{pos_title}')
             # Set x-ticks
             readable_labels = create_readable_tick_labels(x_labels)
+            if pos_idx == 0:
+                ax.set_ylabel('Cosine Similarity', fontsize=16)
+            ax.tick_params(axis='y', labelsize=12)
+            #ax.set_title(f'{pos_title}')
             ax.set_xticks(np.arange(len(x_labels)))
-            ax.set_xticklabels(readable_labels, rotation=45, ha='right')
-            ax.grid(True, linestyle='--', alpha=0.7)
-            ax.legend(fontsize=14)
+            ax.set_xticklabels(readable_labels, rotation=80, ha='center', va='top',
+                               fontsize=12)
+            ax.grid(axis='x', linestyle='--', alpha=0.7)
+            if pos_idx == 1:
+                ax.legend(loc='upper right', fontsize=16)
             
             # Set y-axis limits between 0 and 1
             ax.set_ylim(0, 1)
@@ -514,11 +520,11 @@ class ResidualNorms:
         
         if self.last_token_only:
             positions = [('first', 'Last Token Norm Growth')]
-            fig, axes = plt.subplots(1, 1, figsize=(14, 8))
+            fig, axes = plt.subplots(1, 1, figsize=(10, 8))
             axes = np.array([[axes]])
         else:
             positions = [('first', 'First Token Norm Growth'), ('others', 'Other Token Norm Growth')]
-            fig, axes = plt.subplots(1, 2, figsize=(24, 8))
+            fig, axes = plt.subplots(1, 2, figsize=(16, 6))
             axes = axes.reshape(1, -1)
             
         # First, calculate global min and max values for consistent y-axis scaling
@@ -587,13 +593,16 @@ class ResidualNorms:
             
             # Set labels and title
             readable_labels = create_readable_tick_labels(x_labels)
-            ax.set_xlabel('Layer Transition', fontsize=12)
-            ax.set_ylabel('L2 Norm Growth Ratio (Output/Input)', fontsize=12)
-            ax.set_title(f'{pos_title}')
+            if pos_idx == 0:
+                ax.set_ylabel('L2 Norm Growth (Output/Input)', fontsize=16)
+            ax.tick_params(axis='y', labelsize=12)
+            #ax.set_title(f'{pos_title}')
             ax.set_xticks(np.arange(len(x_labels)))
-            ax.set_xticklabels(readable_labels, rotation=45, ha='right')
-            ax.grid(True, linestyle='--', alpha=0.7)
-            ax.legend(fontsize=14)
+            ax.set_xticklabels(readable_labels, rotation=80, ha='center', va='top',
+                               fontsize=12)
+            ax.grid(axis='x', linestyle='--', alpha=0.7)
+            if pos_idx == 1:
+                ax.legend(loc='upper right', fontsize=16)
 
             # Set consistent y-axis limits for both subplots
             ax.set_ylim(global_min * 0.9, global_max * 1.1)
@@ -633,7 +642,7 @@ def create_readable_tick_labels(layers):
             idx = layer.replace("Resid_mid_", "")
             # Only show every second Attention layer
             if int(idx) % 2 == 1:
-                readable_labels.append(f"Attn out {idx}")
+                readable_labels.append(f"Attn {idx}")
             else:
                 readable_labels.append("")
         elif "Resid_pos" in layer:
@@ -641,7 +650,7 @@ def create_readable_tick_labels(layers):
             idx = layer.replace("Resid_post_", "")
             # Only show every second FFN layer
             if int(idx) % 2 == 1:
-                readable_labels.append(f"FFN out {idx}")
+                readable_labels.append(f"FFN        {idx}")
             else:
                 readable_labels.append("")
         else:
