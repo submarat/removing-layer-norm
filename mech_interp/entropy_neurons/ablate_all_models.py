@@ -43,7 +43,7 @@ class AblationAnalyzer:
         
         self.dataloader = DataLoader(
                 dataset_name="luca-pile",
-                batch_size=5,
+                batch_size=1,
                 max_context=512,
                 num_samples=250,
                 prepend_bos=False
@@ -339,9 +339,9 @@ def plot_model_comparison(model_results, model_type='small', save_path=None, met
     }) 
     model_type = model_type.capitalize()
     model_labels = {
-            'baseline': f'{model_type} original',
-            'finetuned': f'{model_type} FT',
-            'noLN': f'{model_type} LN-free'
+            'baseline': f'GPT2-{model_type} original',
+            'finetuned': f'GPT2-{model_type} vanilla FT',
+            'noLN': f'GPT2-{model_type} LN-free FT'
         }
     
     # Set plot strings based on metric
@@ -501,10 +501,10 @@ def print_ablation_summary(model_results):
    
     
 if __name__ == "__main__":
-    entropy_neuron_indices = [584, 2123, 2870]  # Small
-    #entropy_neuron_indices = [3144, 1083, 1108] # Medium
+    #entropy_neuron_indices = [584, 2123, 2870]  # Small
+    entropy_neuron_indices = [3144, 1083, 1108] # Medium
     models = ['baseline', 'finetuned', 'noLN']
-    model_size = 'small'
+    model_size = 'medium'
     save_path = f'figures/{model_size}'
     os.makedirs(save_path, exist_ok=True)
 

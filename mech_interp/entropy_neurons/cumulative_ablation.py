@@ -315,10 +315,10 @@ class CumulativeAblation:
         return loss, entropy
    
 if __name__ == "__main__":
-    entropy_neuron_indices = [584, 2123, 2870]  # Small
-    #entropy_neuron_indices = [3144, 1083, 1108] # Medium
+    #entropy_neuron_indices = [584, 2123, 2870]  # Small
+    entropy_neuron_indices = [3144, 1083, 1108] # Medium
     models = ['baseline', 'finetuned', 'noLN']
-    model_size = 'small'
+    model_size = 'medium'
     save_path = f'figures/{model_size}'
     os.makedirs(save_path, exist_ok=True)
     model_results = {}
@@ -360,9 +360,9 @@ if __name__ == "__main__":
     }) 
     model_str = model_size.capitalize()
     model_labels = {
-            'baseline': f'{model_str} original',
-            'finetuned': f'{model_str} FT',
-            'noLN': f'{model_str} LN-free'
+            'baseline': f'GPT2-{model_str} original',
+            'finetuned': f'GPT2-{model_str} vanilla FT',
+            'noLN': f'GPT2-{model_str} LN-free FT'
         }    
     # Get default matplotlib colors
     colors = sns.color_palette("colorblind")
