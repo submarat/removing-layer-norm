@@ -10,6 +10,7 @@ from prepare_dataset import prepare_dataset
 from tqdm import tqdm
 import numpy as np
 from scipy import stats
+from pile_eval import preprocess_pile_dataset
 
 device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
 
@@ -153,87 +154,84 @@ def calculate_batch_sink_rates(model, input_ids, attention_mask=None):
     # Get attention tensors
     attentions = outputs.attentions
     
-    # Calculate sink rate for the batch
-    sink_rate = calculate_sink_rate(model, attentions)
-    return sink_rate
+    # Calculate sink rate for all layers
+    all_layers_sink_rate = calculate_sink_rate(model, attentions)
+    
+    # Calculate sink rate for layer 3 only
+    layer3_attentions = [attentions[2]]  # Layer 3 is index 3 (0-based)
+    layer3_sink_rate = calculate_sink_rate(model, layer3_attentions)
+    
+    return all_layers_sink_rate, layer3_sink_rate
 
 def main():
+    # Define model names
+    original_model_name = "schaeff/gpt-2medium_vanilla500"
+    no_ln_model_name = "submarat/gpt2-medium-noln-aux"
+    
     # Load both models
     print("Loading models...")
-    model_original, tokenizer_original = load_model("gpt2", remove_ln=False)
-    model_no_ln, tokenizer_no_ln = load_model("submarat/gpt2-noln-aux")
+    model_original, tokenizer_original = load_model(original_model_name)
+    model_no_ln, tokenizer_no_ln = load_model(no_ln_model_name)
     
-    # Load and prepare dataset
-    print("Loading dataset...")
-    tokenized, data_collator = prepare_dataset()
-    
-    # Get 256 samples from test split
-    test_samples = tokenized["test"].select(range(256))
-    
-    # Print sequence length information
-    first_sample = test_samples[0]
-    print(f"\nSequence length information:")
-    print(f"Length of first sequence: {len(first_sample['input_ids'])}")
-    print(f"Sample sequence lengths: {[len(sample['input_ids']) for sample in test_samples[:5]]}")
+    # Load Pile dataset
+    print("Loading Pile dataset...")
+    processed_examples, _ = preprocess_pile_dataset("pile-apollo-luca", "gpt2-medium", 16)
     
     # Process samples in batches
     batch_size = 8
-    original_sink_rates = []
-    no_ln_sink_rates = []
+    original_all_sink_rates = []
+    original_layer3_sink_rates = []
+    no_ln_all_sink_rates = []
+    no_ln_layer3_sink_rates = []
     
     print("Calculating sink rates...")
-    for i in tqdm(range(0, len(test_samples), batch_size)):
-        batch_samples = test_samples["input_ids"][i:i + batch_size]
-        batch = torch.stack([torch.tensor(sample, device=device) for sample in batch_samples])
-        input_ids = batch.to(device)
+    for i in tqdm(range(0, len(processed_examples), batch_size)):
+        batch_examples = processed_examples[i:i + batch_size]
+        # Truncate to 512 tokens
+        input_ids = torch.stack([torch.tensor(example[:512]) for example in batch_examples]).to(device)
         
         # Calculate sink rates for both models
-        original_sink_rate = calculate_batch_sink_rates(model_original, input_ids)
-        no_ln_sink_rate = calculate_batch_sink_rates(model_no_ln, input_ids)
+        original_all, original_layer3 = calculate_batch_sink_rates(model_original, input_ids)
+        no_ln_all, no_ln_layer3 = calculate_batch_sink_rates(model_no_ln, input_ids)
         
-        original_sink_rates.append(original_sink_rate.item())
-        no_ln_sink_rates.append(no_ln_sink_rate.item())
+        original_all_sink_rates.append(original_all.item())
+        original_layer3_sink_rates.append(original_layer3.item())
+        no_ln_all_sink_rates.append(no_ln_all.item())
+        no_ln_layer3_sink_rates.append(no_ln_layer3.item())
     
     # Convert to numpy arrays for statistics
-    original_sink_rates = np.array(original_sink_rates)
-    no_ln_sink_rates = np.array(no_ln_sink_rates)
+    original_all_sink_rates = np.array(original_all_sink_rates)
+    original_layer3_sink_rates = np.array(original_layer3_sink_rates)
+    no_ln_all_sink_rates = np.array(no_ln_all_sink_rates)
+    no_ln_layer3_sink_rates = np.array(no_ln_layer3_sink_rates)
     
-    # Calculate basic statistics
-    original_mean = np.mean(original_sink_rates)
-    no_ln_mean = np.mean(no_ln_sink_rates)
+    # Calculate statistics for all layers
+    print("\nSink Rate Statistics (All Layers):")
+    print(f"{original_model_name}:")
+    print(f"  Mean = {np.mean(original_all_sink_rates):.4f}")
+    print(f"  95% CI = [{np.percentile(original_all_sink_rates, 2.5):.4f}, {np.percentile(original_all_sink_rates, 97.5):.4f}]")
+    print(f"  IQR = [{np.percentile(original_all_sink_rates, 25):.4f}, {np.percentile(original_all_sink_rates, 75):.4f}]")
+    print(f"  Median = {np.median(original_all_sink_rates):.4f}")
     
-    # Calculate 95% confidence intervals using bootstrap
-    n_bootstrap = 1000
-    original_ci = np.percentile(
-        [np.mean(np.random.choice(original_sink_rates, len(original_sink_rates))) 
-         for _ in range(n_bootstrap)],
-        [2.5, 97.5]
-    )
-    no_ln_ci = np.percentile(
-        [np.mean(np.random.choice(no_ln_sink_rates, len(no_ln_sink_rates))) 
-         for _ in range(n_bootstrap)],
-        [2.5, 97.5]
-    )
+    print(f"\n{no_ln_model_name}:")
+    print(f"  Mean = {np.mean(no_ln_all_sink_rates):.4f}")
+    print(f"  95% CI = [{np.percentile(no_ln_all_sink_rates, 2.5):.4f}, {np.percentile(no_ln_all_sink_rates, 97.5):.4f}]")
+    print(f"  IQR = [{np.percentile(no_ln_all_sink_rates, 25):.4f}, {np.percentile(no_ln_all_sink_rates, 75):.4f}]")
+    print(f"  Median = {np.median(no_ln_all_sink_rates):.4f}")
     
-    # Calculate IQR statistics
-    original_q1, original_q3 = np.percentile(original_sink_rates, [25, 75])
-    no_ln_q1, no_ln_q3 = np.percentile(no_ln_sink_rates, [25, 75])
+    # Calculate statistics for layer 3
+    print("\nSink Rate Statistics (Layer 3):")
+    print(f"{original_model_name}:")
+    print(f"  Mean = {np.mean(original_layer3_sink_rates):.4f}")
+    print(f"  95% CI = [{np.percentile(original_layer3_sink_rates, 2.5):.4f}, {np.percentile(original_layer3_sink_rates, 97.5):.4f}]")
+    print(f"  IQR = [{np.percentile(original_layer3_sink_rates, 25):.4f}, {np.percentile(original_layer3_sink_rates, 75):.4f}]")
+    print(f"  Median = {np.median(original_layer3_sink_rates):.4f}")
     
-    print("\nSink Rate Statistics:")
-    print(f"Original GPT-2:")
-    print(f"  Mean = {original_mean:.4f}")
-    print(f"  95% CI = [{original_ci[0]:.4f}, {original_ci[1]:.4f}]")
-    print(f"  IQR = [{original_q1:.4f}, {original_q3:.4f}]")
-    print(f"  Median = {np.median(original_sink_rates):.4f}")
-    
-    print(f"\nWithout LayerNorm:")
-    print(f"  Mean = {no_ln_mean:.4f}")
-    print(f"  95% CI = [{no_ln_ci[0]:.4f}, {no_ln_ci[1]:.4f}]")
-    print(f"  IQR = [{no_ln_q1:.4f}, {no_ln_q3:.4f}]")
-    print(f"  Median = {np.median(no_ln_sink_rates):.4f}")
-    
-    print(f"\nDifference in means: {no_ln_mean - original_mean:.4f}")
-    print(f"Difference in medians: {np.median(no_ln_sink_rates) - np.median(original_sink_rates):.4f}")
+    print(f"\n{no_ln_model_name}:")
+    print(f"  Mean = {np.mean(no_ln_layer3_sink_rates):.4f}")
+    print(f"  95% CI = [{np.percentile(no_ln_layer3_sink_rates, 2.5):.4f}, {np.percentile(no_ln_layer3_sink_rates, 97.5):.4f}]")
+    print(f"  IQR = [{np.percentile(no_ln_layer3_sink_rates, 25):.4f}, {np.percentile(no_ln_layer3_sink_rates, 75):.4f}]")
+    print(f"  Median = {np.median(no_ln_layer3_sink_rates):.4f}")
 
 if __name__ == "__main__":
     main()
