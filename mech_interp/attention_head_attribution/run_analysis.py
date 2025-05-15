@@ -1,5 +1,5 @@
+# %%
 from typing import List, Optional, Dict
-
 import os
 import sys
 import numpy as np
@@ -7,13 +7,9 @@ import torch as t
 import einops
 from tqdm import tqdm
 from transformer_lens import utils
-import matplotlib.pyplot as plt
-import seaborn as sns
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-
-        
 # Add parent directory to path for custom imports
 parent_dir = os.path.abspath(os.path.join(os.getcwd(), '..'))
 sys.path.append(parent_dir)
@@ -125,10 +121,11 @@ class AttentionAttributionAnalysis:
         model = self._load_model(model_type)
         model = model.to(self.device)
         
-        result_absolute = []
-        result_relative = []
+        all_DLA_heads = []
+        all_direct_ablation = []
+        
         with t.no_grad():
-            for batch in tqdm(self.dataloader, desc=f"Running DLA vs direct ablation for {model_type}"):
+            for batch in tqdm(self.dataloader, desc=f"Running analysis for {model_type}"):
                 batch = batch.to(self.device)
                 _, cache = model.run_with_cache(batch)
                 target_tokens = batch[:, -1]
@@ -198,20 +195,44 @@ class AttentionAttributionAnalysis:
                 # Calculate direct ablation effect
                 direct_ablation = logits - logits_without_heads
                 
-                # Calculate metrics
-                abs_delta = (DLA_heads - direct_ablation).abs()
-                overestimation_ratio = (1. - DLA_heads / (direct_ablation + 1e-10)) * 100.
-                result_absolute.append(abs_delta)
-                result_relative.append(overestimation_ratio)
+                all_DLA_heads.append(DLA_heads)
+                all_direct_ablation.append(direct_ablation)
             
+            # Concatenate all batches
+            all_DLA_heads = t.cat(all_DLA_heads, dim=1)  # [heads, all_samples]
+            all_direct_ablation = t.cat(all_direct_ablation, dim=1)  # [heads, all_samples]
             
-            result_absolute = t.cat(result_absolute, dim=1).cpu().detach().numpy() # [heads, samples]
-            result_relative = t.cat(result_relative, dim=1).cpu().detach().numpy() # [heads, samples]
-                
-            self.model_results[model_type]['absolute'] = result_absolute
-            self.model_results[model_type]['relative'] = result_relative
+            # Calculate absolute difference
+            abs_diff = (all_DLA_heads - all_direct_ablation).abs()
+            
+            # Store raw results for bootstrap calculations later
+            self.model_results[model_type]['DLA_heads'] = all_DLA_heads.cpu().numpy()
+            self.model_results[model_type]['direct_ablation'] = all_direct_ablation.cpu().numpy()
+            
+            # Calculate per-head NMAE (vectorized)
+            mean_abs_diff_per_head = abs_diff.mean(dim=1)  # [heads]
+            mean_direct_abs_per_head = all_direct_ablation.abs().mean(dim=1)  # [heads]
+            
+            # Apply small epsilon to avoid division by zero
+            epsilon = 1e-10
+            per_head_nmae = (mean_abs_diff_per_head / (mean_direct_abs_per_head + epsilon)) * 100
+            
+            # Convert to numpy for storage
+            per_head_nmae_np = per_head_nmae.cpu().numpy()
+            
+            # Store absolute difference and per-head NMAE for plotting
+            self.model_results[model_type]['absolute'] = abs_diff.cpu().numpy()
+            self.model_results[model_type]['per_head_nmae'] = per_head_nmae_np
+            
+            # Calculate global NMAE (across all heads and samples)
+            global_mean_abs_error = abs_diff.mean().item()
+            global_mean_direct_ablation = all_direct_ablation.abs().mean().item()
+            global_nmae = (global_mean_abs_error / (global_mean_direct_ablation + epsilon)) * 100
+            
+            # Store global NMAE
+            self.model_results[model_type]['global_nmae'] = global_nmae
     
-    def run_analysis(self) -> Dict[str, Dict[str, List[float]]]:
+    def run_analysis(self) -> Dict[str, Dict[str, np.ndarray]]:
         """
         Run analysis for all model types.
         
@@ -222,129 +243,54 @@ class AttentionAttributionAnalysis:
             self.run_single_model_analysis(model_type)
         
         return self.model_results
-
-    def plot_histograms(self, save_dir: Optional[str] = None, outlier_range=(5, 95)) -> None:
-        """
-        Plot histograms of the flattened results with interval bounds based on quartiles.
-        Handles outlier removal and uses a log y-scale.
-        
-        Args:
-            save_dir: Directory to save the plots
-            outlier_range: Tuple of (low, high) percentiles to filter outliers per model
-        """
-        colors = sns.color_palette("colorblind")
-        model_colors = {
-            'baseline': colors[0],
-            'finetuned': colors[1],
-            'noLN': colors[2]
-        }
-        model_str = self.model_size.capitalize()
-        model_labels = {
-                    'baseline': f'{model_str} original',
-                    'finetuned': f'{model_str} FT',
-                    'noLN': f'{model_str} LN-free'
-                }
-      
-        for metric in ['absolute', 'relative']:
-            # The order of models to display
-            model_order = self.model_types
-            plt.figure(figsize=(10, 6))
-            # Calculate statistics and plot each model
-            for model in model_order:
-                # Get flattened data for this model
-                flattened = self.model_results[model][metric].flatten()
-                
-                # Calculate statistics on full data
-                q25, median, q75 = np.percentile(flattened, [25, 50, 75])
-                
-                # Apply percentile filtering
-                low_cut, high_cut = np.percentile(flattened, outlier_range)
-                
-                # For relative metric, make symmetric around 0 if applicable
-                if metric == 'relative' and low_cut < 0 and high_cut > 0:
-                    abs_max = max(abs(low_cut), abs(high_cut))
-                    low_cut, high_cut = -abs_max, abs_max
-                
-                # Filter data
-                filtered_data = flattened[(flattened >= low_cut) & (flattened <= high_cut)]
-                
-                # Create bins for this model
-                model_bins = np.linspace(low_cut, high_cut, 50)
-                
-                # Create label with interval bounds
-                if metric == 'relative':
-                    label_str = f"{model_labels[model]}: {median:.2f}% [{q25:.2f}, {q75:.2f}]%"
-                else:
-                    label_str = f"{model_labels[model]}: {median:.3f} [{q25:.3f}, {q75:.3f}]"
-                
-                # Plot histogram
-                plt.hist(
-                    filtered_data, 
-                    bins=model_bins,
-                    histtype='step',
-                    linewidth=2,
-                    color=model_colors[model],
-                    label=label_str
-                )
-            
-            # Add a title and labels
-            if metric == 'relative':
-                x_label = 'Relative difference (%)'
-            else:
-                x_label = 'Absolute difference'
-            
-            plt.xlabel(x_label, fontsize=14)
-            plt.ylabel('Counts (log scale)', fontsize=14)
-            
-            # Set log scale for y-axis
-            plt.yscale('log')
-            
-            # Add grid for better readability
-            plt.grid(True, linestyle='--', alpha=0.7)
-            # Add a legend
-            plt.legend()
-           
-            if save_dir: 
-                plt.savefig(f"{save_dir}/{metric}_histogram.png", dpi=300)
-            plt.close()    
     
     def plot_heatmaps(self, save_dir: Optional[str] = None) -> None:
         """
-        Create simple Plotly heatmaps showing the median difference between DLA and Direct Effect
-        for each attention head across models, with a shared global colormap.
-        
-        The heatmap will display attention heads in a grid where:
-        - Each row represents a layer
-        - Each column represents a head within that layer
+        Create Plotly heatmaps showing:
+        1. Absolute difference between DLA and Direct Effect
+        2. Per-head NMAE (Normalized Mean Absolute Error)
         
         Args:
             save_dir: Directory to save the plots
         """
-        # Import plotly for heatmaps
-        for metric in ['absolute', 'relative']:
+        # Create heatmaps for both absolute difference and NMAE
+        for metric_name, metric_title in [
+            ('absolute', 'Absolute Difference'),
+            ('per_head_nmae', 'Per-head NMAE (%)')
+        ]:
             # The order of models to display
             model_order = self.model_types
             
             # Compute per-head median values for each model
             median_per_head = {}
             for model in model_order:
-                # Calculate median across samples for each head
-                median_per_head[model] = np.median(self.model_results[model][metric], axis=1)
-                # Ensure we have the expected number of heads
+                if metric_name == 'absolute':
+                    # For absolute difference, calculate median across samples for each head
+                    data = self.model_results[model][metric_name]  # [heads, samples]
+                    median_per_head[model] = np.median(data, axis=1)
+                else:
+                    # For NMAE, it's already per-head
+                    median_per_head[model] = self.model_results[model][metric_name]
+                
+                # Reshape to grid format
                 if len(median_per_head[model]) == self.num_layers * self.num_heads:
                     median_per_head[model] = median_per_head[model].reshape(self.num_layers, self.num_heads)
                 else:
-                    # If there's a mismatch, just use what we have
                     print(f"Warning: Expected {self.num_layers * self.num_heads} heads for {model}, but got {len(median_per_head[model])}")
             
             # Determine global colorscale range
             all_values = np.concatenate([median_per_head[model].flatten() for model in model_order])
-            vmin, vmax = np.min(all_values), np.max(all_values)
             
-            # For relative metric, center the colormap at 0
-            if metric == 'relative':
-                abs_max = max(abs(vmin), abs(vmax))
-                vmin, vmax = -abs_max, abs_max
+            # Remove potential infinity or very large values
+            filtered_values = all_values[np.isfinite(all_values)]
+            if len(filtered_values) > 0:
+                vmin, vmax = np.min(filtered_values), np.max(filtered_values)
+            else:
+                vmin, vmax = 0, 1  # Fallback if all values are infinite
+            
+            # For NMAE, ensure a minimum range for visibility
+            if metric_name == 'per_head_nmae' and vmax - vmin < 5:
+                vmax = vmin + 5
             
             # Create a subplot with one column per model
             fig = make_subplots(
@@ -356,21 +302,26 @@ class AttentionAttributionAnalysis:
             
             # Add heatmaps for each model
             for i, model in enumerate(model_order):
+                data = median_per_head[model]
+                
+                # Handle potential infinity values for visualization
+                if np.any(np.isinf(data)):
+                    data = np.nan_to_num(data, nan=0, posinf=vmax*2, neginf=vmin*2)
+                
                 fig.add_trace(
                     go.Heatmap(
-                        z=median_per_head[model],
-                        colorscale="RdBu_r" if metric == 'relative' else "Viridis",
-                        zmid=0 if metric == 'relative' else None,
-                        zmin=vmin,
+                        z=data,
+                        colorscale='Reds',
+                        zmin=0,
                         zmax=vmax,
                         showscale=i == len(model_order) - 1,
                         colorbar=dict(
                             title=dict(
-                                text="Relative change in logit (%)",
+                                text=metric_title,
                                 side="right",
                                 font=dict(size=14)
-                                )
                             )
+                        )
                     ),
                     row=1, col=i+1
                 )
@@ -390,46 +341,84 @@ class AttentionAttributionAnalysis:
                     fig.update_yaxes(showticklabels=False, row=1, col=i+1)
             
             # Update layout
-            title = f"Per-head {metric.capitalize()} difference between DLA and Direct Effect"
+            title = f"Per-head {metric_title} between DLA and Direct Effect"
             
             fig.update_layout(
                 title=title,
                 height=400,
                 width=200 * len(model_order) + 100,  # Width based on number of models
-                coloraxis=dict(colorscale="RdBu_r" if metric == 'relative' else "Viridis"),
                 margin=dict(l=50, r=50, t=80, b=50)
             )
             
-            # Also save as static image
+            # Save as static image
             if save_dir:
-                fig.write_image(f"{save_dir}/{metric}_per_head_heatmap.png", scale=2)
-            
-    def get_summary_statistics(self) -> Dict[str, Dict[str, Dict[str, float]]]:
+                os.makedirs(save_dir, exist_ok=True)
+                fig.write_image(f"{save_dir}/{metric_name}_per_head_heatmap.png", scale=2)
+    
+    def get_global_nmae_with_bootstrap_ci(self, model_type: str, bootstrap_samples: int = 1000, confidence_level: float = 0.95):
         """
-        Get summary statistics for all models and metrics using quartiles (25-75 percentiles).
+        Calculate global NMAE with bootstrap confidence intervals for a model.
         
+        Args:
+            model_type: The model type to analyze
+            bootstrap_samples: Number of bootstrap resamples
+            confidence_level: Confidence level for intervals
+            
         Returns:
-            Dict containing median, lower bound, and upper bound for each model and metric
+            Tuple of (nmae, lower_bound, upper_bound)
         """
-        stats = {}
-        for model in self.model_types:
-            stats[model] = {}
-            for metric in ['absolute', 'relative']:
-                # Get the data (now shaped [heads, samples])
-                values = self.model_results[model][metric]
-                
-                # Get global statistics by flattening
-                flattened_values = values.flatten()
-                q25, median, q75 = np.percentile(flattened_values, [25, 50, 75])
-                
-                # Get per-head statistics
-                stats[model][metric] = {
-                    # Global statistics
-                    'median': float(median),
-                    'lower_interval': float(q25),
-                    'upper_interval': float(q75),
-                }
-        return stats
+        # Get stored data
+        DLA_heads = t.tensor(self.model_results[model_type]['DLA_heads'])
+        direct_ablation = t.tensor(self.model_results[model_type]['direct_ablation'])
+        
+        # Original global NMAE
+        abs_diff = (DLA_heads - direct_ablation).abs()
+        mean_abs_error = abs_diff.mean().item()
+        mean_direct_ablation = direct_ablation.abs().mean().item()
+        epsilon = 1e-10  # Small value to prevent division by zero
+        original_nmae = (mean_abs_error / (mean_direct_ablation + epsilon)) * 100
+        
+        # Bootstrap for confidence intervals
+        n_heads, n_samples = DLA_heads.shape
+        nmae_bootstraps = []
+        
+        for _ in range(bootstrap_samples):
+            # Sample heads and samples with replacement
+            head_indices = np.random.choice(n_heads, n_heads, replace=True)
+            sample_indices = np.random.choice(n_samples, n_samples, replace=True)
+            
+            # Get bootstrap sample
+            bootstrap_DLA = DLA_heads[head_indices][:, sample_indices]
+            bootstrap_direct = direct_ablation[head_indices][:, sample_indices]
+            
+            # Calculate bootstrap NMAE
+            bootstrap_abs_diff = (bootstrap_DLA - bootstrap_direct).abs()
+            bootstrap_mean_abs_error = bootstrap_abs_diff.mean().item()
+            bootstrap_mean_direct_ablation = bootstrap_direct.abs().mean().item()
+            bootstrap_nmae = (bootstrap_mean_abs_error / (bootstrap_mean_direct_ablation + epsilon)) * 100
+            
+            nmae_bootstraps.append(bootstrap_nmae)
+        
+        # Calculate confidence intervals
+        alpha = 1 - confidence_level
+        lower_percentile = alpha / 2 * 100
+        upper_percentile = (1 - alpha / 2) * 100
+        lower_bound, upper_bound = np.percentile(nmae_bootstraps, [lower_percentile, upper_percentile])
+        
+        return original_nmae, lower_bound, upper_bound
+        
+    def print_summary_statistics(self):
+        """
+        Print simplified summary statistics for all models.
+        """
+        print("\nNormalized Mean Absolute Error (NMAE) Summary:")
+        print("-" * 50)
+        print(f"{'Model':<20} {'NMAE':<8} {'95% CI':<20}")
+        print("-" * 50)
+        
+        for model_type in self.model_types:
+            nmae, lower, upper = self.get_global_nmae_with_bootstrap_ci(model_type)
+            print(f"{model_type:<20} {nmae:<8.2f}% [{lower:.2f}%, {upper:.2f}%]")
 
 if __name__ == '__main__':
     # Example usage
@@ -443,19 +432,8 @@ if __name__ == '__main__':
     # Run the analysis
     results = analyzer.run_analysis()
     
-    # Plot the results
-    analyzer.plot_histograms(save_dir=f'figures/{model_str}')
+    # Plot the heatmaps
     analyzer.plot_heatmaps(save_dir=f'figures/{model_str}')
     
-    # Get summary statistics
-    stats = analyzer.get_summary_statistics()
-    print("Summary Statistics:")
-    for model, model_stats in stats.items():
-        print(f"\n{model}:")
-        for metric, values in model_stats.items():
-            if metric == 'relative':
-                # For relative metric, keep the negative sign
-                print(f"  {metric}: {values['median']:.2f}% [{values['lower_interval']:.2f}, {values['upper_interval']:.2f}]%")
-            else:
-                # For absolute metric, remove the negative sign
-                print(f"  {metric}: {values['median']:.3f} [{values['lower_interval']:.3f}, {values['upper_interval']:.3f}]")
+    # Print summary statistics
+    analyzer.print_summary_statistics()
