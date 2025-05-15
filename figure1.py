@@ -40,6 +40,23 @@ plt.axhline(y=2.8145 + 2, color='black', linestyle='-', alpha=0.5)  # Medium
 plt.axhline(y=2.6623 + 1, color='black', linestyle='-', alpha=0.5)  # Large
 plt.axhline(y=2.5567, color='black', linestyle='-', alpha=0.5)      # XL
 
+# Add vertical lines for layer norm removal ranges
+# Small model (from top of plot to Small OWT score)
+plt.plot([20, 20], [7.5, 3.1006 + 3], color='blue', linestyle='--', alpha=0.3)
+plt.plot([104, 104], [7.5, 3.1006 + 3], color='blue', linestyle='--', alpha=0.3)
+
+# Medium model (from Small OWT score to Medium OWT score)
+plt.plot([20, 20], [3.1006 + 3, 2.8145 + 2], color='green', linestyle='--', alpha=0.3)
+plt.plot([188, 188], [3.1006 + 3, 2.8145 + 2], color='green', linestyle='--', alpha=0.3)
+
+# Large model (from Medium OWT score to Large OWT score)
+plt.plot([30, 30], [2.8145 + 2, 2.6623 + 1], color='orange', linestyle='--', alpha=0.3)
+plt.plot([534, 534], [2.8145 + 2, 2.6623 + 1], color='orange', linestyle='--', alpha=0.3)
+
+# XL model (from Large OWT score to XL OWT score)
+plt.plot([50, 50], [2.6623 + 1, 2.5567], color='red', linestyle='--', alpha=0.3)
+plt.plot([722, 722], [2.6623 + 1, 2.5567], color='red', linestyle='--', alpha=0.3)
+
 # Add labels and title
 plt.xlabel('Step')
 plt.ylabel('Main training loss (Cross-entropy)')
@@ -61,3 +78,5 @@ plt.show()
 # Close the figure to free memory
 plt.close()
 
+
+# %%
