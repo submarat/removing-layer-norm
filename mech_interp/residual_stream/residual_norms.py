@@ -383,7 +383,7 @@ class ResidualNorms:
             readable_labels = create_readable_tick_labels(x_labels)
             ax.set_xlabel('Layer', fontsize=12)
             ax.set_ylabel('L2 Norm', fontsize=12)
-            #ax.set_title(f'{pos_title}')
+            ax.set_title(f'{pos_title}')
             ax.set_xticks(np.arange(len(x_labels)))
             ax.set_xticklabels(readable_labels, rotation=45, ha='right')
             ax.grid(True, linestyle='--', alpha=0.7)
@@ -478,7 +478,7 @@ class ResidualNorms:
             # Set labels and title
             ax.set_xlabel('Layer Output', fontsize=12)
             ax.set_ylabel('Cosine Similarity', fontsize=12)
-            #ax.set_title(f'{pos_title}',)
+            ax.set_title(f'{pos_title}')
             
             # Set x-ticks
             readable_labels = create_readable_tick_labels(x_labels)
@@ -589,7 +589,7 @@ class ResidualNorms:
             readable_labels = create_readable_tick_labels(x_labels)
             ax.set_xlabel('Layer Transition', fontsize=12)
             ax.set_ylabel('L2 Norm Growth Ratio (Output/Input)', fontsize=12)
-            #ax.set_title(f'{pos_title}')
+            ax.set_title(f'{pos_title}')
             ax.set_xticks(np.arange(len(x_labels)))
             ax.set_xticklabels(readable_labels, rotation=45, ha='right')
             ax.grid(True, linestyle='--', alpha=0.7)
@@ -657,14 +657,14 @@ def create_readable_tick_labels(layers):
 if __name__ == '__main__':
     model_str = 'small'
     data_paths = f'/workspace/removing-layer-norm/mech_interp/inference_logs/gpt2-{model_str}_dataset_luca-pile_samples_1000_seqlen_512_prepend_False/inference_results.parquet'
-    output_dir = 'figures/medium/last_token'
+    output_dir = f'figures/{model_str}/bos_vs_rest'
     # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)
     
     analyzer = ResidualNorms(
         data_paths=data_paths,
         model_dir="../models",
-        last_token_only=True,
+        last_token_only=False,
         model_size=model_str
     )
     
