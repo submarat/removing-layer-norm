@@ -158,7 +158,7 @@ def calculate_batch_sink_rates(model, input_ids, attention_mask=None):
     all_layers_sink_rate = calculate_sink_rate(model, attentions)
     
     # Calculate sink rate for layer 3 only
-    layer3_attentions = [attentions[2]]  # Layer 3 is index 3 (0-based)
+    layer3_attentions = [attentions[2]]  # Layer 3 is index 2 (0-based)
     layer3_sink_rate = calculate_sink_rate(model, layer3_attentions)
     
     return all_layers_sink_rate, layer3_sink_rate
@@ -175,7 +175,7 @@ def main():
     
     # Load Pile dataset
     print("Loading Pile dataset...")
-    processed_examples, _ = preprocess_pile_dataset("pile-apollo-luca", "gpt2-medium", 16)
+    processed_examples, _ = preprocess_pile_dataset("pile-apollo-luca", "gpt2-medium", 1000)
     
     # Process samples in batches
     batch_size = 8
