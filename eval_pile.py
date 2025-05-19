@@ -1,10 +1,11 @@
 """
-Evaluate language model performance on The Pile dataset variants.
+Evaluate language model performance on The Pile dataset variants or OpenWebText.
 
 Example:
     python eval_pile.py -m ckpt1200.pt -f nanogpt -d pile-10k -n 20000 -b 16
     python eval_pile.py -m gpt2 -f transformers -d pile-apollo -b 8
     python eval_pile.py -m results/checkpoint-1200 -f transformers
+    python eval_pile.py -m gpt2 -f transformers -d openwebtext -b 8
 
 Usage:
     eval_pile.py -m MODEL [-f FORMAT] [-d DATASET] [-n NUM_SAMPLES] [-b BATCH_SIZE] [--model-name MODEL_NAME]
@@ -14,7 +15,7 @@ Options:
     -h --help                       Show this help message
     -m MODEL --model MODEL          Model checkpoint path or model id [REQUIRED]
     -f FORMAT --format FORMAT       Model format: transformers/noLN_HF_model/fakeln_checkpoint [default: transformers]
-    -d DATASET --dataset DATASET    Dataset variant: pile-10k/pile-apollo/pile-apollo-luca/pile-uncopyrighted [default: pile-apollo]
+    -d DATASET --dataset DATASET    Dataset variant: pile-10k/pile-apollo/pile-apollo-luca/pile-uncopyrighted/openwebtext [default: pile-apollo]
     -n NUM --num-samples NUM        Number of samples to evaluate [default: 10000]
     -b BATCH_SIZE --batch-size BATCH_SIZE  Batch size for evaluation [default: 8]
     --model-name MODEL_NAME         Base model name [default: gpt2]
@@ -24,11 +25,11 @@ import os
 import torch
 import train
 from transformer_lens import HookedTransformer
-from std_dicts import std_dicts
-from utils import extract_std_from_checkpoint, remove_layernorm_by_scaling, get_device
+from utils import get_device
 from pile_eval import preprocess_pile_dataset, evaluate_model_on_pile
 from transformers import GPT2LMHeadModel, AutoModelForCausalLM, logging
 from transformers.modeling_utils import load_sharded_checkpoint
+from prepare_dataset import prepare_dataset
 
 # Load model with appropriate device
 device = get_device()
@@ -134,11 +135,19 @@ def main():
 
     model = model.to(device)
 
-    # Using shared preprocessing function
-    processed_examples, tokenizer = preprocess_pile_dataset(dataset_name, model_name, num_samples)
+
+    if dataset_name == 'openwebtext':
+        # Load OpenWebText dataset
+        print("Loading OpenWebText dataset...")
+        tokenized, _ = prepare_dataset(model_name)
+        # Convert to list of tensors for evaluation
+        processed_examples = [torch.tensor(example["input_ids"]) for example in tokenized["test"]]
+    else:
+        # Using shared preprocessing function for Pile datasets
+        processed_examples, _ = preprocess_pile_dataset(dataset_name, model_name, num_samples)
     
     # Using shared evaluation function
-    ce_loss = evaluate_model_on_pile(model, processed_examples, tokenizer, batch_size)
+    ce_loss = evaluate_model_on_pile(model, processed_examples, batch_size)
     print(f"Final Cross-Entropy Loss on {dataset_name}: {ce_loss:.4f}")
 
 if __name__ == "__main__":

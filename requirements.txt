@@ -1,6 +1,7 @@
-tqdm==4.67.1
-transformers[torch]==4.48.0
-datasets==3.2.0
-wandb==0.19.3
-docopt==0.6.2
+tqdm
+transformers[torch]
+datasets
+wandb
+docopt
 devtools
+transformer_lens
