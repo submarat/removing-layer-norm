@@ -21,7 +21,9 @@ import transformers
 import wandb
 from datetime import datetime
 from config import FINETUNE_CONFIGS
+from jaxtyping import Float
 from prepare_dataset import prepare_dataset
+from torch import Tensor
 from torch.utils.data import Dataset
 from transformers import (
     AutoTokenizer,
@@ -47,35 +49,7 @@ torch.manual_seed(1337)
 
 _USE_WANDB = True
 
-class TensorDeque:
-    """
-    A fixed-size FIFO buffer for tensors, emulating a deque using torch tensors.
-    """
-    def __init__(self, maxlen):
-        self.maxlen = maxlen
-        self.buffer = torch.zeros(maxlen)
-        self.index = 0
-        self.full = False
 
-    def append(self, x):
-        self.buffer[self.index] = x
-        self.index = (self.index + 1) % self.maxlen
-        if self.index == 0:
-            self.full = True
-
-    def get_mean(self):
-        """
-        The moving window statistics are calculated according to:
-        https://stats.stackexchange.com/questions/25848/how-to-sum-a-standard-deviation
-        for the mean, the mean of the window is the mean of the means.
-        for the std, this is more complicated, but if we assume that all the minibatches 
-        have the same norm, the mean of the var is fine.
-        """
-        if self.full:
-            return self.buffer.mean()
-        else:
-            return self.buffer[:self.index].mean()
-        
 class CustomTrainer(Trainer):
     """Trainer with auxiliary loss to encourage uniform residual norms."""
     
@@ -198,8 +172,8 @@ class CustomTrainer(Trainer):
         if _USE_WANDB:
             with torch.no_grad():
                 del flat_bos, flat_eos
-        torch.cuda.empty_cache()  # Explicitly clear cache if using CUDA
-        gc.collect() # Collect garbage to free up memory sometimes this does magic
+        # torch.cuda.empty_cache()  # Explicitly clear cache if using CUDA
+        # gc.collect() # Collect garbage to free up memory sometimes this does magic
         
         # Add auxiliary loss to main loss
         loss = loss + aux_loss
@@ -209,7 +183,7 @@ class CustomTrainer(Trainer):
 class FakeLayerNorm(nn.Module):
     """LayerNorm using a fixed std instead of the actual standard deviation."""
 
-    def __init__(self, n_embd, n_ctx, layer, bias, init_average_std, init_bos_std, grad_acc_steps=1, bos_special_treatment=False):
+    def __init__(self, n_embd, n_ctx, layer, bias, init_average_std, init_bos_std, grad_acc_steps=1, momentum=0.1, bos_special_treatment=False):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(n_embd))
         self.bias = nn.Parameter(torch.zeros(n_embd)) if bias else None
@@ -227,10 +201,8 @@ class FakeLayerNorm(nn.Module):
         self.register_buffer("real_average_std", torch.tensor(float(init_average_std)))
         self.register_buffer("real_bos_std", torch.tensor(float(init_bos_std)))
         self.register_buffer("grad_acc_steps", torch.tensor(grad_acc_steps))
-        self.register_buffer("synced_step", torch.tensor(0))
-        self.register_buffer("global_step", torch.tensor(0))
-        self.moving_var = TensorDeque(grad_acc_steps)
-        self.moving_var_bos = TensorDeque(grad_acc_steps)
+        self.register_buffer("momentum", torch.tensor(float(momentum)))
+
         if os.environ.get("EXP_CORRECT_BOS", "0") == "1":
             std_dim = n_ctx
         else:
@@ -323,16 +295,7 @@ class FakeLayerNorm(nn.Module):
         # the V path. Thus we get to have flags `is_fake` and `attn_v_is_fake` to enable / disable the
         # LN for the QK and V paths separately.
         is_fake_value = self.attn_v_is_fake.item() if attn_v else self.is_fake.item()
-
-        if (self.global_step - self.synced_step) == 1:
-            avg_std = self.moving_var.get_mean()**0.5
-            bos_std = self.moving_var_bos.get_mean()**0.5
-            self.real_average_std.fill_(float(avg_std))
-            self.real_bos_std.fill_(float(bos_std))
-            self.synced_step = self.global_step
-
         self.recompute_average_std(input)
-
 
         if is_fake_value:
             # Which std values to use: We use (1) average std (which is actually a vector of length
@@ -372,25 +335,29 @@ class FakeLayerNorm(nn.Module):
             )
     
     @torch.no_grad()
-    def recompute_average_std(self, x):
+    def recompute_average_std(self, x: Float[Tensor, "batch posn d_model"]):
         if self.bos_special_treatment.item():
-            # JS: If we do no BOS special treatment at all, it would be
-            # nicer to just estimate the var across all dimensions.
-            # Then we don't need to take the mean anymore, 
-            # which is only justified if all variances belong to variables with the same mean.
-            var = x.var(dim=(0, -1))
+            # Taking std over model dim
+            std = (x.var(dim=-1, unbiased=False) + 1e-5).sqrt()
+            # averaging over the batch dimentaion
+            std = std.mean(dim=0) 
+            # averaging over sequence postions
             if os.environ.get("EXP_NON_BOS_AVERAGE_STD", "0") == "1":
-                average_var = var[1:].mean().detach().item()
+                average_std = std[1:].mean().detach().item()
             else:
-                average_var = var.mean().detach().item()
-            bos_var = var[0].detach().item()
-            self.moving_var.append(average_var)
-            self.moving_var_bos.append(bos_var)
+                average_std = std.mean().detach().item()
+            bos_std = std[0].detach().item()
+
+            self.real_average_std_prop = self.momentum * self.real_average_std_prop + (1-self.momentum) * average_std
+            self.real_bos_std_prop = self.momentum * self.real_bos_std_prop + (1-self.momentum) * bos_std
         else:
-            var = x.var()
-            self.moving_var.append(var)
-            self.moving_var_bos.append(var)
-    
+            # Taking std over model dim
+            std = (x.var(dim=-1, unbiased=False) + 1e-5).sqrt()
+            # Averaging over everything else
+            mean_std = std.mean().detach().item()
+            self.real_average_std_prop = self.momentum * self.real_average_std_prop +  (1-self.momentum) * mean_std
+            self.real_bos_std_prop = self.momentum * self.real_bos_std_prop +  (1-self.momentum) * mean_std
+
     def sync_std(self):
         """Sync the average and bos std values (that are used in the forward pass) with the real std values."""
         with torch.no_grad():
@@ -428,7 +395,7 @@ class FakeLayerNorm(nn.Module):
             self.bos_std_buffer[0] = self.bos_std_buffer[1]
 
 
-def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_acc_steps=1):
+def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_acc_steps=1, momentum=0.1):
     n_layers = model.config.n_layer
     n_embd = model.transformer.h[0].ln_1.weight.shape[0]
     n_ctx = model.config.n_ctx
@@ -452,7 +419,8 @@ def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_ac
             bias=block.ln_1.bias is not None,
             init_average_std=std_dict[layer],
             init_bos_std=std_bos_dict[layer],
-            grad_acc_steps=grad_acc_steps)
+            grad_acc_steps=grad_acc_steps,
+            momentum=momentum)
 
         layer = f"blocks.{i}.hook_resid_mid"
         block.ln_2 = FakeLayerNorm(
@@ -462,7 +430,8 @@ def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_ac
             bias=block.ln_2.bias is not None,
             init_average_std=std_dict[layer],
             init_bos_std=std_bos_dict[layer],
-            grad_acc_steps=grad_acc_steps)
+            grad_acc_steps=grad_acc_steps,
+            momentum=momentum)
         
         # Restore weights
         block.ln_1.weight = nn.Parameter(ln_1_weight)
@@ -550,7 +519,8 @@ def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_ac
         bias=ln_f.bias is not None,
         init_average_std=std_dict[layer],
         init_bos_std=std_bos_dict[layer],
-        grad_acc_steps=grad_acc_steps
+        grad_acc_steps=grad_acc_steps,
+        momentum=momentum,
     )
     model.transformer.ln_f.weight = nn.Parameter(ln_f_weight)
     if ln_f_bias is not None:
@@ -597,7 +567,7 @@ def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_ac
     
     model.transformer.forward = make_transformer_forward(model.transformer.forward)
 
-def load_model(model_name="gpt2", remove_ln=False, grad_acc_steps=1):
+def load_model(model_name="gpt2", remove_ln=False, grad_acc_steps=1, momentum=0.1):
     model = transformers.GPT2LMHeadModel.from_pretrained(
         model_name,
         cache_dir=f"{model_name}_cache",
@@ -610,7 +580,7 @@ def load_model(model_name="gpt2", remove_ln=False, grad_acc_steps=1):
         std_dict = std_dicts[model_name]["std_dict"]
         std_bos_dict = std_dicts[model_name]["std_bos_dict"]
 
-        replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_acc_steps=grad_acc_steps)
+        replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_acc_steps=grad_acc_steps, momentum=momentum)
     
     return model
 
@@ -724,34 +694,34 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
             """ Log to wandb: block number, mode, att_v_mode, average_std_buffer, bos_std_buffer, average_std_buffer[0], average_std_buffer[1], bos_std_buffer[0], bos_std_buffer[1] """
             if not _USE_WANDB:
                 return control
-
-            for i, block in enumerate(model.transformer.h):
+            if isinstance(model.transformer.h[0].ln_1, FakeLayerNorm):
+                for i, block in enumerate(model.transformer.h):
+                    wandb.log({
+                        f"block_{i}_ln_1_real_average_std": block.ln_1.real_average_std_prop,
+                        f"block_{i}_ln_1_real_bos_std": block.ln_1.real_bos_std_prop,
+                        f"block_{i}_ln_1_average_std_0": block.ln_1.average_std_buffer[0],
+                        f"block_{i}_ln_1_average_std_1": block.ln_1.average_std_buffer[1],
+                        f"block_{i}_ln_1_bos_std_0": block.ln_1.bos_std_buffer[0],
+                        f"block_{i}_ln_1_bos_std_1": block.ln_1.bos_std_buffer[1],
+                    })
+    
+                    wandb.log({
+                        f"block_{i}_ln_2_real_average_std": block.ln_2.real_average_std_prop,
+                        f"block_{i}_ln_2_real_bos_std": block.ln_2.real_bos_std_prop,
+                        f"block_{i}_ln_2_average_std_0": block.ln_2.average_std_buffer[0],
+                        f"block_{i}_ln_2_average_std_1": block.ln_2.average_std_buffer[1],
+                        f"block_{i}_ln_2_bos_std_0": block.ln_2.bos_std_buffer[0],
+                        f"block_{i}_ln_2_bos_std_1": block.ln_2.bos_std_buffer[1],
+                    })
+    
                 wandb.log({
-                    f"block_{i}_ln_1_real_average_std": block.ln_1.real_average_std_prop,
-                    f"block_{i}_ln_1_real_bos_std": block.ln_1.real_bos_std_prop,
-                    f"block_{i}_ln_1_average_std_0": block.ln_1.average_std_buffer[0],
-                    f"block_{i}_ln_1_average_std_1": block.ln_1.average_std_buffer[1],
-                    f"block_{i}_ln_1_bos_std_0": block.ln_1.bos_std_buffer[0],
-                    f"block_{i}_ln_1_bos_std_1": block.ln_1.bos_std_buffer[1],
+                    f"ln_f_real_average_std": model.transformer.ln_f.real_average_std_prop,
+                    f"ln_f_real_bos_std": model.transformer.ln_f.real_bos_std_prop,
+                    f"ln_f_average_std_0": model.transformer.ln_f.average_std_buffer[0],
+                    f"ln_f_average_std_1": model.transformer.ln_f.average_std_buffer[1],
+                    f"ln_f_bos_std_0": model.transformer.ln_f.bos_std_buffer[0],
+                    f"ln_f_bos_std_1": model.transformer.ln_f.bos_std_buffer[1],
                 })
-
-                wandb.log({
-                    f"block_{i}_ln_2_real_average_std": block.ln_2.real_average_std_prop,
-                    f"block_{i}_ln_2_real_bos_std": block.ln_2.real_bos_std_prop,
-                    f"block_{i}_ln_2_average_std_0": block.ln_2.average_std_buffer[0],
-                    f"block_{i}_ln_2_average_std_1": block.ln_2.average_std_buffer[1],
-                    f"block_{i}_ln_2_bos_std_0": block.ln_2.bos_std_buffer[0],
-                    f"block_{i}_ln_2_bos_std_1": block.ln_2.bos_std_buffer[1],
-                })
-
-            wandb.log({
-                f"ln_f_real_average_std": model.transformer.ln_f.real_average_std_prop,
-                f"ln_f_real_bos_std": model.transformer.ln_f.real_bos_std_prop,
-                f"ln_f_average_std_0": model.transformer.ln_f.average_std_buffer[0],
-                f"ln_f_average_std_1": model.transformer.ln_f.average_std_buffer[1],
-                f"ln_f_bos_std_0": model.transformer.ln_f.bos_std_buffer[0],
-                f"ln_f_bos_std_1": model.transformer.ln_f.bos_std_buffer[1],
-            })
 
             return control 
     
@@ -770,16 +740,19 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
             print(f"  EXP_BOS_SPECIAL_TREATMENT: {os.environ.get('EXP_BOS_SPECIAL_TREATMENT', '0')}")
 
             print("\nChecking if layers are fake after loading checkpoint:")
-            for i, block in enumerate(model.transformer.h):
-                print(f"Block {i}:")
-                print(f"  ln_1.is_fake_prop: {block.ln_1.is_fake_prop}")
-                print(f"  ln_1.attn_v_is_fake_prop: {block.ln_1.attn_v_is_fake_prop}")
-                print(f"  ln_1.bos_special_treatment_prop: {block.ln_1.bos_special_treatment_prop}")
-                print(f"  ln_2.is_fake_prop: {block.ln_2.is_fake_prop}")
-                print(f"  ln_2.bos_special_treatment_prop: {block.ln_2.bos_special_treatment_prop}")
-            
-            print(f"\nFinal ln_f.is_fake_prop: {model.transformer.ln_f.is_fake_prop}")
-            print(f"Final ln_f.bos_special_treatment_prop: {model.transformer.ln_f.bos_special_treatment_prop}")
+            if isinstance(model.transformer.h[0].ln_1, FakeLayerNorm):
+                for i, block in enumerate(model.transformer.h):
+                    print(f"Block {i}:")
+                    print(f"  ln_1.is_fake_prop: {block.ln_1.is_fake_prop}")
+                    print(f"  ln_1.attn_v_is_fake_prop: {block.ln_1.attn_v_is_fake_prop}")
+                    print(f"  ln_1.bos_special_treatment_prop: {block.ln_1.bos_special_treatment_prop}")
+                    print(f"  ln_2.is_fake_prop: {block.ln_2.is_fake_prop}")
+                    print(f"  ln_2.bos_special_treatment_prop: {block.ln_2.bos_special_treatment_prop}")
+                
+                print(f"\nFinal ln_f.is_fake_prop: {model.transformer.ln_f.is_fake_prop}")
+                print(f"Final ln_f.bos_special_treatment_prop: {model.transformer.ln_f.bos_special_treatment_prop}")
+            else:
+                print("Not removing layernorm!")
             print("========================================\n")
             
             return control
@@ -813,16 +786,6 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
                     
             return control
     
-    class GlobalStepSetterCallback(TrainerCallback):
-        def on_step_begin(self, args, state, control, **kwargs):
-            model = kwargs.get("model", None)
-            for i, block in enumerate(model.transformer.h):
-                block.ln_1.global_step = torch.tensor(state.global_step)
-                block.ln_2.global_step = torch.tensor(state.global_step)
-            model.transformer.ln_f.global_step = torch.tensor(state.global_step)
-            return control
-    
-
             
     class StopAfterNStepsCallback(TrainerCallback):
         def __init__(self, early_stop_step):
@@ -852,7 +815,6 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
         LogFakeLayerNormState(),
         CheckFakeLayerNormStateAfterLoading(),
         StopAfterNStepsCallback(config.early_stop_step),
-        GlobalStepSetterCallback(),
     ]
     if remove_ln:
         callbacks.append(LNRemoverCallback(ln_removers))
@@ -1017,7 +979,7 @@ def main():
         print(checkpoint_message)
     
     # Initialize model
-    model = load_model(model_name, remove_ln=args.mode == "without_ln", grad_acc_steps=config.gradient_accumulation_steps)
+    model = load_model(model_name, remove_ln=args.mode == "without_ln", grad_acc_steps=config.gradient_accumulation_steps, momentum=config.momentum)
     
     print("Begin training")
     print(model)
