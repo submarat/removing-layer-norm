@@ -228,6 +228,7 @@ def make_gpt2_large():
     learning_rate: float = 3e-4
     lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
     lr_scheduler_kwargs: dict = {"min_lr": 4e-5}
+
     warmup_steps = 15
     momentum = 0.9**(base_batch_size/32)
     
@@ -271,6 +272,7 @@ def make_gpt2_large_aux():
     learning_rate: float = 3e-4
     lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
     lr_scheduler_kwargs: dict = {"min_lr": 4e-5}
+
     warmup_steps = 15
     momentum = 0.9**(base_batch_size/32)
 
@@ -373,7 +375,7 @@ def make_gpt2_xl_aux():
     start_eot = start_lnf + 2
     start_bos = start_eot + 10
     
-    aux_loss_weight = 0.02
+    aux_loss_weight = 0.01
 
     return FinetuneConfig(**locals())
 

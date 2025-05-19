@@ -9,7 +9,7 @@ import random
 import torch
 from tqdm import tqdm
 from datasets import load_dataset, Dataset
-from transformers import AutoTokenizer, GPT2LMHeadModel
+from transformers import AutoTokenizer
 from transformer_lens import HookedTransformer
 
 def preprocess_pile_dataset(dataset_name, model_name, num_samples=5000, cache_dir="processed_datasets", filter_subsets=True):
@@ -96,7 +96,7 @@ def preprocess_pile_dataset(dataset_name, model_name, num_samples=5000, cache_di
     return processed_examples, tokenizer
 
 
-def evaluate_model_on_pile(model, processed_examples, tokenizer, batch_size=8, device=None, pin_memory=True):
+def evaluate_model_on_pile(model, processed_examples, batch_size=8, device=None, pin_memory=True):
     """Evaluate model with efficient batched inference"""
     # Use the model's device if device not explicitly specified
     if device is None:
