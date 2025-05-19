@@ -62,3 +62,4 @@ mech_interp/experiments/attribution_patching/*.pt
 *.txt
 
 mech_interp/experiments/attribution_patching/models/
+mech_interp/experiments_old
