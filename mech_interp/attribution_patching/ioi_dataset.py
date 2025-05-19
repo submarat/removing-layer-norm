@@ -1,4 +1,5 @@
 #%%
+#  code modified from https://github.com/redwoodresearch/Easy-Transformer/blob/main/easy_transformer/ioi_dataset.py
 from typing import Union, List
 from site import PREFIXES
 import warnings
