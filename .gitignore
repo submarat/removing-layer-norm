@@ -60,3 +60,5 @@ mech_interp/experiments/attribution_patching/*.pt
 *.csv
 *.pt
 *.txt
+
+mech_interp/experiments/attribution_patching/models/
