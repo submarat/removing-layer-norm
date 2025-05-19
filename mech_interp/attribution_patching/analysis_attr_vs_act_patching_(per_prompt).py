@@ -21,11 +21,11 @@ def get_results_dicts(model_name):
     results = {
         'resid_pre': {
             'attribution' : torch.cat(
-                                        [pickleload(f"/workspace/removing-layer-norm/mech_interp/attribution_patching/results/prompts_{prompts_set}/new_resid_pre_attr_patch_result_{model_name}.pkl") 
+                                        [pickleload(f"/workspace/removing-layer-norm/mech_interp/attribution_patching//prompts_{prompts_set}/new_resid_pre_attr_patch_result_{model_name}.pkl") 
                                         for prompts_set in range(0, 30)
                                         ], 
                                         dim=-1),
-            'activation' : torch.cat([pickleload(f"/workspace/removing-layer-norm/mech_interp/attribution_patching/results/prompts_{prompts_set}/new_resid_pre_act_patch_result_{model_name}.pkl") 
+            'activation' : torch.cat([pickleload(f"/workspace/removing-layer-norm/mech_interp/attribution_patching//prompts_{prompts_set}/new_resid_pre_act_patch_result_{model_name}.pkl") 
                                         for prompts_set in range(0, 30)
                                         ], 
                                         dim=-1),
@@ -201,3 +201,5 @@ plot_patching_heatmaps_combined(
     save_path='combined_patching_heatmap.png'
 )
 
+
+# %%

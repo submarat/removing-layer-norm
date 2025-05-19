@@ -1,3 +1,5 @@
+# code modified from https://github.com/neelnanda-io/TransformerLens/blob/main/transformer_lens/patching.py
+
 """Patching.
 
 A module for patching activations in a transformer model, and measuring the effect of the patch on
