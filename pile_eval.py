@@ -4,6 +4,7 @@ Used by both train.py and eval_pile.py.
 """
 
 import os
+import numpy as np
 import random
 import torch
 from tqdm import tqdm
@@ -127,7 +128,7 @@ def evaluate_model_on_pile(model, processed_examples, tokenizer, batch_size=8, d
 
     total_loss = 0
     total_tokens = 0
-
+    loss_list = []
     # Evaluate with pre-formed batches
     with torch.no_grad():
         for i, batch_input_ids in enumerate(tqdm(batches, desc="Evaluating")):
@@ -138,11 +139,24 @@ def evaluate_model_on_pile(model, processed_examples, tokenizer, batch_size=8, d
             if isinstance(model, HookedTransformer):
                 logits = model(batch_input_ids)
                 loss = model.loss_fn(logits, batch_input_ids, per_token=True)
-                
+                loss_list.append(loss.flatten().cpu().numpy())
                 batch_loss = loss.sum().item()
                 batch_tokens = loss.numel()
             else:
                 outputs = model(input_ids=batch_input_ids, labels=batch_input_ids)
+                # outputs.loss is the average loss
+            
+                # Get logits
+                logits = outputs.logits
+                # Shift logits and labels for causal language modeling
+                shift_logits = logits[:, :-1, :].contiguous()
+                shift_labels = batch_input_ids[:, 1:].contiguous()
+                # Calculate per-token loss using CrossEntropyLoss with reduction='none'
+                loss_fct = torch.nn.CrossEntropyLoss(reduction='none')
+                per_token_loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))            
+                # Append to your loss list (assuming loss_list is defined elsewhere)
+                loss_list.append(per_token_loss.flatten().cpu().numpy())
+
                 
                 # For HF models, get more accurate per-token loss
                 batch_loss = outputs.loss.item() * batch_input_ids.numel()
@@ -160,9 +174,35 @@ def evaluate_model_on_pile(model, processed_examples, tokenizer, batch_size=8, d
             if i % 10 == 0 or i == 0:
                 avg_loss_so_far = total_loss / total_tokens if total_tokens > 0 else float("inf")
                 print(f"Batch {i}/{len(batches)}: Current loss = {avg_loss_so_far:.4f}")
+
+    loss_list = np.array(loss_list).flatten()
+    print(f"{loss_list.shape=}")
+    print(f"Median: {np.median(loss_list)}")
+    print(f"Mean: {np.mean(loss_list)}")
+    # 3. IQR and 95% Range
+    # IQR (Interquartile Range)
+    q75, q25 = np.percentile(loss_list, [75, 25])
+    iqr = q75 - q25
+    print(f"50% Range: [{q25:.4f}, {q75:.4f}]")
+    print(f"\nInterquartile Range (IQR): {iqr:.4f}")
+    # 95% Range (using percentiles)
+    lower_bound_95 = np.percentile(loss_list, 2.5)
+    upper_bound_95 = np.percentile(loss_list, 97.5)
+    print(f"95% Range: [{lower_bound_95:.4f}, {upper_bound_95:.4f}]")
+    # 99% Range (using percentiles)
+    lower_bound_99 = np.percentile(loss_list, 1)
+    upper_bound_99 = np.percentile(loss_list, 99)
+    print(f"95% Range: [{lower_bound_99:.4f}, {upper_bound_99:.4f}]")
+    # 99% Range (using percentiles)
+    lower_bound_999 = np.percentile(loss_list, 0.1)
+    upper_bound_999 = np.percentile(loss_list, 99.9)
+    print(f"95% Range: [{lower_bound_999:.4f}, {upper_bound_999:.4f}]")
     
     avg_loss = total_loss / total_tokens if total_tokens > 0 else float("inf")
     print(f"Evaluation complete. Final loss: {avg_loss:.4f}")
+
+    np.savetxt('losses.out', loss_list, delimiter=',')
+
     return avg_loss 
 
 def convert_for_trainer(processed_examples, tokenizer, cache_dir="processed_datasets", dataset_name="pile-10k", model_name="gpt2", num_samples=1000):
