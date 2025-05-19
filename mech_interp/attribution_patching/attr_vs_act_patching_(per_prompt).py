@@ -5,7 +5,7 @@ from mech_interp.load_models import ModelFactory
 import torch
 from transformers import AutoTokenizer
 import einops
-from mech_interp.experiments.attribution_patching.attribution_patching_utils import get_cache_fwd_and_bwd
+from mech_interp.attribution_patching.attribution_patching_utils import get_cache_fwd_and_bwd
 from tqdm import tqdm
 import custom_patching
 from functools import partial
