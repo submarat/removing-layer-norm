@@ -22,6 +22,7 @@ Options:
 """
 
 import os
+import sys
 import torch
 import train
 from transformer_lens import HookedTransformer
@@ -148,7 +149,15 @@ def main():
     
     # Using shared evaluation function
     ce_loss = evaluate_model_on_pile(model, processed_examples, batch_size)
-    print(f"Final Cross-Entropy Loss on {dataset_name}: {ce_loss:.4f}")
+    # print(f"Final Cross-Entropy Loss on {dataset_name}: {ce_loss:.4f}")
+    output_string = f"Final Cross-Entropy Loss on {dataset_name}: {ce_loss:.4f}\n"
+    command_used = " ".join(sys.argv) + "\n--------------\n"
+    
+    with open("eval.txt", "a") as f:
+        f.write(output_string)
+        f.write(command_used)
+
+    print(f"Results appended to eval.txt")
 
 if __name__ == "__main__":
     main()
