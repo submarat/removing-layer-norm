@@ -63,7 +63,7 @@ def make_gpt2_standard():
     n_layers = 12
     
     # Training params
-    base_batch_size = 40
+    base_batch_size = 40 # A100 with 80 GB VRAM, adapt for other chips
     max_steps = 300
     block_size = 1024
     target_batch_tokens = 2**19
@@ -100,7 +100,7 @@ def make_gpt2_standard_aux():
     n_layers = 12
     
     # Training params
-    base_batch_size = 32
+    base_batch_size = 32 # A100 with 80 GB VRAM, adapt for other chips
     max_steps = 300
     block_size = 1024
     target_batch_tokens = 2**19
@@ -138,7 +138,7 @@ def make_gpt2_medium_fasttune():
     n_layers = 24
     
     # Training params
-    base_batch_size = 22
+    base_batch_size = 22 # A100 with 80 GB VRAM, adapt for other chips
     max_steps = 500
     block_size = 1024
     target_batch_tokens = 2**19
@@ -175,7 +175,7 @@ def make_gpt2_medium_fasttune_aux():
     n_layers = 24
     
     # Training params
-    base_batch_size = 22
+    base_batch_size = 22 # A100 with 80 GB VRAM, adapt for other chips
     max_steps = 500
     block_size = 1024
     target_batch_tokens = 2**19
@@ -213,7 +213,7 @@ def make_gpt2_large():
     n_layers = 36
     
     # Training params
-    base_batch_size = 28
+    base_batch_size = 28 # B200 with 180 GB VRAM, adapt for other chips
     max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
@@ -257,7 +257,7 @@ def make_gpt2_large_aux():
     n_layers = 36
     
     # Training params
-    base_batch_size = 28
+    base_batch_size = 28 # B200 with 180 GB VRAM, adapt for other chips
     max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
@@ -301,7 +301,7 @@ def make_gpt2_xl():
     n_layers = 48
     
     # Training params
-    base_batch_size = 18
+    base_batch_size = 18 # B200 with 180 GB VRAM, adapt for other chips
     max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
@@ -342,7 +342,7 @@ def make_gpt2_xl_aux():
     n_layers = 48
     
     # Training params
-    base_batch_size = 18
+    base_batch_size = 18 # B200 with 180 GB VRAM, adapt for other chips
     max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
