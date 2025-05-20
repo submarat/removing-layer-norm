@@ -375,7 +375,7 @@ def plot_model_comparison(model_results, model_type='small', save_path=None, met
     }
     
     # Set up figure
-    fig, ax = plt.subplots(figsize=(14, 8))
+    fig, ax = plt.subplots(figsize=(10, 8))
     
     # Define width of bars and positions
     model_names = list(model_results.keys())
@@ -444,7 +444,7 @@ def plot_model_comparison(model_results, model_type='small', save_path=None, met
               label=model_labels[model_name])
         for model_name in model_names
     ]
-    ax.legend(handles=legend_elements, loc='upper right')
+    ax.legend(handles=legend_elements, loc='upper left')
     
     fig.tight_layout()
     if save_path:
@@ -501,10 +501,10 @@ def print_ablation_summary(model_results):
    
     
 if __name__ == "__main__":
-    #entropy_neuron_indices = [584, 2123, 2870]  # Small
-    entropy_neuron_indices = [3144, 1083, 1108] # Medium
+    entropy_neuron_indices = [584, 2123, 2870]  # Small
+    #entropy_neuron_indices = [3144, 1083, 1108] # Medium
     models = ['baseline', 'finetuned', 'noLN']
-    model_size = 'medium'
+    model_size = 'small'
     save_path = f'figures/{model_size}'
     os.makedirs(save_path, exist_ok=True)
 
