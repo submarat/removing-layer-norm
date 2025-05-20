@@ -149,7 +149,6 @@ def main():
     
     # Using shared evaluation function
     ce_loss = evaluate_model_on_pile(model, processed_examples, batch_size)
-    # print(f"Final Cross-Entropy Loss on {dataset_name}: {ce_loss:.4f}")
     output_string = f"Final Cross-Entropy Loss on {dataset_name}: {ce_loss:.4f}\n"
     command_used = " ".join(sys.argv) + "\n--------------\n"
     
