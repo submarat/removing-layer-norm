@@ -63,7 +63,7 @@ def make_gpt2_standard():
     n_layers = 12
     
     # Training params
-    base_batch_size = 40
+    base_batch_size = 40 # A100 with 80 GB VRAM, adapt for other chips
     max_steps = 300
     block_size = 1024
     target_batch_tokens = 2**19
@@ -100,7 +100,7 @@ def make_gpt2_standard_aux():
     n_layers = 12
     
     # Training params
-    base_batch_size = 32
+    base_batch_size = 32 # A100 with 80 GB VRAM, adapt for other chips
     max_steps = 300
     block_size = 1024
     target_batch_tokens = 2**19
@@ -138,7 +138,7 @@ def make_gpt2_medium_fasttune():
     n_layers = 24
     
     # Training params
-    base_batch_size = 22
+    base_batch_size = 22 # A100 with 80 GB VRAM, adapt for other chips
     max_steps = 500
     block_size = 1024
     target_batch_tokens = 2**19
@@ -175,7 +175,7 @@ def make_gpt2_medium_fasttune_aux():
     n_layers = 24
     
     # Training params
-    base_batch_size = 22
+    base_batch_size = 22 # A100 with 80 GB VRAM, adapt for other chips
     max_steps = 500
     block_size = 1024
     target_batch_tokens = 2**19
@@ -213,7 +213,7 @@ def make_gpt2_large():
     n_layers = 36
     
     # Training params
-    base_batch_size = 12
+    base_batch_size = 28 # B200 with 180 GB VRAM, adapt for other chips
     max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
@@ -224,10 +224,11 @@ def make_gpt2_large():
     desired_batch_size = target_batch_tokens / block_size
     gradient_accumulation_steps = int(desired_batch_size // batch_size)
     gradient_checkpointing = False
-
-    learning_rate: float = 8e-5
+    
+    learning_rate: float = 3e-4
     lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
-    lr_scheduler_kwargs: dict = {"min_lr": 2e-5}
+    lr_scheduler_kwargs: dict = {"min_lr": 4e-5}
+
     warmup_steps = 15
     momentum = 0.9**(base_batch_size/32)
     
@@ -256,7 +257,7 @@ def make_gpt2_large_aux():
     n_layers = 36
     
     # Training params
-    base_batch_size = 12
+    base_batch_size = 28 # B200 with 180 GB VRAM, adapt for other chips
     max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
@@ -268,15 +269,16 @@ def make_gpt2_large_aux():
     gradient_accumulation_steps = int(desired_batch_size // batch_size)
     gradient_checkpointing = False
     
-    learning_rate: float = 1e-4
+    learning_rate: float = 3e-4
     lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
-    lr_scheduler_kwargs: dict = {"min_lr": 2e-5}
+    lr_scheduler_kwargs: dict = {"min_lr": 4e-5}
+
     warmup_steps = 15
     momentum = 0.9**(base_batch_size/32)
 
     # Calculate layernorm schedule
     gap_ln2 = 4
-    gap_ln1qk = 2
+    gap_ln1qk = 4
     gap_ln1v = 6
     gap_lnf = None
     gap_eot = 0
@@ -289,136 +291,7 @@ def make_gpt2_large_aux():
     start_eot = start_lnf + 2
     start_bos = start_eot + 10
     
-    aux_loss_weight = 0.025
-
-    return FinetuneConfig(**locals())
-
-def make_gpt2_large_aux2():
-    # Architecture params
-    model_name = "gpt2-large"
-    n_layers = 36
-    
-    # Training params
-    base_batch_size = 12
-    max_steps = 1200
-    block_size = 1024
-    target_batch_tokens = 2**19
-    save_steps = 100
-    
-    # Calculate derived training params
-    batch_size = base_batch_size
-    desired_batch_size = target_batch_tokens / block_size
-    gradient_accumulation_steps = int(desired_batch_size // batch_size)
-    gradient_checkpointing = False
-    
-    learning_rate: float = 2e-4
-    lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
-    lr_scheduler_kwargs: dict = {"min_lr": 2e-5}
-    warmup_steps = 15
-    momentum = 0.9**(base_batch_size/32)
-
-    # Calculate layernorm schedule
-    gap_ln2 = 4
-    gap_ln1qk = 2
-    gap_ln1v = 6
-    gap_lnf = None
-    gap_eot = 0
-    gap_bos = 0
-    
-    start_ln2 = 30
-    start_ln1qk = start_ln2 + n_layers * gap_ln2
-    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
-    start_lnf = start_ln1v + n_layers * gap_ln1v
-    start_eot = start_lnf + 2
-    start_bos = start_eot + 10
-    
-    aux_loss_weight = 0.025
-
-    return FinetuneConfig(**locals())
-
-def make_gpt2_large_aux4():
-    # Architecture params
-    model_name = "gpt2-large"
-    n_layers = 36
-    
-    # Training params
-    base_batch_size = 12
-    max_steps = 1200
-    block_size = 1024
-    target_batch_tokens = 2**19
-    save_steps = 100
-    
-    # Calculate derived training params
-    batch_size = base_batch_size
-    desired_batch_size = target_batch_tokens / block_size
-    gradient_accumulation_steps = int(desired_batch_size // batch_size)
-    gradient_checkpointing = False
-    
-    learning_rate: float = 4e-4
-    lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
-    lr_scheduler_kwargs: dict = {"min_lr": 2e-5}
-    warmup_steps = 15
-    momentum = 0.9**(base_batch_size/32)
-
-    # Calculate layernorm schedule
-    gap_ln2 = 4
-    gap_ln1qk = 2
-    gap_ln1v = 6
-    gap_lnf = None
-    gap_eot = 0
-    gap_bos = 0
-    
-    start_ln2 = 30
-    start_ln1qk = start_ln2 + n_layers * gap_ln2
-    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
-    start_lnf = start_ln1v + n_layers * gap_ln1v
-    start_eot = start_lnf + 2
-    start_bos = start_eot + 10
-    
-    aux_loss_weight = 0.025
-
-    return FinetuneConfig(**locals())
-
-def make_gpt2_large_aux6():
-    # Architecture params
-    model_name = "gpt2-large"
-    n_layers = 36
-    
-    # Training params
-    base_batch_size = 12
-    max_steps = 1200
-    block_size = 1024
-    target_batch_tokens = 2**19
-    save_steps = 100
-    
-    # Calculate derived training params
-    batch_size = base_batch_size
-    desired_batch_size = target_batch_tokens / block_size
-    gradient_accumulation_steps = int(desired_batch_size // batch_size)
-    gradient_checkpointing = False
-    
-    learning_rate: float = 6e-4
-    lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
-    lr_scheduler_kwargs: dict = {"min_lr": 2e-5}
-    warmup_steps = 15
-    momentum = 0.9**(base_batch_size/32)
-
-    # Calculate layernorm schedule
-    gap_ln2 = 4
-    gap_ln1qk = 2
-    gap_ln1v = 6
-    gap_lnf = None
-    gap_eot = 0
-    gap_bos = 0
-    
-    start_ln2 = 30
-    start_ln1qk = start_ln2 + n_layers * gap_ln2
-    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
-    start_lnf = start_ln1v + n_layers * gap_ln1v
-    start_eot = start_lnf + 2
-    start_bos = start_eot + 10
-    
-    aux_loss_weight = 0.025
+    aux_loss_weight = 0.03
 
     return FinetuneConfig(**locals())
 
@@ -428,15 +301,15 @@ def make_gpt2_xl():
     n_layers = 48
     
     # Training params
-    base_batch_size = 4
+    base_batch_size = 18 # B200 with 180 GB VRAM, adapt for other chips
     max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
     save_steps = 100
-
-    learning_rate: float = 5e-5
+        
+    learning_rate: float = 1e-4
     lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
-    lr_scheduler_kwargs: dict = {"min_lr": 1e-5}
+    lr_scheduler_kwargs: dict = {"min_lr": 2e-5}
     warmup_steps = 20
     momentum = 0.9**(base_batch_size/32)
     
@@ -469,13 +342,13 @@ def make_gpt2_xl_aux():
     n_layers = 48
     
     # Training params
-    base_batch_size = 4
+    base_batch_size = 18 # B200 with 180 GB VRAM, adapt for other chips
     max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**19
     save_steps = 100
         
-    learning_rate: float = 5e-5
+    learning_rate: float = 1e-4
     lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
     lr_scheduler_kwargs: dict = {"min_lr": 2e-5}
     warmup_steps = 20
@@ -489,7 +362,7 @@ def make_gpt2_xl_aux():
     
     # Calculate layernorm schedule
     gap_ln2 = 4
-    gap_ln1qk = 2
+    gap_ln1qk = 4
     gap_ln1v = 6
     gap_lnf = None
     gap_eot = 0
@@ -513,9 +386,6 @@ FINETUNE_CONFIGS = {
     "gpt2-medium_fasttune_aux": make_gpt2_medium_fasttune_aux(),
     "gpt2-large": make_gpt2_large(),
     "gpt2-large_aux": make_gpt2_large_aux(),
-    "gpt2-large_aux2": make_gpt2_large_aux2(),
-    "gpt2-large_aux4": make_gpt2_large_aux4(),
-    "gpt2-large_aux6": make_gpt2_large_aux6(),
     "gpt2-xl": make_gpt2_xl(),
     "gpt2-xl_aux": make_gpt2_xl_aux(),
 }
