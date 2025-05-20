@@ -57,11 +57,9 @@ def sample(model, tokenizer, prompt, max_length=50, num_return_sequences=1, temp
 from utils import calculate_sink_rate 
 
 def visualize_attention_comparison(model1, tokenizer1, model2, tokenizer2, prompt):
-    # %%
     model, tokenizer = load_model("gpt2", remove_ln=False)
     sample(model, tokenizer, "to be or not to")
 
-    # %%
     model, tokenizer = load_model("submarat/gpt2-noln-aux")
     sample(model, tokenizer, "to be or not to")
 
@@ -233,7 +231,78 @@ def main():
     print(f"  IQR = [{np.percentile(no_ln_layer3_sink_rates, 25):.4f}, {np.percentile(no_ln_layer3_sink_rates, 75):.4f}]")
     print(f"  Median = {np.median(no_ln_layer3_sink_rates):.4f}")
 
+def visualize_low_sink_rate_attention(model, tokenizer, prompt, sink_rate_threshold=0.1):
+    """Visualize attention patterns for cases where sink rate is below threshold."""
+    # Prepare input
+    inputs = tokenizer(prompt, return_tensors="pt")
+    inputs = {k: v.to(device) for k,v in inputs.items()}
+    
+    # Get attention patterns
+    with torch.no_grad():
+        outputs = model(**inputs, output_attentions=True)
+    
+    # Get attention tensors
+    attentions = outputs.attentions
+    
+    # Calculate sink rate for each layer
+    num_layers = len(attentions)
+    num_heads = attentions[0].shape[1]
+    tokens = tokenizer.convert_ids_to_tokens(inputs['input_ids'][0])
+    
+    # Plot attention patterns
+    import matplotlib.pyplot as plt
+    
+    for layer in range(num_layers):
+        # Calculate sink rate for this layer
+        layer_attentions = [attentions[layer]]
+        layer_sink_rate = calculate_sink_rate(model, layer_attentions)
+        
+        # Only visualize if sink rate is below threshold
+        if layer_sink_rate < sink_rate_threshold:
+            fig, axes = plt.subplots(num_heads, 1, figsize=(8, 3*num_heads))
+            fig.suptitle(f'Layer {layer} Attention Patterns (Sink Rate: {layer_sink_rate:.3f})')
+            
+            for head in range(num_heads):
+                # Get attention weights
+                attn = attentions[layer][0, head].cpu()
+                
+                # Plot heatmap
+                im = axes[head].imshow(attn, cmap='viridis')
+                axes[head].set_title(f'Head {head}')
+                
+                # Set tick labels
+                if len(tokens) < 10:  # Only show ticks for reasonably short sequences
+                    axes[head].set_xticks(range(len(tokens)))
+                    axes[head].set_yticks(range(len(tokens)))
+                    axes[head].set_xticklabels(tokens, rotation=45, fontsize=8)
+                    axes[head].set_yticklabels(tokens, fontsize=8)
+                else:
+                    axes[head].set_xticks([])
+                    axes[head].set_yticks([])
+            
+            plt.tight_layout()
+            plt.subplots_adjust(top=0.95)
+            plt.show()
+
+def test_low_sink_rate_visualization():
+    # Load model
+    print("Loading model...")
+    model, tokenizer = load_model("gpt2", remove_ln=False)
+    
+    # Example prompts that might have low sink rates
+    prompts = [
+        "The quick brown fox jumps over the lazy dog",
+        "In a world where technology advances rapidly",
+        "The sun sets behind the mountains, casting long shadows",
+        "She carefully arranged the flowers in the vase",
+        "The ancient ruins stood silently in the desert"
+    ]
+    
+    for prompt in prompts:
+        print(f"\nAnalyzing prompt: '{prompt}'")
+        visualize_low_sink_rate_attention(model, tokenizer, prompt)
+
 if __name__ == "__main__":
-    main()
+    test_low_sink_rate_visualization()
 
 
