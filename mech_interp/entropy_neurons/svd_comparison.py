@@ -73,6 +73,7 @@ for model_name, model in model_factory.models.items():
     # Find variance across entire vocab
     var = t.var(norm_Wu_Wout, axis=1).cpu().numpy()
     L2_Wout_array = t.squeeze(L2_Wout).cpu().numpy()
+    L2_Wu_array = t.squeeze(L2_Wu).cpu().numpy()
     
     # Find entropy neuron candidates (high norm, low variance)
     num_entropy_neurons = 100
@@ -84,6 +85,7 @@ for model_name, model in model_factory.models.items():
         'Wout': Wout,
         'Wu': Wu,
         'L2_Wout': L2_Wout_array,
+        'L2_Wu': L2_Wu_array,
         'var': var,
         'ratio': ratio,
         'top_indices': top_indices
@@ -92,10 +94,67 @@ for model_name, model in model_factory.models.items():
     # Calculate SVD for unembedding matrix
     U, S, Vt = t.svd(Wu)
     norm_S = S / t.max(S)
+    
+    # Calculate Cosine Sim of first entropy neuron with singular vectors
+    first_entropy_neuron_idx = top_indices[0]
+    Wout_idx = Wout[first_entropy_neuron_idx, :]
+    dots = t.matmul(U.T, Wout_idx)
+    # Calculate norms
+    wout_norm = t.norm(Wout_idx)
+    u_norms = t.norm(U, dim=0)
+    # Calculate cosine similarity
+    cos_sim = (dots / (wout_norm * u_norms)).abs().cpu().numpy()
+    squared_cos_sim = cos_sim ** 2
+    cum_squared_cos_sim = np.cumsum(squared_cos_sim)
+ 
     results[model_name]['norm_S'] = norm_S
     results[model_name]['U'] = U
     results[model_name]['S'] = S
     results[model_name]['Vt'] = Vt
+    results[model_name]['cos_sim'] = cos_sim
+    results[model_name]['squared_cos_sim'] = squared_cos_sim
+    results[model_name]['cum_squared_cos_sim'] = cum_squared_cos_sim
+    
+# %%
+# Combined plot with all models' W_out norms on a single histogram
+plt.figure(figsize=(10, 6))
+
+for model_name, model_results in results.items():
+    L2_Wout = model_results['L2_Wout']
+    plt.hist(L2_Wout, bins=50, 
+             label=f'{model_labels[model_name]}',
+             color=model_colors[model_name],
+             histtype='step', linewidth=3)
+plt.xticks(fontsize=14)
+plt.yticks(fontsize=14)
+plt.xlabel('||w_out|| Norm', fontsize=16)
+plt.ylabel('Frequency', fontsize=16)
+plt.legend(loc='upper right', fontsize=16)
+plt.tight_layout()
+plt.savefig(f'{save_path}/all_models_Wout_norm.png', dpi=300)
+plt.show()
+
+
+# %%
+# Combined plot with all models' W_u norms on a single histogram
+plt.figure(figsize=(10, 6))
+
+for model_name, model_results in results.items():
+    L2_Wu = model_results['L2_Wu']
+    L2_Wu_normalized = (L2_Wu - np.min(L2_Wu)) / (np.max(L2_Wu) - np.min(L2_Wu))
+    plt.hist(L2_Wu_normalized, bins=60, 
+             label=f'{model_labels[model_name]}',
+             color=model_colors[model_name],
+             histtype='step', linewidth=3)
+
+plt.xticks(fontsize=14)
+plt.yticks(fontsize=14)
+plt.xlabel('Normalised ||W_u|| Norm', fontsize=16)
+plt.ylabel('Frequency', fontsize=16)
+plt.legend(loc='upper right', fontsize=16)
+plt.tight_layout()
+plt.savefig(f'{save_path}/all_models_Wu_norm.png', dpi=300)
+plt.show()
 
 # %%
 # Create individual plots for each model's normal vs entropy neurons
@@ -109,18 +168,20 @@ for i, (model_name, model_results) in enumerate(results.items()):
     top_indices = model_results['top_indices']
     
     # Plot normal neurons
-    plt.scatter(L2_Wout, var, alpha=0.5, label='Normal')
+    plt.scatter(L2_Wout, var, alpha=0.5, label='Normal', s=30)
     
     # Plot top entropy neurons for this model
     plt.scatter(L2_Wout[top_indices[:num_neurons]], var[top_indices[:num_neurons]], 
-                color='red', s=30, label='Entropy')
+                color='red', s=40, label='Entropy')
     
-    plt.xlabel('||w_out||', fontsize=14)
+    plt.xlabel('||w_out||', fontsize=16)
+    plt.xticks(fontsize=14)
+    plt.yticks(fontsize=14)
     if i == 0:
-        plt.ylabel('LogitVar(w_out)', fontsize=14)
+        plt.ylabel('LogitVar(w_out)', fontsize=16)
     plt.yscale('log')
     plt.title(f'{model_labels[model_name]}', fontsize=14)
-    plt.legend(loc='upper right', fontsize=12)
+    plt.legend(loc='upper right', fontsize=16)
 
 plt.tight_layout()
 plt.savefig(f'{save_path}/all_models_neurons.png', dpi=300)
@@ -130,24 +191,30 @@ plt.show()
 # Create SVD plots with all models on the same plot - two columns: full and zoomed
 plt.figure(figsize=(8, 8))
 
-# Plot 1: Full SVD for all models
+# Zoomed SVD for all models
 plt.subplot(1, 1, 1)
 
 for model_name, model_results in results.items():
-    S = model_results['S']
-    norm_S = S / t.sum(S)
+    norm_S = model_results['norm_S']
     x_vals = t.arange(norm_S.shape[0]).cpu().numpy()
     
+    # Plot lower singular values to visualise nullspace
     plt.plot(x_vals, norm_S.cpu().numpy(), 
-             lw=2, label=f'{model_labels[model_name]}', 
+             lw=3, label=f'{model_labels[model_name]}', 
              color=model_colors[model_name])
+    
+    # Plot entropy neuron overlap with singular vectors
+    overlaps = results[model_name]['cos_sim']
+    plt.plot(x_vals, overlaps, color=model_colors[model_name], linestyle='--', lw=2)
 
-plt.ylim(0, 0.001)
-plt.xlim(residual_stream_dim - 19, residual_stream_dim - 1)
-plt.ylabel('Normalised Singular Values', fontsize=14)
-plt.xlabel('Singular Vector Index', fontsize=14)
+plt.xticks(fontsize=14)
+plt.yticks(fontsize=14)
+plt.xlim(residual_stream_dim - 50, residual_stream_dim - 1)
+plt.ylim(0, 0.2)
+plt.ylabel('Normalised Singular Values', fontsize=16)
+plt.xlabel('Singular Vector Index', fontsize=16)
 #plt.title('SVD Comparison - Nullspace')
-plt.legend(loc='upper right', fontsize=12)
+plt.legend(loc='upper right', fontsize=16)
 
 plt.tight_layout()
 plt.savefig(f'{save_path}/all_models_SVD_comparison.png', dpi=300)
