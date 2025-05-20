@@ -51,20 +51,20 @@ plt.plot([], [], color='black', linestyle='-', alpha=0.5, label='GPT-2 original'
 
 # Add vertical lines for layer norm removal ranges
 # Small model (from top of plot to Small OWT score)
-plt.plot([45, 45], [7.5, 3.1006 + 3], color='black', linestyle='--', alpha=0.3)
-plt.plot([129, 129], [7.5, 3.1006 + 3], color='black', linestyle='--', alpha=0.3)
+plt.plot([20, 20], [7.5, 3.1006 + 3], color='black', linestyle='--', alpha=0.3)
+plt.plot([104, 104], [7.5, 3.1006 + 3], color='black', linestyle='--', alpha=0.3)
 
 # Medium model (from Small OWT score to Medium OWT score)
-plt.plot([30, 30], [3.1006 + 3, 2.8145 + 2], color='black', linestyle='--', alpha=0.3)
-plt.plot([198, 198], [3.1006 + 3, 2.8145 + 2], color='black', linestyle='--', alpha=0.3)
+plt.plot([20, 20], [3.1006 + 3, 2.8145 + 2], color='black', linestyle='--', alpha=0.3)
+plt.plot([188, 188], [3.1006 + 3, 2.8145 + 2], color='black', linestyle='--', alpha=0.3)
 
 # Large model (from Medium OWT score to Large OWT score)
 plt.plot([30, 30], [2.8145 + 2, 2.6623 + 1], color='black', linestyle='--', alpha=0.3)
 plt.plot([534, 534], [2.8145 + 2, 2.6623 + 1], color='black', linestyle='--', alpha=0.3)
 
 # XL model (from Large OWT score to XL OWT score)
-plt.plot([110, 110], [2.6623 + 1, 2.5567], color='black', linestyle='--', alpha=0.3)
-plt.plot([878, 878], [2.6623 + 1, 2.5567], color='black', linestyle='--', alpha=0.3)
+plt.plot([50, 50], [2.6623 + 1, 2.5567], color='black', linestyle='--', alpha=0.3)
+plt.plot([722, 722], [2.6623 + 1, 2.5567], color='black', linestyle='--', alpha=0.3)
 
 # Add a single legend entry for all removal periods
 plt.plot([], [], color='black', linestyle='--', alpha=0.3, 
