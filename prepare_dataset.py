@@ -74,7 +74,7 @@ def prepare_dataset(model_name="gpt2"):
     print("Training batch shape:", training_batch["input_ids"].shape)
     print("Labels shape:", training_batch["labels"].shape)
 
-    return tokenized, data_collator
+    return tokenized, data_collator, tokenizer
 
 if __name__ == "__main__":
     model_name = "gpt2" 

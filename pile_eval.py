@@ -96,7 +96,7 @@ def preprocess_pile_dataset(dataset_name, model_name, num_samples=5000, cache_di
     return processed_examples, tokenizer
 
 
-def evaluate_model_on_pile(model, processed_examples, batch_size=8, device=None, pin_memory=True):
+def evaluate_model_on_pile(model, processed_examples, batch_size=8, device=None, pin_memory=True, tokenizer=None):
     """Evaluate model with efficient batched inference"""
     # Use the model's device if device not explicitly specified
     if device is None:
@@ -138,10 +138,10 @@ def evaluate_model_on_pile(model, processed_examples, batch_size=8, device=None,
             
             if isinstance(model, HookedTransformer):
                 logits = model(batch_input_ids)
-                loss = model.loss_fn(logits, batch_input_ids, per_token=True)
-                loss_list.append(loss.flatten().cpu().numpy())
-                batch_loss = loss.sum().item()
-                batch_tokens = loss.numel()
+                per_token_loss = model.loss_fn(logits, batch_input_ids, per_token=True)
+                loss_list.append(per_token_loss.flatten().cpu().numpy())
+                batch_loss = per_token_loss.sum().item()
+                batch_tokens = per_token_loss.numel()
             else:
                 outputs = model(input_ids=batch_input_ids, labels=batch_input_ids)
                 # outputs.loss is the average loss
@@ -170,6 +170,26 @@ def evaluate_model_on_pile(model, processed_examples, batch_size=8, device=None,
                 
             total_loss += batch_loss
             total_tokens += batch_tokens
+
+            # If per_token_loss is too high for any token of a sample, save the sample
+            for j in range(batch_input_ids.size(0)):
+                if per_token_loss[j].max() > 50.0:
+                    print(f"Sample {i} has high loss: {per_token_loss[j].max().item()}")
+                    # Save the sample for further analysis
+                    with open("high_loss_samples.txt", "a") as f:
+                        # format the batch input IDs and loss
+                        batch_ids = " ".join(str(batch_input_ids[j].cpu().numpy()))
+                        f.write(f"Sample {i}: {batch_ids}\n")
+                        loss = " ".join(str(per_token_loss[j].cpu().numpy()))
+                        f.write(f"Loss: {loss}\n")
+                        # Save the sample decoded
+                        if tokenizer is not None:
+                            # Decode the input IDs to text
+                            decoded_sample = tokenizer.decode(batch_input_ids[j].cpu().numpy(), skip_special_tokens=True)
+                            f.write(f"Decoded: {decoded_sample}\n")
+                        f.write("\n")
+                        
+
             
             if i % 10 == 0 or i == 0:
                 avg_loss_so_far = total_loss / total_tokens if total_tokens > 0 else float("inf")
