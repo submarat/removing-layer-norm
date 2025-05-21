@@ -650,7 +650,7 @@ def create_readable_tick_labels(layers):
             idx = layer.replace("Resid_post_", "")
             # Only show every second FFN layer
             if int(idx) % 2 == 1:
-                readable_labels.append(f"FFN        {idx}")
+                readable_labels.append(f"MLP        {idx}")
             else:
                 readable_labels.append("")
         else:
