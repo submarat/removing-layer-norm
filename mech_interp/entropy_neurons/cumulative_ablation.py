@@ -315,10 +315,13 @@ class CumulativeAblation:
         return loss, entropy
    
 if __name__ == "__main__":
-    #entropy_neuron_indices = [584, 2123, 2870]  # Small
-    entropy_neuron_indices = [3144, 1083, 1108] # Medium
+    model_indices = {
+        'small' : [584, 2123, 2870],
+        'medium': [3144, 1083, 1108]
+    }
     models = ['baseline', 'finetuned', 'noLN']
     model_size = 'medium'
+    entropy_neuron_indices = model_indices[model_size]
     save_path = f'figures/{model_size}'
     os.makedirs(save_path, exist_ok=True)
     model_results = {}
@@ -381,16 +384,16 @@ if __name__ == "__main__":
         num_ablated = list(range(len(ce_losses_mean)))
         
         # Plot relative CE Loss change
-        plt.plot(num_ablated, ce_relative_change, 'o-', lw=2,
+        plt.plot(num_ablated, ce_relative_change, 'o-', lw=4,
                  color=colors[idx], alpha=0.8, label=model_labels[model_type])
     
     plt.gca().xaxis.set_major_locator(MaxNLocator(integer=True))
-    plt.xlabel('Number of Neurons Ablated', fontsize=14)
-    plt.ylabel('Change in Cross-Entropy Loss (%)', fontsize=14)
+    plt.xlabel('Number of Neurons Ablated', fontsize=16)
+    plt.ylabel('Change in Cross-Entropy Loss (%)', fontsize=16)
     #plt.title('Relative Effect of Neuron Ablation on Cross-Entropy Loss', fontsize=16)
-    plt.tick_params(axis='both', which='major', labelsize=12)
+    plt.tick_params(axis='both', which='major', labelsize=14)
     plt.grid(True, linestyle='--', alpha=0.7)
-    plt.legend(fontsize=16)
+    #plt.legend(fontsize=16)
     
     # Adjust layout
     plt.tight_layout()
@@ -414,16 +417,16 @@ if __name__ == "__main__":
         num_ablated = list(range(len(entropies_mean)))
         
         # Plot relative Entropy change
-        plt.plot(num_ablated, entropy_relative_change, 'o-', lw=2,
+        plt.plot(num_ablated, entropy_relative_change, 'o-', lw=4,
                  color=colors[idx], alpha=0.8, label=model_labels[model_type])    
 
     plt.gca().xaxis.set_major_locator(MaxNLocator(integer=True))
-    plt.xlabel('Number of Neurons Ablated', fontsize=14)
-    plt.ylabel('Change in Entropy (%)', fontsize=14)
+    plt.xlabel('Number of Neurons Ablated', fontsize=16)
+    plt.ylabel('Change in Entropy (%)', fontsize=16)
     #plt.title('Relative Effect of Neuron Ablation on Entropy', fontsize=16)
-    plt.tick_params(axis='both', which='major', labelsize=12)
+    plt.tick_params(axis='both', which='major', labelsize=14)
     plt.grid(True, linestyle='--', alpha=0.7)
-    plt.legend(fontsize=16)
+    plt.legend(fontsize=16, loc='middle right')
     
     # Adjust layout
     plt.tight_layout()

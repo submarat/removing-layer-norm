@@ -59,6 +59,7 @@ for model_name, model in model_factory.models.items():
     # Extract weights
     residual_stream_dim = model.cfg.d_model
     Wout = model.blocks[-1].mlp.W_out
+    bout = model.blocks[-1].mlp.b_out
     Wu = model.unembed.W_U
     L2_Wout = t.norm(Wout, dim=1, keepdim=True)
     L2_Wu = t.norm(Wu, dim=0, keepdim=True)
@@ -82,7 +83,8 @@ for model_name, model in model_factory.models.items():
     
     # Store results for this model
     results[model_name] = {
-        'Wout': Wout,
+        'Wout': Wout.cpu().numpy(),
+        'bout': bout.cpu().numpy(),
         'Wu': Wu,
         'L2_Wout': L2_Wout_array,
         'L2_Wu': L2_Wu_array,
@@ -114,7 +116,25 @@ for model_name, model in model_factory.models.items():
     results[model_name]['cos_sim'] = cos_sim
     results[model_name]['squared_cos_sim'] = squared_cos_sim
     results[model_name]['cum_squared_cos_sim'] = cum_squared_cos_sim
+
     
+# %%
+for model_name in model_names:
+    # Get the Wout and bout values
+    Wout = results[model_name]['Wout']
+    bout = results[model_name]['bout']
+    neuron_indices = results[model_name]['top_indices'][0:1]
+    
+    # Print the bias for each neuron
+    print("Printing 'effective' bias for each entropy neuron")
+    for i, idx in enumerate(neuron_indices):
+        neuron_weights = Wout[idx, :]
+        norm_weights = neuron_weights / np.linalg.norm(neuron_weights)
+        effective_bias = np.dot(norm_weights, bout)
+        # Print the result
+        print(f"{model_name:<10} : neuron {idx}\t{effective_bias:.6f}")    
+
+        
 # %%
 # Combined plot with all models' W_out norms on a single histogram
 plt.figure(figsize=(10, 6))
