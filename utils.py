@@ -62,10 +62,18 @@ def remove_layernorm_by_scaling(model_hf, std_dict):
     return model_hf
 
 
-def calculate_sink_rate(model, attentions, eps=0.3):
+def calculate_sink_rate(model, attentions: list[torch.Tensor], eps=0.3):
     """
     Proportion of heads that attend to the sink on average with a coefficient of at least eps.
-    As defined in https://arxiv.org/pdf/2504.02732
+    As defined in https://openreview.net/pdf?id=78Nn4QJTEN
+
+    Args:
+        model: The model to calculate the sink rate for.
+        attentions: A list of tensors of shape (B, H, T, T) containing the attentions for each layer.
+        eps: The threshold for the sink rate.
+
+    Returns:
+        A tensor of shape (B,) containing the sink rate for each input in the batch.
     """
 
     # Get config from model
@@ -78,7 +86,6 @@ def calculate_sink_rate(model, attentions, eps=0.3):
     # Calculate the sink rate for each input in the batch
     sink_rate = torch.zeros((B,), device=attentions[0].device)
     for attn in attentions:
-        print(attn.shape)
         # Heads attending to sink
         y = attn[:,:,:,0] > eps # Bool[B, T, H]
         # Number of heads attending to sink for each position
