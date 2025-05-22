@@ -6,6 +6,7 @@ EXP_RECOMPUTE_STD_ON_FAKE: Recompute std when FakeLayerNorm is fake - will recom
 EXP_RECOMPUTE_STD_ON_REAL: Recompute std when FakeLayerNorm is real - will freeze std when FakeLayerNorm goes fake
 EXP_NON_BOS_AVERAGE_STD: Compute average std based on input[1:] (i.e. non-BOS) positions
 EXP_BOS_SPECIAL_TREATMENT: Whether to use BOS special treatment where FakeLayerNorm will use a special std value for the first position in residual stream
+EXP_FLASH_ATTN: Use flash attention
 """
 import os
 
@@ -42,8 +43,8 @@ from devtools import pprint
 device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
 
 torch.manual_seed(1337)
-torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
-torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
+# torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
+# torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 
 _USE_WANDB = True
 
@@ -602,11 +603,10 @@ def load_model(model_name="gpt2", remove_ln=False, grad_acc_steps=1):
         model_name,
         cache_dir=f"{model_name}_cache",
         config=transformers.GPT2Config.from_pretrained(model_name),
-        attn_implementation='flash_attention_2',
+        attn_implementation='flash_attention_2' if os.environ.get("EXP_FLASH_ATTN", "0") == "1" else None,
         torch_dtype=torch.bfloat16,
         device_map="auto",
     )
-    # attn_pdrop=0.1, embd_pdrop=0.1, resid_pdrop=0.1: Default values for GPT2, can be changed with kwargs
     
     if remove_ln:
         # Replace all LayerNorm instances with FakeLayerNorm
