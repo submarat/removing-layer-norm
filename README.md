@@ -43,3 +43,10 @@ Evaluate on The Pile:
 ```
 python eval_pile.py -m gpt2 -f transformers -b 8 -d pile-apollo
 ```
+
+To evaluate all models and to reproduce the results in the manuscript run:
+This task is compute intensive and takes about 4h on an A100.
+```
+chmod +x eval_all.sh
+./eval_all.sh
+```

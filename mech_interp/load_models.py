@@ -219,12 +219,12 @@ class ModelFactory:
             'small': {
                 'baseline': "gpt2",
                 'finetuned': "schaeff/gpt2-small_vanilla300",
-                'noLN': "submarat/gpt2-noln-ma-aux"
+                'noLN': "schaeff/gpt2-small_LNFree300"
             },
             'medium': {
                 'baseline': "gpt2-medium",
-                'finetuned': "schaeff/gpt-2medium_vanilla500",
-                'noLN': "submarat/gpt2-medium-noln-ma-aux"
+                'finetuned': "schaeff/gpt2-medium_vanilla500",
+                'noLN': "schaeff/gpt2-medium_LNFree500"
             }
         }
         
