@@ -96,7 +96,7 @@ def preprocess_pile_dataset(dataset_name, model_name, num_samples=5000, cache_di
     return processed_examples, tokenizer
 
 
-def evaluate_model_on_pile(model, processed_examples, batch_size=8, device=None, pin_memory=True):
+def evaluate_model_on_pile(model, processed_examples, batch_size=8, device=None, pin_memory=True, save_losses=False):
     """Evaluate model with efficient batched inference"""
     # Use the model's device if device not explicitly specified
     if device is None:
@@ -200,8 +200,8 @@ def evaluate_model_on_pile(model, processed_examples, batch_size=8, device=None,
     
     avg_loss = total_loss / total_tokens if total_tokens > 0 else float("inf")
     print(f"Evaluation complete. Final loss: {avg_loss:.4f}")
-
-    np.savetxt('losses.out', loss_list, delimiter=',')
+    if save_losses:
+        np.savetxt('losses.out', loss_list, delimiter=',')
 
     return avg_loss 
 
