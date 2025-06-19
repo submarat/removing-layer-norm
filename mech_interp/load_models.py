@@ -12,13 +12,14 @@ from huggingface_hub import snapshot_download
 
 # Type aliases for clarity
 ModelName = Literal['baseline', 'finetuned', 'noLN']
-ModelSize = Literal['small', 'medium']
+ModelSize = Literal['small', 'medium', 'xl']
 DeviceType = Union[str, torch.device]
 
 # GPT-2 model size to HuggingFace repo mapping
 GPT2_SIZE_TO_REPO = {
     'small': 'gpt2',            # 124M parameters
     'medium': 'gpt2-medium',    # 355M parameters
+    'xl': 'gpt2-xl'             # 1.5B parameters
 }
 
 
@@ -225,6 +226,11 @@ class ModelFactory:
                 'baseline': "gpt2-medium",
                 'finetuned': "schaeff/gpt2-medium_vanilla500",
                 'noLN': "schaeff/gpt2-medium_LNFree500"
+            },
+            'xl': {
+                'baseline': "gpt2-xl",
+                'finetuned': "schaeff/gpt2-xl_vanilla800",
+                'noLN': "schaeff/gpt2-xl_LNFree800"
             }
         }
         
