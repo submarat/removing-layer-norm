@@ -1,4 +1,4 @@
-# Removing Layer Norm from Transformers
+# Paper: Transformers Don't Need LayerNorm at Inference Time
 
 Companion code for removing layer normalization from GPT-2 whilst preserving its next-token prediction performance.
 
