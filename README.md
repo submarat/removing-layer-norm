@@ -57,7 +57,7 @@ chmod +x eval_all.sh
 If you have found our work useful please cite as:
 
 ```
-@misc{bkss2025layernorm,
+@misc{gpt2layernorm2025,
   author = {Baroni, Luca and Khara, Galvin and Schaeffer, Joachim and Subkhankulov, Marat and Heimersheim, Stefan},
   title = {Transformers Don't Need LayerNorm at Inference Time: Scaling LayerNorm Removal to GPT-2 XL and the Implications for Mechanistic Interpretability},
   year = {2025},
