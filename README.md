@@ -46,7 +46,23 @@ python eval_pile.py -m gpt2 -f transformers -b 8 -d pile-apollo
 
 To evaluate all models and to reproduce the results in the manuscript run:
 This task is compute intensive and takes about 4h on an A100.
-```
+
 chmod +x eval_all.sh
 ./eval_all.sh
+```
+
+## Citation
+
+If you have found our work useful please cite as:
+
+```
+@misc{bkss2025layernorm,
+  author = {Baroni, Luca and Khara, Galvin and Schaeffer, Joachim and Subkhankulov, Marat and Heimersheim, Stefan},
+  title = {Transformers Don't Need LayerNorm at Inference Time: Scaling LayerNorm Removal to GPT-2 XL and the Implications for Mechanistic Interpretability},
+  year = {2025},
+  eprint = {2507.02559},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.LG},
+  url = {https://arxiv.org/abs/2507.02559v1}
+}
 ```
