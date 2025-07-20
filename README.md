@@ -106,25 +106,27 @@ python eval_pile.py -m gpt2 -f transformers -b 8 -d pile-apollo
 
 ### Reproduce paper results:
 This task is compute intensive and takes about 4h on an A100.
+
 ```bash
 chmod +x eval_all.sh
 ./eval_all.sh
 ```
-
-## Citation
-
-If you use this code or our findings in your research, please cite our paper:
-
-```bibtex
-@article{transformers-dont-need-layernorm,
-  title={Transformers Don't Need LayerNorm at Inference Time: Scaling LayerNorm Removal to GPT-2 XL and the Implications for Mechanistic Interpretability},
-  author={Baroni, Luca and Khara, Galvin and Schaeffer, Joachim and Subkhankulov, Marat and Heimersheim, Stefan},
-  journal={...},
-  year={2025},
-  url={...}
-}
-```
-
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Citation
+
+If you have found our work useful please cite as:
+
+```
+@misc{gpt2layernorm2025,
+  author = {Baroni, Luca and Khara, Galvin and Schaeffer, Joachim and Subkhankulov, Marat and Heimersheim, Stefan},
+  title = {Transformers Don't Need LayerNorm at Inference Time: Scaling LayerNorm Removal to GPT-2 XL and the Implications for Mechanistic Interpretability},
+  year = {2025},
+  eprint = {2507.02559},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.LG},
+  url = {https://arxiv.org/abs/2507.02559v1}
+}
+```
