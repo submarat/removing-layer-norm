@@ -1,9 +1,9 @@
 # Transformers Don't Need LayerNorm at Inference Time
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![arXiv](https://img.shields.io/badge/arXiv-TBD-b31b1b.svg)]([https://arxiv.org/abs/TBD](https://arxiv.org/abs/2507.02559v1))
+[![arXiv](https://img.shields.io/badge/arXiv-2507.02559-b31b1b.svg)](https://arxiv.org/abs/2507.02559v1)
 
-[Paper]([https://arxiv.org/abs/TBD](https://arxiv.org/abs/2507.02559v1)) | [Project Page](#) | [Models](https://huggingface.co/schaeff)
+[Paper](https://arxiv.org/abs/2507.02559v1) | [Project Page](#) | [Models](https://huggingface.co/schaeff)
 
 This repository contains the official implementation of "Transformers Don't Need LayerNorm at Inference Time: Scaling LayerNorm Removal to GPT-2 XL and the Implications for Mechanistic Interpretability" which demonstrates that all layer normalization (LN) layers can be removed from GPT-2 models with only a small increase in validation loss.
 
