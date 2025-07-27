@@ -569,15 +569,6 @@ def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_ac
     model.transformer.forward = make_transformer_forward(model.transformer.forward)
 
 def load_model(model_name="gpt2", remove_ln=False, grad_acc_steps=1, momentum=0.1):
-    model = transformers.GPT2LMHeadModel.from_pretrained(
-        model_name,
-        cache_dir=f"{model_name}_cache",
-        config=transformers.GPT2Config.from_pretrained(model_name),
-        attn_implementation='flash_attention_2' if os.environ.get("EXP_FLASH_ATTN", "0") == "1" else None,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
-    )
-    
     # Check if this is a Pythia model
     is_pythia = "pythia" in model_name.lower()
     
@@ -597,14 +588,15 @@ def load_model(model_name="gpt2", remove_ln=False, grad_acc_steps=1, momentum=0.
             config=config,
         )
     else:
-        # Original GPT-2 loading code
         model = transformers.GPT2LMHeadModel.from_pretrained(
             model_name,
-            cache_dir=f"{model_name.split('/')[-1]}_cache",
-            config=transformers.GPT2Config.from_pretrained(
-                model_name, dropout=0.0, attn_pdrop=0.0, embd_pdrop=0.0, resid_pdrop=0.0
-            ),
+            cache_dir=f"{model_name}_cache",
+            config=transformers.GPT2Config.from_pretrained(model_name),
+            attn_implementation='flash_attention_2' if os.environ.get("EXP_FLASH_ATTN", "0") == "1" else None,
+            torch_dtype=torch.bfloat16,
+            device_map="auto",
         )
+    
 
     # If we're removing LayerNorm, apply the appropriate replacement
     if remove_ln:
@@ -732,25 +724,6 @@ def replace_pythia_layernorm_with_fake_layernorm(model):
     if final_ln_bias is not None:
         model.gpt_neox.final_layer_norm.bias = nn.Parameter(final_ln_bias)
 
-
-def finetune_with_ln(model, training_args, tokenized, data_collator, config, pile_eval_dataset=None):
-    """Finetune model with layer normalization"""
-    # Create multi-dataset dictionary if pile_eval_dataset is provided
-    if pile_eval_dataset is not None:
-        eval_datasets = {
-            # "openwebtext": tokenized["test"],
-            "pile10k": pile_eval_dataset
-        }
-    else:
-        eval_datasets = tokenized["test"]
-    
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=tokenized["train"],
-        eval_dataset=eval_datasets,
-        data_collator=data_collator,
-    )
 
 def finetune(model, training_args, tokenized, data_collator, config, pile_eval_dataset=None, remove_ln=False, checkpoint_step=None):
     """Finetune model with or without layer normalization"""
