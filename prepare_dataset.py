@@ -11,7 +11,7 @@ def prepare_dataset(model_name="gpt2"):
         print("Tokenized dataset not found. Processing from scratch...")
 
         print("Downloading openwebtext dataset...")
-        dataset = datasets.load_dataset("openwebtext", num_proc=8)
+        dataset = datasets.load_dataset("openwebtext", num_proc=8, trust_remote_code=True)
 
         split_dataset = dataset["train"].train_test_split(
             test_size=0.0005, seed=2357, shuffle=True

@@ -3,6 +3,7 @@ model-with-ln/
 model-without-ln/
 tokenizer/
 tokenized_dataset/
+processed_datasets/
 
 # Python
 __pycache__/
@@ -45,7 +46,23 @@ venv.bak/
 # Misc
 .DS_Store
 
-gpt2_cache
+*_cache
 openwebtext
 results
 wandb
+
+# Misc
+mech_interp/experiments/attribution_patching/figures/
+mech_interp/models/
+*.png
+mech_interp/experiments/attribution_patching/*.pt
+*.parquet
+*.csv
+*.pt
+*.txt
+nohup.out 
+losses.out
+
+mech_interp/attribution_patching/models/
+mech_interp/attribution_patching/data/prompts_*/new_resid*
+mech_interp/experiments_old
