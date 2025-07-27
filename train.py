@@ -596,7 +596,6 @@ def load_model(model_name="gpt2", remove_ln=False, grad_acc_steps=1, momentum=0.
             torch_dtype=torch.bfloat16,
             device_map="auto",
         )
-    
 
     # If we're removing LayerNorm, apply the appropriate replacement
     if remove_ln:
@@ -604,16 +603,17 @@ def load_model(model_name="gpt2", remove_ln=False, grad_acc_steps=1, momentum=0.
         std_bos_dict = std_dicts[model_name]["std_bos_dict"]
 
         if is_pythia:
-            replace_pythia_layernorm_with_fake_layernorm(model)
+            replace_pythia_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_acc_steps=grad_acc_steps, momentum=momentum)
         else:
-            replace_layernorm_with_fake_layernorm(model)
+            replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_acc_steps=grad_acc_steps, momentum=momentum)
 
     return model
 
-def replace_pythia_layernorm_with_fake_layernorm(model):
+def replace_pythia_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_acc_steps=1, momentum=0.1):
     """Replace Pythia's LayerNorm with FakeLayerNorm"""
     n_layers = model.config.num_hidden_layers
-    hidden_size = model.config.hidden_size
+    n_embd = model.config.hidden_size
+    n_ctx = model.config.max_position_embeddings
     
     # For Pythia models, the layer names are different
     for i in range(n_layers):
@@ -628,15 +628,26 @@ def replace_pythia_layernorm_with_fake_layernorm(model):
         post_ln_bias = layer.post_attention_layernorm.bias.clone().detach() if hasattr(layer.post_attention_layernorm, 'bias') else None
         
         # Replace with FakeLayerNorm
+        layer_name = f"blocks.{i}.hook_resid_pre"
         layer.input_layernorm = FakeLayerNorm(
-            ndim=hidden_size, 
-            layer=f"blocks.{i}.hook_resid_pre", 
-            bias=input_ln_bias is not None
+            n_embd=n_embd, 
+            n_ctx=n_ctx,
+            layer=layer_name, 
+            bias=input_ln_bias is not None,
+            init_average_std=std_dict[layer_name],
+            init_bos_std=std_bos_dict[layer_name],
+            grad_acc_steps=grad_acc_steps,
+            momentum=momentum,
         )
         layer.post_attention_layernorm = FakeLayerNorm(
-            ndim=hidden_size, 
-            layer=f"blocks.{i}.hook_resid_pre", 
-            bias=post_ln_bias is not None
+            n_embd=n_embd, 
+            n_ctx=n_ctx,
+            layer=layer_name, 
+            bias=post_ln_bias is not None,
+            init_average_std=std_dict[layer_name],
+            init_bos_std=std_bos_dict[layer_name],
+            grad_acc_steps=grad_acc_steps,
+            momentum=momentum,
         )
         
         # Restore weights
@@ -650,27 +661,56 @@ def replace_pythia_layernorm_with_fake_layernorm(model):
         # Monkey patch for Pythia attention blocks
         def make_attn_forward(old_forward):
             def new_forward(self, x_qk, x_v):
-                B, T, C = x_qk.size()
+                # Handle different input shapes
+                if len(x_qk.size()) == 2:
+                    # If input is 2D, assume it's (batch_size * seq_len, hidden_size)
+                    B_T, C = x_qk.size()
+                    B = 1  # Default batch size
+                    T = B_T // B
+                else:
+                    B, T, C = x_qk.size()
                 
-                # Pythia uses separate projection matrices for q, k, v
-                q = self.query_key_value.weight[:C].reshape(self.num_heads, self.head_size, C) @ x_qk.reshape(B*T, C, 1)
-                q = q.reshape(self.num_heads, self.head_size, B, T).permute(2, 0, 3, 1)
+                # Get number of heads from the model config
+                num_heads = model.config.num_attention_heads
+                head_size = self.head_size
                 
-                k = self.query_key_value.weight[C:2*C].reshape(self.num_heads, self.head_size, C) @ x_qk.reshape(B*T, C, 1)
-                k = k.reshape(self.num_heads, self.head_size, B, T).permute(2, 0, 3, 1)
+                # Pythia uses a combined QKV projection matrix
+                # The weight matrix has shape (3 * num_heads * head_size, C) = (1536, 512)
+                # We need to split it into Q, K, V parts
+                qkv_weight = self.query_key_value.weight  # Shape: (1536, 512)
+                q_weight = qkv_weight[:num_heads * head_size]  # Shape: (512, 512)
+                k_weight = qkv_weight[num_heads * head_size:2 * num_heads * head_size]  # Shape: (512, 512)
+                v_weight = qkv_weight[2 * num_heads * head_size:]  # Shape: (512, 512)
                 
-                v = self.query_key_value.weight[2*C:3*C].reshape(self.num_heads, self.head_size, C) @ x_v.reshape(B*T, C, 1)
-                v = v.reshape(self.num_heads, self.head_size, B, T).permute(2, 0, 3, 1)
+                # Compute Q, K, V projections
+                q = x_qk @ q_weight.T  # Shape: (B*T, 512) or (B, T, 512)
+                k = x_qk @ k_weight.T  # Shape: (B*T, 512) or (B, T, 512)
+                v = x_v @ v_weight.T   # Shape: (B*T, 512) or (B, T, 512)
                 
+                # Add bias if present
                 if self.query_key_value.bias is not None:
-                    q = q + self.query_key_value.bias[:C].reshape(1, self.num_heads, 1, self.head_size)
-                    k = k + self.query_key_value.bias[C:2*C].reshape(1, self.num_heads, 1, self.head_size)
-                    v = v + self.query_key_value.bias[2*C:3*C].reshape(1, self.num_heads, 1, self.head_size)
+                    q_bias = self.query_key_value.bias[:num_heads * head_size]
+                    k_bias = self.query_key_value.bias[num_heads * head_size:2 * num_heads * head_size]
+                    v_bias = self.query_key_value.bias[2 * num_heads * head_size:]
+                    q = q + q_bias
+                    k = k + k_bias
+                    v = v + v_bias
+                
+                # Reshape to (B, T, num_heads, head_size) and transpose to (B, num_heads, T, head_size)
+                if len(x_qk.size()) == 2:
+                    # Reshape from (B*T, 512) to (B, T, 512)
+                    q = q.view(B, T, -1)
+                    k = k.view(B, T, -1)
+                    v = v.view(B, T, -1)
+                
+                q = q.view(B, T, num_heads, head_size).transpose(1, 2)
+                k = k.view(B, T, num_heads, head_size).transpose(1, 2)
+                v = v.view(B, T, num_heads, head_size).transpose(1, 2)
                 
                 # Causal self-attention
                 y = F.scaled_dot_product_attention(
                     q, k, v,
-                    dropout_p=self.attention_dropout.p if hasattr(self, 'attention_dropout') else 0.0,
+                    dropout_p=self.attention_dropout if hasattr(self, 'attention_dropout') else 0.0,
                     is_causal=True
                 )
                 
@@ -682,7 +722,7 @@ def replace_pythia_layernorm_with_fake_layernorm(model):
                 
             return types.MethodType(new_forward, layer.attention)
             
-        # layer.attention.forward = make_attn_forward(layer.attention.forward)
+        layer.attention.forward = make_attn_forward(layer.attention.forward)
         
         # Monkey patch the forward method of the layer
         def make_forward(old_forward):
@@ -714,15 +754,60 @@ def replace_pythia_layernorm_with_fake_layernorm(model):
     final_ln_weight = model.gpt_neox.final_layer_norm.weight.clone().detach()
     final_ln_bias = model.gpt_neox.final_layer_norm.bias.clone().detach() if hasattr(model.gpt_neox.final_layer_norm, 'bias') else None
     
+    layer_name = f"blocks.{n_layers-1}.hook_resid_post"
     model.gpt_neox.final_layer_norm = FakeLayerNorm(
-        ndim=hidden_size, 
-        layer=f"blocks.{n_layers-1}.hook_resid_post", 
-        bias=final_ln_bias is not None
+        n_embd=n_embd, 
+        n_ctx=n_ctx,
+        layer=layer_name, 
+        bias=final_ln_bias is not None,
+        init_average_std=std_dict[layer_name],
+        init_bos_std=std_bos_dict[layer_name],
+        grad_acc_steps=grad_acc_steps,
+        momentum=momentum,
     )
     
     model.gpt_neox.final_layer_norm.weight = nn.Parameter(final_ln_weight)
     if final_ln_bias is not None:
         model.gpt_neox.final_layer_norm.bias = nn.Parameter(final_ln_bias)
+
+    # Monkey patch the Pythia gpt_neox forward to include eot_mask
+    def make_pythia_transformer_forward(old_forward):
+        def new_forward(self, *args, **kwargs):
+            # Extract input_ids from either kwargs or first positional arg
+            input_ids = kwargs.get('input_ids', args[0] if args else None)
+            
+            # Create eot_mask if we have input_ids
+            eot_mask = None
+            if input_ids is not None:
+                eot_mask = input_ids == 50256
+            
+            # If args contains positional arguments that match kwargs, we should use kwargs only
+            if args and isinstance(args[0], torch.Tensor):  # First arg is likely input_ids
+                kwargs['input_ids'] = args[0]
+                args = args[1:]  # Remove the first argument
+            
+            # Get embeddings
+            hidden_states = self.embed_in(kwargs['input_ids'])
+            hidden_states = self.emb_dropout(hidden_states)
+
+            # Forward through layers with eot_mask
+            for layer in self.layers:
+                hidden_states = layer(hidden_states, eot_mask=eot_mask)
+            
+            hidden_states = self.final_layer_norm(hidden_states)
+
+            # Create BaseModelOutputWithPastAndCrossAttentions object
+            return transformers.modeling_outputs.BaseModelOutputWithPastAndCrossAttentions(
+                last_hidden_state=hidden_states,
+                past_key_values=None,
+                hidden_states=None,
+                attentions=None,
+                cross_attentions=None,
+            )
+
+        return types.MethodType(new_forward, model.gpt_neox)
+    
+    model.gpt_neox.forward = make_pythia_transformer_forward(model.gpt_neox.forward)
 
 
 def finetune(model, training_args, tokenized, data_collator, config, pile_eval_dataset=None, remove_ln=False, checkpoint_step=None):
@@ -792,13 +877,19 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
     print(f"  EXP_BOS_SPECIAL_TREATMENT: {os.environ.get('EXP_BOS_SPECIAL_TREATMENT', '0')}")
 
     
-    for i, block in enumerate(model.transformer.h):
-        print(f"\nBlock {i}:")
-        print(f"  ln_1: {block.ln_1}")
-        print(f"  ln_2: {block.ln_2}")
-    
-    print(f"\nFinal ln_f:")
-    print(f"  {model.transformer.ln_f}")
+    is_pythia = hasattr(model, 'gpt_neox')
+    if is_pythia:
+        for i, block in enumerate(model.gpt_neox.layers):
+            print(f"\nBlock {i}:")
+            print(f"  ln_1: {block.input_layernorm}")
+            print(f"  ln_2: {block.post_attention_layernorm}")
+        print(f"  {model.gpt_neox.final_layer_norm}")
+    else:
+        for i, block in enumerate(model.transformer.h):
+            print(f"\nBlock {i}:")
+            print(f"  ln_1: {block.ln_1}")
+            print(f"  ln_2: {block.ln_2}")
+        print(f"  {model.transformer.ln_f}")
     print("========================================\n")
 
     class LNRemover:
@@ -813,7 +904,10 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
             elif hasattr(model.config, 'num_hidden_layers'):
                 self.n_layers = model.config.num_hidden_layers
             else:
-                self.n_layers = len(model.transformer.h)
+                if is_pythia:
+                    self.n_layers = len(model.gpt_neox.layers)
+                else:
+                    self.n_layers = len(model.transformer.h)
             self.start_step = start_step
             self.layer_gap_steps = layer_gap_steps
             self.function = function
@@ -872,7 +966,16 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
             """ Log to wandb: block number, mode, att_v_mode, average_std_buffer, bos_std_buffer, average_std_buffer[0], average_std_buffer[1], bos_std_buffer[0], bos_std_buffer[1] """
             if not _USE_WANDB:
                 return control
-            if isinstance(model.transformer.h[0].ln_1, FakeLayerNorm):
+            
+            # Get model from kwargs
+            model = kwargs.get('model')
+            if model is None:
+                return control
+                
+            # Generalize to support both GPT-2 and Pythia models
+            is_gpt2 = hasattr(model, "transformer") and hasattr(model.transformer, "h") and hasattr(model.transformer.h[0], "ln_1")
+            is_pythia = hasattr(model, "gpt_neox") and hasattr(model.gpt_neox, "layers") and hasattr(model.gpt_neox.layers[0], "input_layernorm")
+            if is_gpt2 and isinstance(model.transformer.h[0].ln_1, FakeLayerNorm):
                 for i, block in enumerate(model.transformer.h):
                     wandb.log({
                         f"block_{i}_ln_1_real_average_std": block.ln_1.real_average_std_prop,
@@ -882,7 +985,7 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
                         f"block_{i}_ln_1_bos_std_0": block.ln_1.bos_std_buffer[0],
                         f"block_{i}_ln_1_bos_std_1": block.ln_1.bos_std_buffer[1],
                     })
-    
+
                     wandb.log({
                         f"block_{i}_ln_2_real_average_std": block.ln_2.real_average_std_prop,
                         f"block_{i}_ln_2_real_bos_std": block.ln_2.real_bos_std_prop,
@@ -891,7 +994,7 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
                         f"block_{i}_ln_2_bos_std_0": block.ln_2.bos_std_buffer[0],
                         f"block_{i}_ln_2_bos_std_1": block.ln_2.bos_std_buffer[1],
                     })
-    
+
                 wandb.log({
                     f"ln_f_real_average_std": model.transformer.ln_f.real_average_std_prop,
                     f"ln_f_real_bos_std": model.transformer.ln_f.real_bos_std_prop,
@@ -900,6 +1003,26 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
                     f"ln_f_bos_std_0": model.transformer.ln_f.bos_std_buffer[0],
                     f"ln_f_bos_std_1": model.transformer.ln_f.bos_std_buffer[1],
                 })
+            elif is_pythia and isinstance(model.gpt_neox.layers[0].input_layernorm, FakeLayerNorm):
+                for i, layer in enumerate(model.gpt_neox.layers):
+                    wandb.log({
+                        f"layer_{i}_input_layernorm_real_average_std": layer.input_layernorm.real_average_std_prop,
+                        f"layer_{i}_input_layernorm_real_bos_std": layer.input_layernorm.real_bos_std_prop,
+                        f"layer_{i}_input_layernorm_average_std_0": layer.input_layernorm.average_std_buffer[0],
+                        f"layer_{i}_input_layernorm_average_std_1": layer.input_layernorm.average_std_buffer[1],
+                        f"layer_{i}_input_layernorm_bos_std_0": layer.input_layernorm.bos_std_buffer[0],
+                        f"layer_{i}_input_layernorm_bos_std_1": layer.input_layernorm.bos_std_buffer[1],
+                    })
+
+                    wandb.log({
+                        f"layer_{i}_post_attention_layernorm_real_average_std": layer.post_attention_layernorm.real_average_std_prop,
+                        f"layer_{i}_post_attention_layernorm_real_bos_std": layer.post_attention_layernorm.real_bos_std_prop,
+                        f"layer_{i}_post_attention_layernorm_average_std_0": layer.post_attention_layernorm.average_std_buffer[0],
+                        f"layer_{i}_post_attention_layernorm_average_std_1": layer.post_attention_layernorm.average_std_buffer[1],
+                        f"layer_{i}_post_attention_layernorm_bos_std_0": layer.post_attention_layernorm.bos_std_buffer[0],
+                        f"layer_{i}_post_attention_layernorm_bos_std_1": layer.post_attention_layernorm.bos_std_buffer[1],
+                    })
+                # Pythia models do not have ln_f, so we skip logging ln_f
 
             return control 
     
@@ -918,7 +1041,10 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
             print(f"  EXP_BOS_SPECIAL_TREATMENT: {os.environ.get('EXP_BOS_SPECIAL_TREATMENT', '0')}")
 
             print("\nChecking if layers are fake after loading checkpoint:")
-            if isinstance(model.transformer.h[0].ln_1, FakeLayerNorm):
+            # Generalize to support both GPT-2 and Pythia models
+            is_gpt2 = hasattr(model, "transformer") and hasattr(model.transformer, "h") and hasattr(model.transformer.h[0], "ln_1")
+            is_pythia = hasattr(model, "gpt_neox") and hasattr(model.gpt_neox, "layers") and hasattr(model.gpt_neox.layers[0], "input_layernorm")
+            if is_gpt2 and isinstance(model.transformer.h[0].ln_1, FakeLayerNorm):
                 for i, block in enumerate(model.transformer.h):
                     print(f"Block {i}:")
                     print(f"  ln_1.is_fake_prop: {block.ln_1.is_fake_prop}")
@@ -926,9 +1052,19 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
                     print(f"  ln_1.bos_special_treatment_prop: {block.ln_1.bos_special_treatment_prop}")
                     print(f"  ln_2.is_fake_prop: {block.ln_2.is_fake_prop}")
                     print(f"  ln_2.bos_special_treatment_prop: {block.ln_2.bos_special_treatment_prop}")
-                
                 print(f"\nFinal ln_f.is_fake_prop: {model.transformer.ln_f.is_fake_prop}")
                 print(f"Final ln_f.bos_special_treatment_prop: {model.transformer.ln_f.bos_special_treatment_prop}")
+            elif is_pythia and isinstance(model.gpt_neox.layers[0].input_layernorm, FakeLayerNorm):
+                for i, layer in enumerate(model.gpt_neox.layers):
+                    print(f"Layer {i}:")
+                    print(f"  input_layernorm.is_fake_prop: {layer.input_layernorm.is_fake_prop}")
+                    # Pythia does not have attn_v_is_fake_prop by default, so check if it exists
+                    if hasattr(layer.input_layernorm, "attn_v_is_fake_prop"):
+                        print(f"  input_layernorm.attn_v_is_fake_prop: {layer.input_layernorm.attn_v_is_fake_prop}")
+                    print(f"  input_layernorm.bos_special_treatment_prop: {layer.input_layernorm.bos_special_treatment_prop}")
+                    print(f"  post_attention_layernorm.is_fake_prop: {layer.post_attention_layernorm.is_fake_prop}")
+                    print(f"  post_attention_layernorm.bos_special_treatment_prop: {layer.post_attention_layernorm.bos_special_treatment_prop}")
+                # Pythia models do not have ln_f, so we skip printing ln_f
             else:
                 print("Not removing layernorm!")
             print("========================================\n")

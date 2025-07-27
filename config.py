@@ -554,10 +554,21 @@ def make_pythia_70m_test():
     # Training params - minimal values for testing
     base_batch_size = 1
     max_steps = 10
-    block_size = 128
+    block_size = 1024  # Fixed: should match actual sequence length
     target_batch_tokens = 2**12
     warmup_steps = 2
     save_steps = 5  # Save checkpoints frequently
+    
+    # Learning rate and scheduler params
+    learning_rate = 1e-10  # Correct learning rate for Pythia-70m
+    lr_scheduler_type = 'cosine_with_min_lr'
+    lr_scheduler_kwargs = {"min_lr": 5e-11}  # Half of learning rate
+    weight_decay = 0.01
+    momentum = 0.9
+    
+    # Evaluation params
+    eval_steps = 100
+    num_eval_samples = 1000
     
     # Calculate derived training params
     batch_size = base_batch_size
@@ -572,7 +583,7 @@ def make_pythia_70m_test():
     gap_eot = 0
     gap_bos = 0
     
-    start_ln2 = 1
+    start_ln2 = 5
     start_ln1qk = start_ln2 + n_layers * gap_ln2
     start_ln1v = start_ln1qk + n_layers * gap_ln1qk
     start_lnf = start_ln1v + n_layers * gap_ln1v

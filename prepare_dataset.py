@@ -3,6 +3,8 @@ import datasets
 from transformers import AutoTokenizer, DataCollatorForLanguageModeling
 
 def prepare_dataset(model_name="gpt2"):
+    dataset_name = "openwebtext" if model_name == "gpt2" else "NeelNanda/pile-10k"
+    
     # First check if the tokenized dataset exists on disk
     if os.path.exists("tokenized_dataset/train") and os.path.exists("tokenized_dataset/test"):
         print("Loading tokenized dataset from disk...")
@@ -11,13 +13,11 @@ def prepare_dataset(model_name="gpt2"):
         print("Tokenized dataset not found. Processing from scratch...")
 
         print("Downloading openwebtext dataset...")
-        dataset = datasets.load_dataset("openwebtext", num_proc=8, trust_remote_code=True)
+        dataset = datasets.load_dataset(dataset_name, num_proc=8, trust_remote_code=True)
 
         split_dataset = dataset["train"].train_test_split(
             test_size=0.0005, seed=2357, shuffle=True
         )
-
-        # split_dataset["train"] = split_dataset["train"].select(range(100))
 
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokenizer.pad_token = tokenizer.eos_token
@@ -57,7 +57,7 @@ def prepare_dataset(model_name="gpt2"):
         print("Saving tokenized dataset to disk...")
         tokenized.save_to_disk("tokenized_dataset")
 
-    tokenizer = AutoTokenizer.from_pretrained("gpt2")
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
     tokenizer.pad_token = tokenizer.eos_token
 
     # Use DataCollatorForLanguageModeling with mlm=False for causal language modeling (GPT-2)
