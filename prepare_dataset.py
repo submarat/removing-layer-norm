@@ -5,6 +5,14 @@ from transformers import AutoTokenizer, DataCollatorForLanguageModeling
 def prepare_dataset(model_name="gpt2"):
     dataset_name = "openwebtext" if model_name == "gpt2" else "NeelNanda/pile-10k"
     
+    # Set chunk size based on model type
+    # GPT-2: 1024 tokens per chunk
+    # Pythia: 2049 tokens per chunk (2048 sequence + 1 for shifted labels)
+    if "pythia" in model_name.lower():
+        chunk_size = 2049
+    else:
+        chunk_size = 1024
+    
     # First check if the tokenized dataset exists on disk
     if os.path.exists("tokenized_dataset/train") and os.path.exists("tokenized_dataset/test"):
         print("Loading tokenized dataset from disk...")
@@ -18,13 +26,15 @@ def prepare_dataset(model_name="gpt2"):
         split_dataset = dataset["train"].train_test_split(
             test_size=0.0005, seed=2357, shuffle=True
         )
+        
+        # Shuffle the training split again before processing (Pythia-style)
+        split_dataset["train"] = split_dataset["train"].shuffle(seed=2357)
 
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokenizer.pad_token = tokenizer.eos_token
 
         def tokenize_function(examples):
 
-            # Add EOS token to the end of each example
             examples["text"] = [text + tokenizer.eos_token for text in examples["text"]]
 
             # Tokenize the examples
@@ -37,11 +47,13 @@ def prepare_dataset(model_name="gpt2"):
             for seq in tokenized_examples["input_ids"]:
                 concatenated.extend(seq)
 
-            # Chunk into 1024 token chunks, dropping any remainder
+            # Chunk into model-appropriate sizes, dropping any remainder
+            # Following Pythia approach: "sample boundaries do not respect document boundaries"  
+            # GPT-2: 1024 tokens, Pythia: 2049 tokens (2048 sequence + 1 for shifted labels)
             n_chunks = (
-                len(concatenated) // 1024
+                len(concatenated) // chunk_size
             )  # Integer division to get complete chunks only
-            chunks = [concatenated[i * 1024 : (i + 1) * 1024] for i in range(n_chunks)]
+            chunks = [concatenated[i * chunk_size : (i + 1) * chunk_size] for i in range(n_chunks)]
 
             return {"input_ids": chunks}
 
