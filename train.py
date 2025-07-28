@@ -658,97 +658,8 @@ def replace_pythia_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, 
         if post_ln_bias is not None:
             layer.post_attention_layernorm.bias = nn.Parameter(post_ln_bias)
         
-        # Monkey patch for Pythia attention blocks
-        def make_attn_forward(old_forward):
-            def new_forward(self, x_qk, x_v):
-                # Handle different input shapes
-                if len(x_qk.size()) == 2:
-                    # If input is 2D, assume it's (batch_size * seq_len, hidden_size)
-                    B_T, C = x_qk.size()
-                    B = 1  # Default batch size
-                    T = B_T // B
-                else:
-                    B, T, C = x_qk.size()
-                
-                # Get number of heads from the model config
-                num_heads = model.config.num_attention_heads
-                head_size = self.head_size
-                
-                # Pythia uses a combined QKV projection matrix
-                # The weight matrix has shape (3 * num_heads * head_size, C) = (1536, 512)
-                # We need to split it into Q, K, V parts
-                qkv_weight = self.query_key_value.weight  # Shape: (1536, 512)
-                q_weight = qkv_weight[:num_heads * head_size]  # Shape: (512, 512)
-                k_weight = qkv_weight[num_heads * head_size:2 * num_heads * head_size]  # Shape: (512, 512)
-                v_weight = qkv_weight[2 * num_heads * head_size:]  # Shape: (512, 512)
-                
-                # Compute Q, K, V projections
-                q = x_qk @ q_weight.T  # Shape: (B*T, 512) or (B, T, 512)
-                k = x_qk @ k_weight.T  # Shape: (B*T, 512) or (B, T, 512)
-                v = x_v @ v_weight.T   # Shape: (B*T, 512) or (B, T, 512)
-                
-                # Add bias if present
-                if self.query_key_value.bias is not None:
-                    q_bias = self.query_key_value.bias[:num_heads * head_size]
-                    k_bias = self.query_key_value.bias[num_heads * head_size:2 * num_heads * head_size]
-                    v_bias = self.query_key_value.bias[2 * num_heads * head_size:]
-                    q = q + q_bias
-                    k = k + k_bias
-                    v = v + v_bias
-                
-                # Reshape to (B, T, num_heads, head_size) and transpose to (B, num_heads, T, head_size)
-                if len(x_qk.size()) == 2:
-                    # Reshape from (B*T, 512) to (B, T, 512)
-                    q = q.view(B, T, -1)
-                    k = k.view(B, T, -1)
-                    v = v.view(B, T, -1)
-                
-                q = q.view(B, T, num_heads, head_size).transpose(1, 2)
-                k = k.view(B, T, num_heads, head_size).transpose(1, 2)
-                v = v.view(B, T, num_heads, head_size).transpose(1, 2)
-                
-                # Causal self-attention
-                y = F.scaled_dot_product_attention(
-                    q, k, v,
-                    dropout_p=self.attention_dropout if hasattr(self, 'attention_dropout') else 0.0,
-                    is_causal=True
-                )
-                
-                y = y.transpose(1, 2).contiguous().view(B, T, C)
-                
-                # Output projection
-                y = self.dense(y)
-                return y
-                
-            return types.MethodType(new_forward, layer.attention)
-            
-        layer.attention.forward = make_attn_forward(layer.attention.forward)
-        
-        # Monkey patch the forward method of the layer
-        def make_forward(old_forward):
-            def new_forward(self, x, *args, **kwargs):
-                # Get EOT mask from the input
-                eot_mask = kwargs.pop('eot_mask', None)
-                
-                # Calculate LN'd x for Q and K
-                x_qk = self.input_layernorm(x)
-                # Calculate LN'd x for V
-                x_v = self.input_layernorm(x, attn_v=True)
-                
-                if eot_mask is not None:
-                    x_v_eot = self.input_layernorm(x, std_type='bos', attn_v=True)
-                    x_v[eot_mask] = x_v_eot[eot_mask]
-                    del x_v_eot
-                
-                # Modify attention call to use both x_qk and x_v
-                attn_output = self.attention(x_qk, x_v)
-                x = x + attn_output
-                x = x + self.mlp(self.post_attention_layernorm(x))
-                return x
-                
-            return types.MethodType(new_forward, layer)
-            
-        layer.forward = make_forward(layer.forward)
+        # For now, don't monkey patch the Pythia layers - just use standard FakeLayerNorm
+        # The Q/K vs V separation will need to be implemented differently for Pythia
     
     # Also replace the final layer norm
     final_ln_weight = model.gpt_neox.final_layer_norm.weight.clone().detach()
@@ -770,44 +681,7 @@ def replace_pythia_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, 
     if final_ln_bias is not None:
         model.gpt_neox.final_layer_norm.bias = nn.Parameter(final_ln_bias)
 
-    # Monkey patch the Pythia gpt_neox forward to include eot_mask
-    def make_pythia_transformer_forward(old_forward):
-        def new_forward(self, *args, **kwargs):
-            # Extract input_ids from either kwargs or first positional arg
-            input_ids = kwargs.get('input_ids', args[0] if args else None)
-            
-            # Create eot_mask if we have input_ids
-            eot_mask = None
-            if input_ids is not None:
-                eot_mask = input_ids == 50256
-            
-            # If args contains positional arguments that match kwargs, we should use kwargs only
-            if args and isinstance(args[0], torch.Tensor):  # First arg is likely input_ids
-                kwargs['input_ids'] = args[0]
-                args = args[1:]  # Remove the first argument
-            
-            # Get embeddings
-            hidden_states = self.embed_in(kwargs['input_ids'])
-            hidden_states = self.emb_dropout(hidden_states)
-
-            # Forward through layers with eot_mask
-            for layer in self.layers:
-                hidden_states = layer(hidden_states, eot_mask=eot_mask)
-            
-            hidden_states = self.final_layer_norm(hidden_states)
-
-            # Create BaseModelOutputWithPastAndCrossAttentions object
-            return transformers.modeling_outputs.BaseModelOutputWithPastAndCrossAttentions(
-                last_hidden_state=hidden_states,
-                past_key_values=None,
-                hidden_states=None,
-                attentions=None,
-                cross_attentions=None,
-            )
-
-        return types.MethodType(new_forward, model.gpt_neox)
-    
-    model.gpt_neox.forward = make_pythia_transformer_forward(model.gpt_neox.forward)
+    # For now, don't patch the transformer forward - use standard Pythia forward
 
 
 def finetune(model, training_args, tokenized, data_collator, config, pile_eval_dataset=None, remove_ln=False, checkpoint_step=None):
@@ -815,34 +689,28 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
     is_pythia = hasattr(model, 'gpt_neox')
     if is_pythia:
         def disable_ln_2(block_index):
-            model.gpt_neox.layers[block_index].post_attention_layernorm.mode = "fake"
+            model.gpt_neox.layers[block_index].post_attention_layernorm.is_fake_prop = True
             print(f"disabled ln_2 for block {block_index}")
 
         def disable_ln_1qk(block_index):
-            model.gpt_neox.layers[block_index].input_layernorm.mode = "fake"
+            model.gpt_neox.layers[block_index].input_layernorm.is_fake_prop = True
             print(f"disabled ln_1 for block {block_index}")
 
         def disable_ln_1v(block_index):
-            model.gpt_neox.layers[block_index].input_layernorm.attn_v_mode = "fake"
+            model.gpt_neox.layers[block_index].input_layernorm.attn_v_is_fake_prop = True
             print(f"disabled ln_1v for block {block_index}")
 
         def disable_ln_f():
-            model.gpt_neox.final_layer_norm.mode = "fake"
+            model.gpt_neox.final_layer_norm.is_fake_prop = True
             print("disabled ln_f")
 
         def disable_eot_std(block_index):
-            model.gpt_neox.layers[block_index].input_layernorm.bos_std = model.gpt_neox.layers[
-                block_index
-            ].input_layernorm.average_std
+            model.gpt_neox.layers[block_index].input_layernorm.disable_eos_special_treatment()
             print(f"disabled eot std for block {block_index}")
 
         def disable_bos_std(block_index):
-            model.gpt_neox.layers[block_index].input_layernorm.average_std[0] = model.gpt_neox.layers[
-                block_index
-            ].input_layernorm.average_std[1]
-            model.gpt_neox.layers[block_index].input_layernorm.bos_std[0] = model.gpt_neox.layers[
-                block_index
-            ].input_layernorm.bos_std[1]
+            model.gpt_neox.layers[block_index].input_layernorm.disable_bos_special_treatment()
+            print(f"disabled bos std for block {block_index}")
     else: # GPT2
         def disable_ln_2(block_index):
             model.transformer.h[block_index].ln_2.is_fake_prop = True

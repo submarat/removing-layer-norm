@@ -1,8 +1,5 @@
 import os
 import torch
-
-<<<<<<< HEAD
-=======
 from train import load_model
 from transformers.modeling_utils import load_sharded_checkpoint
 
