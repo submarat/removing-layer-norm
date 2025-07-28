@@ -386,32 +386,88 @@ def make_pythia_70m():
     n_layers = 6
     
     # Training params
-    base_batch_size = 64
-    max_steps = 2000
-    block_size = 1024
-    target_batch_tokens = 2**19
-    
+    base_batch_size = 32
+    max_steps = 300
+    block_size = 2048
+    target_batch_tokens = 2**21
+    warmup_steps = 10
+    save_steps = 100
+
+    learning_rate = 1e-10  # Correct learning rate for Pythia-70m
+    lr_scheduler_type = 'cosine_with_min_lr'
+    lr_scheduler_kwargs = {"min_lr": 1e-11}  # 10th of learning rate
+    weight_decay = 0.01
+    momentum = 0.9
+
     # Calculate derived training params
     batch_size = base_batch_size
     desired_batch_size = target_batch_tokens / block_size
     gradient_accumulation_steps = int(desired_batch_size // batch_size)
     
     # Calculate layernorm schedule
-    gap_ln2 = 20
-    gap_ln1qk = 20
-    gap_ln1v = 30
+    gap_ln2 = 2
+    gap_ln1qk = 2
+    gap_ln1v = 3
     gap_lnf = None
     gap_eot = 0
     gap_bos = 0
 
-    start_ln2 = 200
+    start_ln2 = 20
     start_ln1qk = start_ln2 + n_layers * gap_ln2
     start_ln1v = start_ln1qk + n_layers * gap_ln1qk
     start_lnf = start_ln1v + n_layers * gap_ln1v
-    start_eot = start_lnf + 20
-    start_bos = start_eot + 100
+    start_eot = start_lnf + 2
+    start_bos = start_eot + 10
     
     return FinetuneConfig(**locals())
+
+
+def make_pythia_70m_test():
+    # Architecture params
+    model_name = "EleutherAI/pythia-70m"
+    n_layers = 6
+    
+    # Training params - minimal values for testing
+    base_batch_size = 1
+    max_steps = 10
+    block_size = 1024  # Fixed: should match actual sequence length
+    target_batch_tokens = 2**12
+    warmup_steps = 2
+    save_steps = 5  # Save checkpoints frequently
+    
+    # Learning rate and scheduler params
+    learning_rate = 1e-10  # Correct learning rate for Pythia-70m
+    lr_scheduler_type = 'cosine_with_min_lr'
+    lr_scheduler_kwargs = {"min_lr": 5e-11}  # Half of learning rate
+    weight_decay = 0.01
+    momentum = 0.9
+    
+    # Evaluation params
+    eval_steps = 100
+    num_eval_samples = 1000
+    
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    
+    # Calculate layernorm schedule - minimal gaps for quick testing
+    gap_ln2 = 1
+    gap_ln1qk = 1
+    gap_ln1v = 1
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+    
+    start_ln2 = 2
+    start_ln1qk = start_ln2 + n_layers * gap_ln2
+    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
+    start_lnf = start_ln1v + n_layers * gap_ln1v
+    start_eot = start_lnf + 1
+    start_bos = start_eot + 1  # Shorter gap for testing
+    
+    return FinetuneConfig(**locals())
+
 
 def make_pythia_160m():
     # Architecture params
@@ -542,52 +598,6 @@ def make_pythia_1b_test():
     start_ln1v = start_ln1qk + n_layers * gap_ln1qk
     start_lnf = start_ln1v + n_layers * gap_ln1v
     start_eot = start_lnf + 2
-    start_bos = start_eot + 1  # Shorter gap for testing
-    
-    return FinetuneConfig(**locals())
-
-def make_pythia_70m_test():
-    # Architecture params
-    model_name = "EleutherAI/pythia-70m"
-    n_layers = 6
-    
-    # Training params - minimal values for testing
-    base_batch_size = 1
-    max_steps = 10
-    block_size = 1024  # Fixed: should match actual sequence length
-    target_batch_tokens = 2**12
-    warmup_steps = 2
-    save_steps = 5  # Save checkpoints frequently
-    
-    # Learning rate and scheduler params
-    learning_rate = 1e-10  # Correct learning rate for Pythia-70m
-    lr_scheduler_type = 'cosine_with_min_lr'
-    lr_scheduler_kwargs = {"min_lr": 5e-11}  # Half of learning rate
-    weight_decay = 0.01
-    momentum = 0.9
-    
-    # Evaluation params
-    eval_steps = 100
-    num_eval_samples = 1000
-    
-    # Calculate derived training params
-    batch_size = base_batch_size
-    desired_batch_size = target_batch_tokens / block_size
-    gradient_accumulation_steps = int(desired_batch_size // batch_size)
-    
-    # Calculate layernorm schedule - minimal gaps for quick testing
-    gap_ln2 = 1
-    gap_ln1qk = 1
-    gap_ln1v = 1
-    gap_lnf = None
-    gap_eot = 0
-    gap_bos = 0
-    
-    start_ln2 = 2
-    start_ln1qk = start_ln2 + n_layers * gap_ln2
-    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
-    start_lnf = start_ln1v + n_layers * gap_ln1v
-    start_eot = start_lnf + 1
     start_bos = start_eot + 1  # Shorter gap for testing
     
     return FinetuneConfig(**locals())
