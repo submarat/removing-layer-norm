@@ -47,7 +47,7 @@ def load_saved_model(model_name: str, model_path=None):
 def load_hf_model(model_id_or_ckpt_path, model_name):
     """ Loads huggingface transformers model and removes layernorm """
 
-    model_hf = GPT2LMHeadModel.from_pretrained(model_id_or_ckpt_path)
+    model_hf = AutoModelForCausalLM.from_pretrained(model_id_or_ckpt_path)
 
     return model_hf
 

@@ -20,7 +20,7 @@ Arguments:
 import os
 import torch
 from docopt import docopt
-from transformers import GPT2LMHeadModel
+from transformers import AutoModelForCausalLM
 from utils import extract_std_from_checkpoint, remove_layernorm_by_scaling, get_device
 
 
@@ -50,13 +50,13 @@ def main():
 
         # Step 2: Load the model from the checkpoint
         print(f"Loading model from checkpoint: {checkpoint_path}")
-        model = GPT2LMHeadModel.from_pretrained(checkpoint_path)
+        model = AutoModelForCausalLM.from_pretrained(checkpoint_path)
         model.to(device)
         print("Model loaded successfully")
 
         # Step 3: Remove layer normalization by scaling
         print("Removing layer normalization by scaling weights")
-        model = remove_layernorm_by_scaling(model, std_dict)
+        model = remove_layernorm_by_scaling("EleutherAI/pythia-70m", model, std_dict)
         print("Layer normalization effectively removed")
 
         # Step 4: Save the model locally

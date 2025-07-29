@@ -30,11 +30,11 @@ def extract_std_from_checkpoint(model_name, ckpt_path):
 
     std_dict = {}
     # Extract 1st index in case there is BOS special treatment applied
-    for id, block in enumerate(ckpt_model.transformer.h):
+    for id, block in enumerate(ckpt_model.gpt_neox.layers):
         # add std to the dict with appropriate key.
-        std_dict[f'blocks.{id}.hook_resid_pre'] = state_dict[f'transformer.h.{id}.ln_1.average_std_buffer'][1].item()
-        std_dict[f'blocks.{id}.hook_resid_mid'] = state_dict[f'transformer.h.{id}.ln_2.average_std_buffer'][1].item()
-    std_dict[f'blocks.{id}.hook_resid_post'] = state_dict['transformer.ln_f.average_std_buffer'][1].item()
+        std_dict[f'blocks.{id}.hook_resid_pre'] = state_dict[f'gpt_neox.layers.{id}.input_layernorm.average_std_buffer'][1].item()
+        std_dict[f'blocks.{id}.hook_resid_pre'] = state_dict[f'gpt_neox.layers.{id}.post_attention_layernorm.average_std_buffer'][1].item()
+    std_dict[f'blocks.{id}.hook_resid_post'] = state_dict['gpt_neox.final_layer_norm.average_std_buffer'][1].item()
 
     return std_dict
 
@@ -43,23 +43,23 @@ def remove_layernorm_by_scaling(model_name, model, std_dict):
     """Remove LayerNorm from either GPT-2 or Pythia model"""
     is_pythia = "pythia" in model_name.lower()
     
-    n_layers = len(model.transformer.h)
+    n_layers = len(model.gpt_neox.layers)
     if is_pythia:
         # For Pythia models
         for id, block in enumerate(model.gpt_neox.layers):
             ln1_std = std_dict[f'blocks.{id}.hook_resid_pre']
-            ln2_std = std_dict[f'blocks.{id}.hook_resid_mid']
+            ln2_std = std_dict[f'blocks.{id}.hook_resid_pre']
             # Effectively disable layernorm by setting epsilon very high
             block.input_layernorm.eps = 1e12
             # Scale the weights to reduce their impact
-            block.input_layernorm.weight.data *= 1e6
+            block.input_layernorm.weight.data *= 1e6/ln1_std
             
             block.post_attention_layernorm.eps = 1e12
-            block.post_attention_layernorm.weight.data *= 1e6
+            block.post_attention_layernorm.weight.data *= 1e6/ln2_std
             
-        lnf_std = std_dict[f'blocks.{n_layers-1}.hook_resid_post']
         # Final layer norm
-        model.gpt_neox.final_layer_norm.weight.data *= 1e6 / lnf_std
+        lnf_std = std_dict[f'blocks.{n_layers-1}.hook_resid_post']
+        model.gpt_neox.final_layer_norm.weight.data *= 1e6
         model.gpt_neox.final_layer_norm.eps = 1e12
     else:
         # For GPT-2 models
