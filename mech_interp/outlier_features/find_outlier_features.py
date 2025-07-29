@@ -4,13 +4,14 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+import pickle
 sys.path.append("../..")
 from mech_interp.load_models import ModelFactory
 from mech_interp.load_dataset import DataLoader
 
 # parameters
 layers_list = [2, 4, 6, 8, 10, 11]
-n_seqs = 10
+n_seqs = 5
 batch_size = 5
 max_context = 1024
 d = 768
@@ -63,7 +64,7 @@ with torch.no_grad():
                     acts = acts[:, 1:, :] 
                 all_acts[i*batch_size:(i+1)*batch_size, :, :] = acts
             all_s_values[model_name][layer] = np.sqrt(np.mean(all_acts.reshape(-1, d)**2, axis=0))
-
+            
 # compute kurtosis
 all_kurtosis = {
     'baseline': {},
@@ -81,6 +82,15 @@ for model in model_factory.models.keys():
     plt.ylabel('kurtosis')
 # plt.ylim(0, 300)
 plt.legend()
+plt.savefig('kurtosis (my_implementation).png')
 plt.show()
 
+# save results
+with open('all_kurtosis_my_implementation.pkl', 'wb') as f:
+    pickle.dump(all_kurtosis, f)
+with open('all_s_values_my_implementation.pkl', 'wb') as f:
+    pickle.dump(all_s_values, f)
+
+# %%
+all_kurtosis
 # %%
