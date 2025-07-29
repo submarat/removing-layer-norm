@@ -581,6 +581,9 @@ def load_model(model_name="gpt2", remove_ln=False, grad_acc_steps=1, momentum=0.
             resid_dropout=0.0,
             attention_dropout=0.0,
             hidden_dropout=0.0,
+            torch_dtype=torch.float16,
+            device_map="auto",
+            attn_implementation='sdpa'
         )
         model = GPTNeoXForCausalLM.from_pretrained(
             model_name,
@@ -1122,7 +1125,7 @@ def main():
     
     training_args = TrainingArguments(
         output_dir=output_dir,
-        bf16=True,
+        fp16=True,
         resume_from_checkpoint=args.resume_from_checkpoint,
         save_safetensors=False,  # Always use .bin format
         max_steps=config.max_steps,

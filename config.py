@@ -386,16 +386,16 @@ def make_pythia_70m():
     n_layers = 6
     
     # Training params
-    base_batch_size = 32
+    base_batch_size = 16
     max_steps = 300
     block_size = 2048
-    target_batch_tokens = 2**21
+    target_batch_tokens = 2**19
     warmup_steps = 10
     save_steps = 100
 
-    learning_rate = 1e-10  # Correct learning rate for Pythia-70m
+    learning_rate = 3e-4  # Correct learning rate for Pythia-70m
     lr_scheduler_type = 'cosine_with_min_lr'
-    lr_scheduler_kwargs = {"min_lr": 1e-11}  # 10th of learning rate
+    lr_scheduler_kwargs = {"min_lr": 1e-4}  # 10th of learning rate
     weight_decay = 0.01
     momentum = 0.9
 
@@ -535,72 +535,7 @@ def make_pythia_410m():
     
     return FinetuneConfig(**locals())
 
-def make_pythia_1b():
-    # Architecture params
-    model_name = "EleutherAI/pythia-1b"
-    n_layers = 16
-    
-    # Training params
-    base_batch_size = 8
-    max_steps = 1200
-    block_size = 1024
-    target_batch_tokens = 2**19
-    
-    # Calculate derived training params
-    batch_size = base_batch_size
-    desired_batch_size = target_batch_tokens / block_size
-    gradient_accumulation_steps = int(desired_batch_size // batch_size)
-    
-    # Calculate layernorm schedule
-    gap_ln2 = 10
-    gap_ln1qk = 10
-    gap_ln1v = 15
-    gap_lnf = None
-    gap_eot = 0
-    gap_bos = 0
-    
-    start_ln2 = 200
-    start_ln1qk = start_ln2 + n_layers * gap_ln2
-    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
-    start_lnf = start_ln1v + n_layers * gap_ln1v
-    start_eot = start_lnf + 20
-    start_bos = start_eot + 100
-    
-    return FinetuneConfig(**locals())
-
-def make_pythia_1b_test():
-    # Architecture params
-    model_name = "EleutherAI/pythia-1b"
-    n_layers = 16
-    
-    # Training params - minimal values for testing
-    base_batch_size = 1
-    max_steps = 10
-    block_size = 512
-    target_batch_tokens = 2**12
-    warmup_steps = 2
-    
-    # Calculate derived training params
-    batch_size = base_batch_size
-    desired_batch_size = target_batch_tokens / block_size
-    gradient_accumulation_steps = int(desired_batch_size // batch_size)
-    
-    # Calculate layernorm schedule
-    gap_ln2 = 2
-    gap_ln1qk = 2
-    gap_ln1v = 3
-    gap_lnf = None
-    gap_eot = 0
-    gap_bos = 0
-    
-    start_ln2 = 2  # Start earlier for testing
-    start_ln1qk = start_ln2 + n_layers * gap_ln2
-    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
-    start_lnf = start_ln1v + n_layers * gap_ln1v
-    start_eot = start_lnf + 2
-    start_bos = start_eot + 1  # Shorter gap for testing
-    
-    return FinetuneConfig(**locals())
+# Add these functions to your config.py file
 
 FINETUNE_CONFIGS = {
     "gpt2": make_gpt2_standard(),
@@ -614,6 +549,74 @@ FINETUNE_CONFIGS = {
     "pythia-70m": make_pythia_70m(),
     "pythia-70m_test": make_pythia_70m_test(),
 }
+
+def make_pythia_70m_start10():
+    """Early LayerNorm removal start (step 10)"""
+    config = make_pythia_70m()
+    config.start_ln2 = 10
+    config.start_ln1qk = config.start_ln2 + config.n_layers * config.gap_ln2
+    config.start_ln1v = config.start_ln1qk + config.n_layers * config.gap_ln1qk
+    config.start_lnf = config.start_ln1v + config.n_layers * config.gap_ln1v
+    config.start_eot = config.start_lnf + 2
+    config.start_bos = config.start_eot + 10
+    return config
+
+def make_pythia_70m_start50():
+    """Medium LayerNorm removal start (step 50)"""
+    config = make_pythia_70m()
+    config.start_ln2 = 50
+    config.start_ln1qk = config.start_ln2 + config.n_layers * config.gap_ln2
+    config.start_ln1v = config.start_ln1qk + config.n_layers * config.gap_ln1qk
+    config.start_lnf = config.start_ln1v + config.n_layers * config.gap_ln1v
+    config.start_eot = config.start_lnf + 2
+    config.start_bos = config.start_eot + 10
+    return config
+
+def make_pythia_70m_start100():
+    """Late LayerNorm removal start (step 100)"""
+    config = make_pythia_70m()
+    config.start_ln2 = 100
+    config.start_ln1qk = config.start_ln2 + config.n_layers * config.gap_ln2
+    config.start_ln1v = config.start_ln1qk + config.n_layers * config.gap_ln1qk
+    config.start_lnf = config.start_ln1v + config.n_layers * config.gap_ln1v
+    config.start_eot = config.start_lnf + 2
+    config.start_bos = config.start_eot + 10
+    return config
+
+def make_pythia_70m_aux():
+    """With auxiliary loss (0.1 weight)"""
+    config = make_pythia_70m()
+    config.aux_loss_weight = 0.1
+    return config
+
+def make_pythia_70m_start10_aux():
+    """Early start + auxiliary loss"""
+    config = make_pythia_70m_start10()
+    config.aux_loss_weight = 0.1
+    return config
+
+def make_pythia_70m_start50_aux():
+    """Medium start + auxiliary loss"""
+    config = make_pythia_70m_start50()
+    config.aux_loss_weight = 0.1
+    return config
+
+def make_pythia_70m_start100_aux():
+    """Late start + auxiliary loss"""
+    config = make_pythia_70m_start100()
+    config.aux_loss_weight = 0.1
+    return config
+
+# Add these to your FINETUNE_CONFIGS dictionary:
+FINETUNE_CONFIGS.update({
+    "pythia-70m_start10": make_pythia_70m_start10(),
+    "pythia-70m_start50": make_pythia_70m_start50(),
+    "pythia-70m_start100": make_pythia_70m_start100(),
+    "pythia-70m_aux": make_pythia_70m_aux(),
+    "pythia-70m_start10_aux": make_pythia_70m_start10_aux(),
+    "pythia-70m_start50_aux": make_pythia_70m_start50_aux(),
+    "pythia-70m_start100_aux": make_pythia_70m_start100_aux(),
+})
 
 def main():
     args = docopt(__doc__)
