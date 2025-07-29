@@ -137,15 +137,15 @@ def main():
     model = model.to(device)
 
 
-    if dataset_name == 'openwebtext':
-        # Load OpenWebText dataset
-        print("Loading OpenWebText dataset...")
-        tokenized, _ = prepare_dataset(model_name)
-        # Convert to list of tensors for evaluation
-        processed_examples = [torch.tensor(example["input_ids"]) for example in tokenized["test"]]
-    else:
-        # Using shared preprocessing function for Pile datasets
-        processed_examples, _ = preprocess_pile_dataset(dataset_name, model_name, num_samples)
+    #if dataset_name == 'openwebtext':
+    #    # Load OpenWebText dataset
+    #    print("Loading OpenWebText dataset...")
+    #    tokenized, _ = prepare_dataset(model_name)
+    #    # Convert to list of tensors for evaluation
+    #    processed_examples = [torch.tensor(example["input_ids"]) for example in tokenized["test"]]
+    #else:
+    # Using shared preprocessing function for Pile datasets
+    processed_examples, _ = preprocess_pile_dataset(dataset_name, model_name, num_samples)
     
     # Using shared evaluation function
     ce_loss = evaluate_model_on_pile(model, processed_examples, batch_size)

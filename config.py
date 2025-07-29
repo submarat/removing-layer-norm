@@ -390,14 +390,12 @@ def make_pythia_70m():
     max_steps = 300
     block_size = 2048
     target_batch_tokens = 2**19
-    warmup_steps = 10
-    save_steps = 100
+    warmup_steps = 20
+    save_steps = 20
 
     learning_rate = 3e-4  # Correct learning rate for Pythia-70m
     lr_scheduler_type = 'cosine_with_min_lr'
     lr_scheduler_kwargs = {"min_lr": 1e-4}  # 10th of learning rate
-    weight_decay = 0.01
-    momentum = 0.9
 
     # Calculate derived training params
     batch_size = base_batch_size
@@ -405,7 +403,7 @@ def make_pythia_70m():
     gradient_accumulation_steps = int(desired_batch_size // batch_size)
     
     # Calculate layernorm schedule
-    gap_ln2 = 2
+    gap_ln2 = 1
     gap_ln1qk = 2
     gap_ln1v = 3
     gap_lnf = None
@@ -418,6 +416,7 @@ def make_pythia_70m():
     start_lnf = start_ln1v + n_layers * gap_ln1v
     start_eot = start_lnf + 2
     start_bos = start_eot + 10
+    aux_loss_weight = 0.01
     
     return FinetuneConfig(**locals())
 

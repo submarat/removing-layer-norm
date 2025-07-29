@@ -33,9 +33,11 @@ def extract_std_from_checkpoint(model_name, ckpt_path):
     for id, block in enumerate(ckpt_model.gpt_neox.layers):
         # add std to the dict with appropriate key.
         std_dict[f'blocks.{id}.hook_resid_pre'] = state_dict[f'gpt_neox.layers.{id}.input_layernorm.average_std_buffer'][1].item()
-        std_dict[f'blocks.{id}.hook_resid_pre'] = state_dict[f'gpt_neox.layers.{id}.post_attention_layernorm.average_std_buffer'][1].item()
+        std_dict[f'blocks.{id}.hook_resid_mid'] = state_dict[f'gpt_neox.layers.{id}.post_attention_layernorm.average_std_buffer'][1].item()
     std_dict[f'blocks.{id}.hook_resid_post'] = state_dict['gpt_neox.final_layer_norm.average_std_buffer'][1].item()
 
+    breakpoint()
+    
     return std_dict
 
 
@@ -48,7 +50,7 @@ def remove_layernorm_by_scaling(model_name, model, std_dict):
         # For Pythia models
         for id, block in enumerate(model.gpt_neox.layers):
             ln1_std = std_dict[f'blocks.{id}.hook_resid_pre']
-            ln2_std = std_dict[f'blocks.{id}.hook_resid_pre']
+            ln2_std = std_dict[f'blocks.{id}.hook_resid_mid']
             # Effectively disable layernorm by setting epsilon very high
             block.input_layernorm.eps = 1e12
             # Scale the weights to reduce their impact
