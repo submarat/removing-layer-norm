@@ -1102,7 +1102,7 @@ def main():
     model_name = config.model_name
 
     # Prepare datasets
-    tokenized, data_collator = prepare_dataset(model_name)
+    tokenized, data_collator = prepare_dataset(model_name, "NeelNanda/pile-10k")
     
     # Initialize Pile-apollo dataset once at the beginning
     print("Preparing Pile-apollo evaluation dataset...")

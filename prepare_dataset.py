@@ -3,8 +3,6 @@ import datasets
 from transformers import AutoTokenizer, DataCollatorForLanguageModeling
 
 def prepare_dataset(model_name="gpt2", dataset_name="openwebtext"):
-
-    
     
     # Set chunk size based on model type
     # GPT-2: 1024 tokens per chunk

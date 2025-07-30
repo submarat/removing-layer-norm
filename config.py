@@ -420,6 +420,46 @@ def make_pythia_70m():
     
     return FinetuneConfig(**locals())
 
+def make_pythia_70m_simultaneous_lns():
+    # Architecture params
+    model_name = "EleutherAI/pythia-70m"
+    n_layers = 6
+    
+    # Training params
+    base_batch_size = 16
+    max_steps = 300
+    block_size = 2048
+    target_batch_tokens = 2**19
+    warmup_steps = 20
+    save_steps = 20
+
+    learning_rate = 2e-4  # Correct learning rate for Pythia-70m
+    lr_scheduler_type = 'cosine_with_min_lr'
+    lr_scheduler_kwargs = {"min_lr": 1e-4}  # 10th of learning rate
+
+    # Calculate derived training params
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    
+    # Calculate layernorm schedule
+    gap_ln2 = 3
+    gap_ln1qk = 4
+    gap_ln1v = 4
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+
+    start_ln2 = 50
+    start_ln1qk = start_ln2 + n_layers * gap_ln1qk
+    start_ln1v = start_ln2 + n_layers * gap_ln1qk
+    start_lnf = start_ln1v + n_layers * gap_ln1v + 10
+    start_eot = start_lnf + 2
+    start_bos = start_eot + 10
+    aux_loss_weight = 0.01
+    
+    return FinetuneConfig(**locals())
+
 
 def make_pythia_70m_test():
     # Architecture params
@@ -615,6 +655,7 @@ FINETUNE_CONFIGS.update({
     "pythia-70m_start10_aux": make_pythia_70m_start10_aux(),
     "pythia-70m_start50_aux": make_pythia_70m_start50_aux(),
     "pythia-70m_start100_aux": make_pythia_70m_start100_aux(),
+    "pythia-70m_simultaneous_lns": make_pythia_70m_simultaneous_lns(),
 })
 
 def main():
