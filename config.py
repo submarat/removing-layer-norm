@@ -435,7 +435,7 @@ def make_pythia_70m_simultaneous_lns():
 
     learning_rate = 2e-4  # Correct learning rate for Pythia-70m
     lr_scheduler_type = 'cosine_with_min_lr'
-    lr_scheduler_kwargs = {"min_lr": 1e-3}  # 10th of learning rate
+    lr_scheduler_kwargs = {"min_lr": 1e-4}  # 10th of learning rate
 
     # Calculate derived training params
     batch_size = base_batch_size
