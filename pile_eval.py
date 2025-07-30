@@ -32,6 +32,9 @@ def preprocess_pile_dataset(dataset_name, model_name, num_samples=5000, cache_di
     if dataset_name == "pile-apollo":
         dataset = load_dataset("apollo-research/monology-pile-uncopyrighted-tokenizer-gpt2", streaming=True, split="train")
         dataset = dataset.take(num_samples)
+    elif dataset_name == "openwebtext":
+        dataset = load_dataset("openwebtext", streaming=True, split="train")
+        dataset = dataset.take(num_samples)
     elif dataset_name == "pile-apollo-luca":
         dataset = load_dataset("lucabaroni/apollo-pile-filtered-10k", streaming=False, split="train")
         if num_samples < len(dataset):

@@ -427,7 +427,7 @@ def make_pythia_70m_simultaneous_lns():
     
     # Training params
     base_batch_size = 16
-    max_steps = 300
+    max_steps = 200
     block_size = 2048
     target_batch_tokens = 2**19
     warmup_steps = 20
@@ -435,7 +435,7 @@ def make_pythia_70m_simultaneous_lns():
 
     learning_rate = 2e-4  # Correct learning rate for Pythia-70m
     lr_scheduler_type = 'cosine_with_min_lr'
-    lr_scheduler_kwargs = {"min_lr": 1e-4}  # 10th of learning rate
+    lr_scheduler_kwargs = {"min_lr": 1e-3}  # 10th of learning rate
 
     # Calculate derived training params
     batch_size = base_batch_size
@@ -456,7 +456,7 @@ def make_pythia_70m_simultaneous_lns():
     start_lnf = start_ln1v + n_layers * gap_ln1v + 10
     start_eot = start_lnf + 2
     start_bos = start_eot + 10
-    aux_loss_weight = 0.01
+    aux_loss_weight = 0.001
     
     return FinetuneConfig(**locals())
 
