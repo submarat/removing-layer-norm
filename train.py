@@ -908,7 +908,15 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
                         f"layer_{i}_post_attention_layernorm_bos_std_0": layer.post_attention_layernorm.bos_std_buffer[0],
                         f"layer_{i}_post_attention_layernorm_bos_std_1": layer.post_attention_layernorm.bos_std_buffer[1],
                     })
-                # Pythia models do not have ln_f, so we skip logging ln_f
+                # Log the final layer norm
+                wandb.log({
+                    f"ln_f_real_average_std": model.gpt_neox.final_layer_norm.real_average_std_prop,
+                    f"ln_f_real_bos_std": model.gpt_neox.final_layer_norm.real_bos_std_prop,
+                    f"ln_f_average_std_0": model.gpt_neox.final_layer_norm.average_std_buffer[0],
+                    f"ln_f_average_std_1": model.gpt_neox.final_layer_norm.average_std_buffer[1],
+                    f"ln_f_bos_std_0": model.gpt_neox.final_layer_norm.bos_std_buffer[0],
+                    f"ln_f_bos_std_1": model.gpt_neox.final_layer_norm.bos_std_buffer[1],
+                })
 
             return control 
     
