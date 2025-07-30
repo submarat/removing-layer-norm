@@ -67,15 +67,30 @@ class CustomTrainer(Trainer):
         self.pre_ln_f_activations = None
         
         # Register a hook to capture activations if we're using auxiliary loss
-        if self.aux_loss_weight > 0 and hasattr(self.model, 'transformer'):
-            # Register forward hook to capture activations before ln_f
-            def pre_ln_f_hook(module, input):
-                # Store the input to ln_f (which is what we want to normalize)
-                self.pre_ln_f_activations = input[0]
-                return input
-                
-            # Register the hook on the final layer norm
+        if self.aux_loss_weight > 0:
+            self._register_aux_loss_hook()
+    
+    def _register_aux_loss_hook(self):
+        """Register hook on the final layer norm for both GPT-2 and Pythia models."""
+        if not hasattr(self, 'model') or self.model is None:
+            return
+            
+        # Define hook function
+        def pre_ln_f_hook(module, input):
+            # Store the input to final layer norm (which is what we want to normalize)
+            self.pre_ln_f_activations = input[0]
+            return input
+        
+        # Handle both GPT-2 and Pythia architectures
+        if hasattr(self.model, 'transformer') and hasattr(self.model.transformer, 'ln_f'):
+            # GPT-2 style: model.transformer.ln_f
             self.model.transformer.ln_f.register_forward_pre_hook(pre_ln_f_hook)
+        elif hasattr(self.model, 'gpt_neox') and hasattr(self.model.gpt_neox, 'final_layer_norm'):
+            # Pythia style: model.gpt_neox.final_layer_norm
+            self.model.gpt_neox.final_layer_norm.register_forward_pre_hook(pre_ln_f_hook)
+        else:
+            print(f"Warning: Could not register aux loss hook - unknown model architecture")
+            self.aux_loss_weight = 0  # Disable aux loss if we can't register hook
         
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """Compute CE loss with an auxiliary loss to encourage uniform residual norms."""
@@ -661,8 +676,8 @@ def replace_pythia_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, 
         if post_ln_bias is not None:
             layer.post_attention_layernorm.bias = nn.Parameter(post_ln_bias)
         
-        # For now, don't monkey patch the Pythia layers - just use standard FakeLayerNorm
-        # The Q/K vs V separation will need to be implemented differently for Pythia
+        
+        
     
     # Also replace the final layer norm
     final_ln_weight = model.gpt_neox.final_layer_norm.weight.clone().detach()
