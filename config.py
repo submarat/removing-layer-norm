@@ -587,6 +587,21 @@ FINETUNE_CONFIGS = {
     "gpt2-xl_aux": make_gpt2_xl_aux(),
     "pythia-70m": make_pythia_70m(),
     "pythia-70m_test": make_pythia_70m_test(),
+    "pythia-70m_simultaneous_lns": make_pythia_70m_simultaneous_lns(),
+    # Experimental configurations - testing parameters separately
+    "pythia-70m_exp_baseline": make_pythia_70m_exp_baseline(),
+    # Aux loss scaling
+    "pythia-70m_exp_aux_02": make_pythia_70m_exp_aux_02(),
+    "pythia-70m_exp_aux_04": make_pythia_70m_exp_aux_04(),
+    "pythia-70m_exp_aux_05": make_pythia_70m_exp_aux_05(),
+    # Max steps scaling
+    "pythia-70m_exp_steps_120": make_pythia_70m_exp_steps_120(),
+    "pythia-70m_exp_steps_150": make_pythia_70m_exp_steps_150(),
+    "pythia-70m_exp_steps_170": make_pythia_70m_exp_steps_170(),
+    # Gap scaling
+    "pythia-70m_exp_gap_8": make_pythia_70m_exp_gap_8(),
+    "pythia-70m_exp_gap_12": make_pythia_70m_exp_gap_12(),
+    "pythia-70m_exp_gap_18": make_pythia_70m_exp_gap_18(),
 }
 
 def make_pythia_70m_start10():
@@ -657,6 +672,104 @@ FINETUNE_CONFIGS.update({
     "pythia-70m_start100_aux": make_pythia_70m_start100_aux(),
     "pythia-70m_simultaneous_lns": make_pythia_70m_simultaneous_lns(),
 })
+
+# Experimental configurations based on 70m_simultaneous_lns
+# Testing parameters separately instead of all combinations
+
+def make_pythia_70m_exp_baseline():
+    """Baseline: aux_loss_weight=0.001 (original), max_steps=200, gap_ln1qk=gap_ln1v=4"""
+    # This is just the original 70m_simultaneous_lns config
+    return make_pythia_70m_simultaneous_lns()
+
+# Test aux_loss_weight scaling (keeping other params at baseline)
+def make_pythia_70m_exp_aux_02():
+    """Test aux_loss_weight=0.2 (vs baseline 0.001)"""
+    base_config = make_pythia_70m_simultaneous_lns()
+    config_dict = base_config.__dict__.copy()
+    config_dict['aux_loss_weight'] = 0.2
+    return FinetuneConfig(**config_dict)
+
+def make_pythia_70m_exp_aux_04():
+    """Test aux_loss_weight=0.4 (vs baseline 0.001)"""
+    base_config = make_pythia_70m_simultaneous_lns()
+    config_dict = base_config.__dict__.copy()
+    config_dict['aux_loss_weight'] = 0.4
+    return FinetuneConfig(**config_dict)
+
+def make_pythia_70m_exp_aux_05():
+    """Test aux_loss_weight=0.5 (vs baseline 0.001)"""
+    base_config = make_pythia_70m_simultaneous_lns()
+    config_dict = base_config.__dict__.copy()
+    config_dict['aux_loss_weight'] = 0.5
+    return FinetuneConfig(**config_dict)
+
+# Test max_steps scaling (keeping other params at baseline)  
+def make_pythia_70m_exp_steps_120():
+    """Test max_steps=120 (vs baseline 200)"""
+    base_config = make_pythia_70m_simultaneous_lns()
+    config_dict = base_config.__dict__.copy()
+    config_dict['max_steps'] = 120
+    return FinetuneConfig(**config_dict)
+
+def make_pythia_70m_exp_steps_150():
+    """Test max_steps=150 (vs baseline 200)"""
+    base_config = make_pythia_70m_simultaneous_lns()
+    config_dict = base_config.__dict__.copy()
+    config_dict['max_steps'] = 150
+    return FinetuneConfig(**config_dict)
+
+def make_pythia_70m_exp_steps_170():
+    """Test max_steps=170 (vs baseline 200)"""
+    base_config = make_pythia_70m_simultaneous_lns()
+    config_dict = base_config.__dict__.copy()
+    config_dict['max_steps'] = 170
+    return FinetuneConfig(**config_dict)
+
+# Test gap scaling (keeping other params at baseline)
+def make_pythia_70m_exp_gap_8():
+    """Test gap_ln1qk=gap_ln1v=8 (vs baseline 4)"""
+    base_config = make_pythia_70m_simultaneous_lns()
+    config_dict = base_config.__dict__.copy()
+    config_dict['gap_ln1qk'] = 8
+    config_dict['gap_ln1v'] = 8
+    
+    # Recalculate schedule
+    config_dict['start_ln1v'] = config_dict['start_ln2'] + config_dict['n_layers'] * config_dict['gap_ln1qk']
+    config_dict['start_lnf'] = config_dict['start_ln1v'] + config_dict['n_layers'] * config_dict['gap_ln1v'] + 10
+    config_dict['start_eot'] = config_dict['start_lnf'] + 2
+    config_dict['start_bos'] = config_dict['start_eot'] + 10
+    
+    return FinetuneConfig(**config_dict)
+
+def make_pythia_70m_exp_gap_12():
+    """Test gap_ln1qk=gap_ln1v=12 (vs baseline 4)"""
+    base_config = make_pythia_70m_simultaneous_lns()
+    config_dict = base_config.__dict__.copy()
+    config_dict['gap_ln1qk'] = 12
+    config_dict['gap_ln1v'] = 12
+    
+    # Recalculate schedule
+    config_dict['start_ln1v'] = config_dict['start_ln2'] + config_dict['n_layers'] * config_dict['gap_ln1qk']
+    config_dict['start_lnf'] = config_dict['start_ln1v'] + config_dict['n_layers'] * config_dict['gap_ln1v'] + 10
+    config_dict['start_eot'] = config_dict['start_lnf'] + 2
+    config_dict['start_bos'] = config_dict['start_eot'] + 10
+    
+    return FinetuneConfig(**config_dict)
+
+def make_pythia_70m_exp_gap_18():
+    """Test gap_ln1qk=gap_ln1v=18 (vs baseline 4)"""
+    base_config = make_pythia_70m_simultaneous_lns()
+    config_dict = base_config.__dict__.copy()
+    config_dict['gap_ln1qk'] = 18
+    config_dict['gap_ln1v'] = 18
+    
+    # Recalculate schedule
+    config_dict['start_ln1v'] = config_dict['start_ln2'] + config_dict['n_layers'] * config_dict['gap_ln1qk']
+    config_dict['start_lnf'] = config_dict['start_ln1v'] + config_dict['n_layers'] * config_dict['gap_ln1v'] + 10
+    config_dict['start_eot'] = config_dict['start_lnf'] + 2
+    config_dict['start_bos'] = config_dict['start_eot'] + 10
+    
+    return FinetuneConfig(**config_dict)
 
 def main():
     args = docopt(__doc__)

@@ -1,72 +1,97 @@
 #!/bin/bash
-# sequential_pythia_experiments.sh
-# Run experiments ONE AT A TIME to avoid memory issues
+# pythia_70m_parameter_scaling.sh
+# Run pruned experimental configurations testing each parameter separately
 
 set -e
 
-echo "🔬 SEQUENTIAL PYTHIA EXPERIMENTS"
-echo "================================"
+echo "🔬 PYTHIA-70M PARAMETER SCALING EXPERIMENTS"
+echo "============================================"
 echo "⏰ Start: $(date '+%H:%M:%S')"
-echo "🎯 Running ONE experiment at a time"
-echo "⏱️  Each takes ~30 minutes"
-echo "📊 Total time: ~3 hours for 6 experiments"
-echo "================================"
+echo "🎯 Running 10 experiments (3+3+3+1 baseline)"
+echo "📊 Testing each parameter separately for efficiency"
+echo "⏱️  Each takes ~15-20 minutes"
+echo "📊 Total time: ~2.5-3.5 hours for 10 experiments"
+echo "============================================"
 
-mkdir -p logs
+mkdir -p logs/parameter_scaling
 
 # Function to run experiment and wait for completion
 run_experiment() {
     local config=$1
-    local env_vars=$2
-    local description=$3
+    local description=$2
     local timestamp=$(date '+%m%d_%H%M')
-    local log_file="logs/${config}_${timestamp}.log"
+    local log_file="logs/parameter_scaling/${config}_${timestamp}.log"
     
     echo ""
     echo "🔄 STARTING: $description"
     echo "📋 Config: $config"
-    echo "🌍 Env: $env_vars"
     echo "📝 Log: $log_file"
     echo "⏰ Start: $(date '+%H:%M:%S')"
     echo "================================"
     
     # Run experiment and wait for completion
-    if [ -n "$env_vars" ]; then
-        echo "🚀 Running: $env_vars python train.py --config $config --mode without_ln"
-        eval "$env_vars python train.py --config $config --mode without_ln" 2>&1 | tee "$log_file"
-    else
-        echo "🚀 Running: python train.py --config $config --mode without_ln"
-        python train.py --config "$config" --mode without_ln 2>&1 | tee "$log_file"
-    fi
+    echo "🚀 Running: python train.py --config $config"
+    python train.py --config "$config" 2>&1 | tee "$log_file"
     
     echo "✅ COMPLETED: $description at $(date '+%H:%M:%S')"
     echo ""
 }
 
-# Core experiments - most important first
-echo "🚀 STARTING CORE EXPERIMENTS"
-
-# 1. Test early vs late start (most important)
-run_experiment "pythia-70m_start10" "" "Early start (step 10)"
-run_experiment "pythia-70m_start100" "" "Late start (step 100)"
-
-# 2. Test auxiliary loss effectiveness
-run_experiment "pythia-70m_aux" "" "With auxiliary loss"
-
-# 3. Test std recomputation
-run_experiment "pythia-70m_start10" "EXP_RECOMPUTE_STD_ON_REAL=1" "Early start + std recomp"
-
-# 4. Test medium start
-run_experiment "pythia-70m_start50" "" "Medium start (step 50)"
-
-# 5. Best combination candidate
-run_experiment "pythia-70m_start10_aux" "" "Early start + aux loss"
+# Parameter scaling experiments
+echo "🚀 STARTING PARAMETER SCALING EXPERIMENTS"
 
 echo ""
-echo "🎯 ALL EXPERIMENTS COMPLETED!"
-echo "=============================="
+echo "📊 BASELINE EXPERIMENT"
+echo "======================"
+run_experiment "pythia-70m_exp_baseline" "Baseline: aux_loss=0.001, max_steps=200, gaps=4"
+
+echo ""
+echo "📊 AUX_LOSS_WEIGHT SCALING (keeping max_steps=200, gaps=4)"
+echo "=========================================================="
+run_experiment "pythia-70m_exp_aux_02" "aux_loss_weight=0.2 (vs baseline 0.001)"
+run_experiment "pythia-70m_exp_aux_04" "aux_loss_weight=0.4 (vs baseline 0.001)"
+run_experiment "pythia-70m_exp_aux_05" "aux_loss_weight=0.5 (vs baseline 0.001)"
+
+echo ""
+echo "📊 MAX_STEPS SCALING (keeping aux_loss=0.001, gaps=4)"
+echo "====================================================="
+run_experiment "pythia-70m_exp_steps_120" "max_steps=120 (vs baseline 200)"
+run_experiment "pythia-70m_exp_steps_150" "max_steps=150 (vs baseline 200)"
+run_experiment "pythia-70m_exp_steps_170" "max_steps=170 (vs baseline 200)"
+
+echo ""
+echo "📊 GAP SCALING (keeping aux_loss=0.001, max_steps=200)"
+echo "======================================================"
+run_experiment "pythia-70m_exp_gap_8" "gap_ln1qk/gap_ln1v=8 (vs baseline 4)"
+run_experiment "pythia-70m_exp_gap_12" "gap_ln1qk/gap_ln1v=12 (vs baseline 4)"
+run_experiment "pythia-70m_exp_gap_18" "gap_ln1qk/gap_ln1v=18 (vs baseline 4)"
+
+echo ""
+echo "🎯 ALL PARAMETER SCALING EXPERIMENTS COMPLETED!"
+echo "==============================================="
 echo "⏰ Finished: $(date '+%H:%M:%S')"
-echo "📊 Results in: logs/"
-echo "🔍 Next: Analyze loss curves to find best parameters"
+echo "📊 Results in: logs/parameter_scaling/"
 echo ""
-echo "🌅 Good morning! Time to analyze results."
+echo "🔍 ANALYSIS WORKFLOW:"
+echo "===================="
+echo "1. 📊 Compare aux_loss_weight effects:"
+echo "   - Plot final loss vs aux_loss_weight [0.001, 0.2, 0.4, 0.5]"
+echo "   - Analyze convergence stability"
+echo ""
+echo "2. ⏱️ Compare max_steps effects:"
+echo "   - Plot final loss vs max_steps [120, 150, 170, 200]"
+echo "   - Identify diminishing returns point"
+echo ""
+echo "3. 🔄 Compare gap effects:"
+echo "   - Plot final loss vs gap_size [4, 8, 12, 18]"
+echo "   - Analyze LayerNorm removal stability"
+echo ""
+echo "4. 🎯 Determine optimal parameters:"
+echo "   - Identify best single parameter changes"
+echo "   - Consider combining best-performing values"
+echo ""
+echo "📈 Next steps:"
+echo "- If clear winners emerge, test optimal combination"
+echo "- If parameters interact, run targeted 2-factor experiments"
+echo ""
+echo "🌅 Parameter scaling complete! Time to analyze results."
