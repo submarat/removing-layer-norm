@@ -35,8 +35,6 @@ def extract_std_from_checkpoint(model_name, ckpt_path):
         std_dict[f'blocks.{id}.hook_resid_pre'] = state_dict[f'gpt_neox.layers.{id}.input_layernorm.average_std_buffer'][1].item()
         std_dict[f'blocks.{id}.hook_resid_mid'] = state_dict[f'gpt_neox.layers.{id}.post_attention_layernorm.average_std_buffer'][1].item()
     std_dict[f'blocks.{id}.hook_resid_post'] = state_dict['gpt_neox.final_layer_norm.average_std_buffer'][1].item()
-
-    breakpoint()
     
     return std_dict
 
@@ -61,8 +59,9 @@ def remove_layernorm_by_scaling(model_name, model, std_dict):
             
         # Final layer norm
         lnf_std = std_dict[f'blocks.{n_layers-1}.hook_resid_post']
-        model.gpt_neox.final_layer_norm.weight.data *= 1e6
+        model.gpt_neox.final_layer_norm.weight.data *= 1e6 / lnf_std
         model.gpt_neox.final_layer_norm.eps = 1e12
+        model.config.layer_norm_eps = 1e12
     else:
         # For GPT-2 models
         for block in model.transformer.h:
@@ -75,7 +74,7 @@ def remove_layernorm_by_scaling(model_name, model, std_dict):
         lnf_std = std_dict[f'blocks.{n_layers-1}.hook_resid_post']
         model.transformer.ln_f.weight.data = model.transformer.ln_f.weight.data * 1e6 / lnf_std
         model.transformer.ln_f.eps = 1e12
-    model.config.layer_norm_epsilon = 1e12
+        model.config.layer_norm_epsilon = 1e12
     return model
 
 

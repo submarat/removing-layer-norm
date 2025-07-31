@@ -31,7 +31,6 @@ def prepare_dataset(model_name="gpt2", dataset_name="openwebtext"):
 
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokenizer.pad_token = tokenizer.eos_token
-        breakpoint()
 
         def tokenize_function(examples):
 

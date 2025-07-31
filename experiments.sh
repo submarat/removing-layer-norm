@@ -31,7 +31,7 @@ run_experiment() {
     
     # Run experiment and wait for completion
     echo "🚀 Running: python train.py --config $config"
-    python train.py --config "$config" 2>&1 | tee "$log_file"
+    EXP_RECOMPUTE_STD_ON_REAL=1 python train.py --config "$config" 2>&1 | tee "$log_file"
     
     echo "✅ COMPLETED: $description at $(date '+%H:%M:%S')"
     echo ""
@@ -48,9 +48,10 @@ run_experiment "pythia-70m_exp_baseline" "Baseline: aux_loss=0.001, max_steps=20
 echo ""
 echo "📊 AUX_LOSS_WEIGHT SCALING (keeping max_steps=200, gaps=4)"
 echo "=========================================================="
-run_experiment "pythia-70m_exp_aux_02" "aux_loss_weight=0.2 (vs baseline 0.001)"
-run_experiment "pythia-70m_exp_aux_04" "aux_loss_weight=0.4 (vs baseline 0.001)"
-run_experiment "pythia-70m_exp_aux_05" "aux_loss_weight=0.5 (vs baseline 0.001)"
+run_experiment "pythia-70m_exp_aux_000005" "aux_loss_weight=0.00005 (vs baseline 0.001)"
+run_experiment "pythia-70m_exp_aux_00001" "aux_loss_weight=0.0001 (vs baseline 0.001)"
+run_experiment "pythia-70m_exp_aux_00005" "aux_loss_weight=0.0005 (vs baseline 0.001)"
+
 
 echo ""
 echo "📊 MAX_STEPS SCALING (keeping aux_loss=0.001, gaps=4)"

@@ -588,20 +588,6 @@ FINETUNE_CONFIGS = {
     "pythia-70m": make_pythia_70m(),
     "pythia-70m_test": make_pythia_70m_test(),
     "pythia-70m_simultaneous_lns": make_pythia_70m_simultaneous_lns(),
-    # Experimental configurations - testing parameters separately
-    "pythia-70m_exp_baseline": make_pythia_70m_exp_baseline(),
-    # Aux loss scaling
-    "pythia-70m_exp_aux_02": make_pythia_70m_exp_aux_02(),
-    "pythia-70m_exp_aux_04": make_pythia_70m_exp_aux_04(),
-    "pythia-70m_exp_aux_05": make_pythia_70m_exp_aux_05(),
-    # Max steps scaling
-    "pythia-70m_exp_steps_120": make_pythia_70m_exp_steps_120(),
-    "pythia-70m_exp_steps_150": make_pythia_70m_exp_steps_150(),
-    "pythia-70m_exp_steps_170": make_pythia_70m_exp_steps_170(),
-    # Gap scaling
-    "pythia-70m_exp_gap_8": make_pythia_70m_exp_gap_8(),
-    "pythia-70m_exp_gap_12": make_pythia_70m_exp_gap_12(),
-    "pythia-70m_exp_gap_18": make_pythia_70m_exp_gap_18(),
 }
 
 def make_pythia_70m_start10():
@@ -661,25 +647,35 @@ def make_pythia_70m_start100_aux():
     config.aux_loss_weight = 0.1
     return config
 
-# Add these to your FINETUNE_CONFIGS dictionary:
-FINETUNE_CONFIGS.update({
-    "pythia-70m_start10": make_pythia_70m_start10(),
-    "pythia-70m_start50": make_pythia_70m_start50(),
-    "pythia-70m_start100": make_pythia_70m_start100(),
-    "pythia-70m_aux": make_pythia_70m_aux(),
-    "pythia-70m_start10_aux": make_pythia_70m_start10_aux(),
-    "pythia-70m_start50_aux": make_pythia_70m_start50_aux(),
-    "pythia-70m_start100_aux": make_pythia_70m_start100_aux(),
-    "pythia-70m_simultaneous_lns": make_pythia_70m_simultaneous_lns(),
-})
-
-# Experimental configurations based on 70m_simultaneous_lns
-# Testing parameters separately instead of all combinations
-
 def make_pythia_70m_exp_baseline():
     """Baseline: aux_loss_weight=0.001 (original), max_steps=200, gap_ln1qk=gap_ln1v=4"""
     # This is just the original 70m_simultaneous_lns config
     return make_pythia_70m_simultaneous_lns()
+
+def make_pythia_70m_exp_aux_000005():
+    config = make_pythia_70m_simultaneous_lns()
+    config.aux_loss_weight = 0.00005
+    return config
+
+def make_pythia_70m_exp_aux_00001():
+    config = make_pythia_70m_simultaneous_lns()
+    config.aux_loss_weight = 0.0001
+    return config
+
+def make_pythia_70m_exp_aux_0001():
+    config = make_pythia_70m_simultaneous_lns()
+    config.aux_loss_weight = 0.001
+    return config
+
+def make_pythia_70m_exp_aux_001():
+    config = make_pythia_70m_simultaneous_lns()
+    config.aux_loss_weight = 0.01
+    return config
+
+def make_pythia_70m_exp_aux_01():
+    config = make_pythia_70m_simultaneous_lns()
+    config.aux_loss_weight = 0.1
+    return config
 
 # Test aux_loss_weight scaling (keeping other params at baseline)
 def make_pythia_70m_exp_aux_02():
@@ -696,11 +692,11 @@ def make_pythia_70m_exp_aux_04():
     config_dict['aux_loss_weight'] = 0.4
     return FinetuneConfig(**config_dict)
 
-def make_pythia_70m_exp_aux_05():
+def make_pythia_70m_exp_aux_08():
     """Test aux_loss_weight=0.5 (vs baseline 0.001)"""
     base_config = make_pythia_70m_simultaneous_lns()
     config_dict = base_config.__dict__.copy()
-    config_dict['aux_loss_weight'] = 0.5
+    config_dict['aux_loss_weight'] = 0.8
     return FinetuneConfig(**config_dict)
 
 # Test max_steps scaling (keeping other params at baseline)  
@@ -770,6 +766,40 @@ def make_pythia_70m_exp_gap_18():
     config_dict['start_bos'] = config_dict['start_eot'] + 10
     
     return FinetuneConfig(**config_dict)
+
+# Add these to your FINETUNE_CONFIGS dictionary:
+FINETUNE_CONFIGS.update({
+    "pythia-70m_start10": make_pythia_70m_start10(),
+    "pythia-70m_start50": make_pythia_70m_start50(),
+    "pythia-70m_start100": make_pythia_70m_start100(),
+    "pythia-70m_aux": make_pythia_70m_aux(),
+    "pythia-70m_start10_aux": make_pythia_70m_start10_aux(),
+    "pythia-70m_start50_aux": make_pythia_70m_start50_aux(),
+    "pythia-70m_start100_aux": make_pythia_70m_start100_aux(),
+    "pythia-70m_simultaneous_lns": make_pythia_70m_simultaneous_lns(),
+    # Experimental configurations - testing parameters separately
+    "pythia-70m_exp_baseline": make_pythia_70m_exp_baseline(),
+    # Aux loss scaling
+    "pythia-70m_exp_aux_000005": make_pythia_70m_exp_aux_000005(),
+    "pythia-70m_exp_aux_00001": make_pythia_70m_exp_aux_00001(),
+    "pythia-70m_exp_aux_0001": make_pythia_70m_exp_aux_0001(),
+    "pythia-70m_exp_aux_001": make_pythia_70m_exp_aux_001(),
+    "pythia-70m_exp_aux_01": make_pythia_70m_exp_aux_01(),
+    "pythia-70m_exp_aux_02": make_pythia_70m_exp_aux_02(),
+    "pythia-70m_exp_aux_04": make_pythia_70m_exp_aux_04(),
+    "pythia-70m_exp_aux_08": make_pythia_70m_exp_aux_08(),
+    # Max steps scaling
+    "pythia-70m_exp_steps_120": make_pythia_70m_exp_steps_120(),
+    "pythia-70m_exp_steps_150": make_pythia_70m_exp_steps_150(),
+    "pythia-70m_exp_steps_170": make_pythia_70m_exp_steps_170(),
+    # Gap scaling
+    "pythia-70m_exp_gap_8": make_pythia_70m_exp_gap_8(),
+    "pythia-70m_exp_gap_12": make_pythia_70m_exp_gap_12(),
+    "pythia-70m_exp_gap_18": make_pythia_70m_exp_gap_18(),
+})
+
+# Experimental configurations based on 70m_simultaneous_lns
+# Testing parameters separately instead of all combinations
 
 def main():
     args = docopt(__doc__)
