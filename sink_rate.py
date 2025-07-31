@@ -11,6 +11,7 @@ from tqdm import tqdm
 import numpy as np
 from scipy import stats
 from pile_eval import preprocess_pile_dataset
+import json
 
 device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
 
@@ -161,6 +162,109 @@ def calculate_batch_sink_rates(model, input_ids, attention_mask=None):
     
     return all_layers_sink_rate, layer3_sink_rate
 
+def identify_sinks(model, attentions, eps=0.3):
+    """
+    Identify specific sink instances in attention patterns.
+    
+    Args:
+        model: The model
+        attentions: List of attention tensors of shape (B, H, L, T, T)
+        eps: Threshold for sink identification
+        
+    Returns:
+        List of dictionaries containing sink information for each batch item
+    """
+    config = model.config
+    T = attentions[0].shape[2]
+    H = config.n_head
+    L = config.n_layer
+    B = attentions[0].shape[0]
+    
+    batch_sinks = []
+    
+    for batch_idx in range(B):
+        sinks = []
+        for layer_idx, attn in enumerate(attentions):
+            for head_idx in range(H):
+                # Check if this head attends to sink (position 0) with coefficient > eps
+                if attn[batch_idx, head_idx, :, 0].max() > eps:
+                    # Find all positions that attend to sink with coefficient > eps
+                    sink_positions = torch.where(attn[batch_idx, head_idx, :, 0] > eps)[0].tolist()
+                    sinks.append({
+                        'layer': layer_idx,
+                        'head': head_idx,
+                        'positions': sink_positions,
+                        'attention_values': attn[batch_idx, head_idx, sink_positions, 0].tolist()
+                    })
+        batch_sinks.append(sinks)
+    
+    return batch_sinks
+
+def calculate_sink_overlap_stats(model1, model2, input_ids, eps=0.3):
+    """
+    Calculate sink overlap statistics between two models.
+    
+    Args:
+        model1: First model (e.g., with LayerNorm)
+        model2: Second model (e.g., without LayerNorm)
+        input_ids: Input token IDs
+        eps: Threshold for sink identification
+        
+    Returns:
+        Dictionary with overlap statistics
+    """
+    with torch.no_grad():
+        outputs1 = model1(input_ids=input_ids, output_attentions=True)
+        outputs2 = model2(input_ids=input_ids, output_attentions=True)
+    
+    # Identify sinks in both models
+    sinks1 = identify_sinks(model1, outputs1.attentions, eps)
+    sinks2 = identify_sinks(model2, outputs2.attentions, eps)
+    
+    # Create sets of sink identifiers for comparison
+    def create_sink_set(sinks):
+        sink_set = set()
+        for batch_sinks in sinks:
+            for sink in batch_sinks:
+                # Create unique identifier for each sink (layer, head, positions)
+                sink_id = (sink['layer'], sink['head'], tuple(sink['positions']))
+                sink_set.add(sink_id)
+        return sink_set
+    
+    sinks1_set = create_sink_set(sinks1)
+    sinks2_set = create_sink_set(sinks2)
+    
+    # Calculate overlap statistics
+    total_sinks1 = len(sinks1_set)
+    total_sinks2 = len(sinks2_set)
+    
+    # Sinks present in both models
+    common_sinks = sinks1_set.intersection(sinks2_set)
+    common_count = len(common_sinks)
+    
+    # Sinks in model1 but not in model2
+    only_in_model1 = sinks1_set - sinks2_set
+    only_in_model1_count = len(only_in_model1)
+    
+    # Sinks in model2 but not in model1
+    only_in_model2 = sinks2_set - sinks1_set
+    only_in_model2_count = len(only_in_model2)
+    
+    # Calculate percentages
+    stats = {
+        'total_sinks_model1': total_sinks1,
+        'total_sinks_model2': total_sinks2,
+        'common_sinks': common_count,
+        'only_in_model1': only_in_model1_count,
+        'only_in_model2': only_in_model2_count,
+        'common_percentage_wrt_model1': (common_count / total_sinks1 * 100) if total_sinks1 > 0 else 0,
+        'only_model1_percentage_wrt_model1': (only_in_model1_count / total_sinks1 * 100) if total_sinks1 > 0 else 0,
+        'only_model2_percentage_wrt_model2': (only_in_model2_count / total_sinks2 * 100) if total_sinks2 > 0 else 0,
+        'common_percentage_wrt_model2': (common_count / total_sinks2 * 100) if total_sinks2 > 0 else 0
+    }
+    
+    return stats
+
 def main():
     # Define model names
     original_model_name = "schaeff/gpt-2medium_vanilla500"
@@ -176,17 +280,21 @@ def main():
     processed_examples, _ = preprocess_pile_dataset("pile-apollo-luca", "gpt2-medium", 1000)
     
     # Process samples in batches
-    batch_size = 8
+    batch_size = 512
     original_all_sink_rates = []
     original_layer3_sink_rates = []
     no_ln_all_sink_rates = []
     no_ln_layer3_sink_rates = []
     
-    print("Calculating sink rates...")
+    # New: Sink overlap statistics
+    all_overlap_stats = []
+    
+    print("Calculating sink rates and overlap statistics...")
     for i in tqdm(range(0, len(processed_examples), batch_size)):
         batch_examples = processed_examples[i:i + batch_size]
         # Truncate to 512 tokens
-        input_ids = torch.stack([torch.tensor(example[:512]) for example in batch_examples]).to(device)
+        n_truncation = 8
+        input_ids = torch.stack([torch.tensor(example[:n_truncation]) for example in batch_examples]).to(device)
         
         # Calculate sink rates for both models
         original_all, original_layer3 = calculate_batch_sink_rates(model_original, input_ids)
@@ -196,6 +304,10 @@ def main():
         original_layer3_sink_rates.append(original_layer3.item())
         no_ln_all_sink_rates.append(no_ln_all.item())
         no_ln_layer3_sink_rates.append(no_ln_layer3.item())
+        
+        # Calculate sink overlap statistics
+        overlap_stats = calculate_sink_overlap_stats(model_original, model_no_ln, input_ids)
+        all_overlap_stats.append(overlap_stats)
     
     # Convert to numpy arrays for statistics
     original_all_sink_rates = np.array(original_all_sink_rates)
@@ -230,6 +342,58 @@ def main():
     print(f"  95% CI = [{np.percentile(no_ln_layer3_sink_rates, 2.5):.4f}, {np.percentile(no_ln_layer3_sink_rates, 97.5):.4f}]")
     print(f"  IQR = [{np.percentile(no_ln_layer3_sink_rates, 25):.4f}, {np.percentile(no_ln_layer3_sink_rates, 75):.4f}]")
     print(f"  Median = {np.median(no_ln_layer3_sink_rates):.4f}")
+    
+    # Calculate and display sink overlap statistics
+    print("\n" + "="*60)
+    print("SINK OVERLAP STATISTICS")
+    print("="*60)
+    
+    # Aggregate overlap statistics across all batches
+    total_common = sum(stats['common_sinks'] for stats in all_overlap_stats)
+    total_only_model1 = sum(stats['only_in_model1'] for stats in all_overlap_stats)
+    total_only_model2 = sum(stats['only_in_model2'] for stats in all_overlap_stats)
+    total_sinks_model1 = sum(stats['total_sinks_model1'] for stats in all_overlap_stats)
+    total_sinks_model2 = sum(stats['total_sinks_model2'] for stats in all_overlap_stats)
+    
+    print(f"Total sinks in {original_model_name}: {total_sinks_model1}")
+    print(f"Total sinks in {no_ln_model_name}: {total_sinks_model2}")
+    print(f"Common sinks: {total_common}")
+    print(f"Sinks only in {original_model_name}: {total_only_model1}")
+    print(f"Sinks only in {no_ln_model_name}: {total_only_model2}")
+    
+    print(f"\nPercentages (wrt {original_model_name} total):")
+    print(f"  1) Sinks present in both models: {total_common/total_sinks_model1*100:.2f}%")
+    print(f"  2) Sinks only in {original_model_name}: {total_only_model1/total_sinks_model1*100:.2f}%")
+    
+    print(f"\nPercentages (wrt {no_ln_model_name} total):")
+    print(f"  3) Sinks only in {no_ln_model_name}: {total_only_model2/total_sinks_model2*100:.2f}%")
+    print(f"     Sinks present in both models: {total_common/total_sinks_model2*100:.2f}%")
+    
+    # Calculate average percentages per batch
+    avg_common_pct_model1 = np.mean([stats['common_percentage_wrt_model1'] for stats in all_overlap_stats])
+    avg_only_model1_pct = np.mean([stats['only_model1_percentage_wrt_model1'] for stats in all_overlap_stats])
+    avg_only_model2_pct = np.mean([stats['only_model2_percentage_wrt_model2'] for stats in all_overlap_stats])
+    
+    print(f"\nAverage percentages per batch:")
+    print(f"  Common sinks (wrt {original_model_name}): {avg_common_pct_model1:.2f}%")
+    print(f"  Only in {original_model_name}: {avg_only_model1_pct:.2f}%")
+    print(f"  Only in {no_ln_model_name}: {avg_only_model2_pct:.2f}%")
+
+    # Save overlap statistics to JSON file
+    with open('sink_overlap_stats.json', 'w') as f:
+        json.dump({
+            'all_overlap_stats': all_overlap_stats,
+            'aggregated_stats': {
+                'total_common': total_common,
+                'total_only_model1': total_only_model1,
+                'total_only_model2': total_only_model2,
+                'total_sinks_model1': total_sinks_model1,
+                'total_sinks_model2': total_sinks_model2,
+                'avg_common_pct_model1': avg_common_pct_model1,
+                'avg_only_model1_pct': avg_only_model1_pct,
+                'avg_only_model2_pct': avg_only_model2_pct
+            }
+        }, f, indent=2)
 
 def visualize_low_sink_rate_attention(model, tokenizer, prompt, sink_rate_threshold=0.1):
     """Visualize attention patterns for cases where sink rate is below threshold."""
@@ -303,6 +467,11 @@ def test_low_sink_rate_visualization():
         visualize_low_sink_rate_attention(model, tokenizer, prompt)
 
 if __name__ == "__main__":
-    test_low_sink_rate_visualization()
+    # test_low_sink_rate_visualization()
+    main()
+    
 
 
+
+# %%
+# %
