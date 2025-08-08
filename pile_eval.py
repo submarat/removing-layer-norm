@@ -135,7 +135,8 @@ def evaluate_model_on_pile(model, processed_examples, batch_size=8, device=None,
             # Transfer batch to device, non_blocking only beneficial for CUDA
             non_blocking = str(device).startswith('cuda')
             batch_input_ids = batch_input_ids.to(device, non_blocking=non_blocking)
-            
+            if i not in [340, 915, 1166]:
+                continue
             if isinstance(model, HookedTransformer):
                 logits = model(batch_input_ids)
                 per_token_loss = model.loss_fn(logits, batch_input_ids, per_token=True)
@@ -171,25 +172,52 @@ def evaluate_model_on_pile(model, processed_examples, batch_size=8, device=None,
             total_loss += batch_loss
             total_tokens += batch_tokens
 
-            # If per_token_loss is too high for any token of a sample, save the sample
             for j in range(batch_input_ids.size(0)):
-                if per_token_loss[j].max() > 50.0:
+                if per_token_loss[j].max() > 0.0:
                     print(f"Sample {i} has high loss: {per_token_loss[j].max().item()}")
+ 
+                    high_loss_index = [i > 0 for i in per_token_loss[j]].index(True) + 1
+                    # Get the token ID and loss
+                    high_loss_token = batch_input_ids[j][high_loss_index].item()
+                    high_loss_token_decoded = tokenizer.decode(high_loss_token)
+                    last_5_tokens_of_seq = batch_input_ids[j][high_loss_index-5:high_loss_index]
+                    last_5_tokens_of_seq_decoded = tokenizer.decode(last_5_tokens_of_seq)
+                    last_5_tokens_of_seq_str = " ".join(str(x) for x in last_5_tokens_of_seq.cpu().numpy())
                     # Save the sample for further analysis
                     with open("high_loss_samples.txt", "a") as f:
                         # format the batch input IDs and loss
-                        batch_ids = " ".join(str(batch_input_ids[j].cpu().numpy()))
-                        f.write(f"Sample {i}: {batch_ids}\n")
-                        loss = " ".join(str(per_token_loss[j].cpu().numpy()))
-                        f.write(f"Loss: {loss}\n")
+                        batch_ids_numpy = batch_input_ids[j][1:].cpu().numpy()
+                        # print(f"Tokens: {len(batch_ids_numpy)}")
+                        batch_ids_string = " ".join(str(x) for x in batch_ids_numpy)
+                        # f.write(f"Sample {i}: {batch_ids_string}\n\n")
+                        f.write(f"Sample {i*8 + j} out of 10k has tokens with CE loss > 50. \n")
+                        
+                        f.write(fr"First token with CE loss > 50:{high_loss_token}  at position {high_loss_index}.")
+                        f.write("\n")
+                        f.write(f"Decoded:'{high_loss_token_decoded}'\n")
+                        f.write("Decoded (unicode_escape):'")
+                        f.write(high_loss_token_decoded.encode('unicode_escape').decode())
+                        f.write("'\n")
+                        f.write(f"Sequence of last 5 Tokens for prediction:{last_5_tokens_of_seq_str}\n")
+                        f.write(f"Decoded:'{last_5_tokens_of_seq_decoded}'\n")
+                        f.write("Decoded (unicode_escape):'")
+                        f.write(last_5_tokens_of_seq_decoded.encode('unicode_escape').decode())
+                        f.write("'\n")
+                        f.write(f"(Token:Loss) \n")
+                        loss_numpy = per_token_loss[j].cpu().numpy()
+                        # print(f"Nb Loss vals: {len(loss_numpy)}")
+                        loss_string = " ".join(str(x) for x in loss_numpy)
+                        # f.write(f"Loss: {loss_string}\n")
+                        token_loss_string = ", ".join(str(token) + ":" + str(loss) for token, loss in zip(batch_ids_numpy, loss_numpy))
+                        f.write(f"{batch_ids_numpy[0]}:N/A, {token_loss_string}\n\n")
                         # Save the sample decoded
                         if tokenizer is not None:
                             # Decode the input IDs to text
                             decoded_sample = tokenizer.decode(batch_input_ids[j].cpu().numpy(), skip_special_tokens=True)
-                            f.write(f"Decoded: {decoded_sample}\n")
-                        f.write("\n")
-                        
-
+                            f.write(f"Decoded:\n{decoded_sample}\n")
+                        f.write("\n\n")
+                    break
+            break
             
             if i % 10 == 0 or i == 0:
                 avg_loss_so_far = total_loss / total_tokens if total_tokens > 0 else float("inf")
