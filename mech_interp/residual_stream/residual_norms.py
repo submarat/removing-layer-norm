@@ -665,7 +665,7 @@ def create_readable_tick_labels(layers):
 
 if __name__ == '__main__':
     model_str = 'medium'
-    data_paths = f'/workspace/removing-layer-norm/mech_interp/inference_logs/gpt2-{model_str}_dataset_luca-pile_samples_1000_seqlen_512_prepend_False/inference_results.parquet'
+    data_paths = f'/workspace/removing-layer-norm/mech_interp/inference_logs/gpt2-{model_str}_dataset_ANONYMIZED-pile_samples_1000_seqlen_512_prepend_False/inference_results.parquet'
     output_dir = f'figures/{model_str}/bos_vs_rest'
     # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)

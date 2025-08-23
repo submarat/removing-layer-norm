@@ -1266,7 +1266,7 @@ class MetricsSummary:
 if __name__ == "__main__":
     # Initialize with data path and model type
     model_str = 'small'
-    data_path = f'/workspace/removing-layer-norm/mech_interp/inference_logs/gpt2-{model_str}_dataset_luca-pile_samples_1000_seqlen_512_prepend_False/inference_results.parquet'
+    data_path = f'/workspace/removing-layer-norm/mech_interp/inference_logs/gpt2-{model_str}_dataset_ANONYMIZED-pile_samples_1000_seqlen_512_prepend_False/inference_results.parquet'
     
     # Create metrics summary with bootstrap confidence intervals (10,000 samples)
     metrics_comparison = MetricsSummary(

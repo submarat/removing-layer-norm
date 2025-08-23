@@ -29,15 +29,15 @@ def preprocess_pile_dataset(dataset_name, model_name, num_samples=5000, cache_di
     tokenizer.pad_token = tokenizer.eos_token
     
     # Load dataset
-    if dataset_name == "pile-apollo":
-        dataset = load_dataset("apollo-research/monology-pile-uncopyrighted-tokenizer-gpt2", streaming=True, split="train")
+    if dataset_name == "pile-ANONYMIZED":
+        dataset = load_dataset("ANONYMIZED", streaming=True, split="train")
         dataset = dataset.take(num_samples)
-    elif dataset_name == "pile-apollo-luca":
-        dataset = load_dataset("lucabaroni/apollo-pile-filtered-10k", streaming=False, split="train")
+    elif dataset_name == "pile-ANONYMIZED-ANONYMIZED":
+        dataset = load_dataset("ANONYMIZED", streaming=False, split="train")
         if num_samples < len(dataset):
             dataset = dataset.shuffle(seed=42).select(range(num_samples))
     elif dataset_name == "pile-uncopyrighted":
-        dataset = load_dataset("monology/pile-uncopyrighted", streaming=True, split="train")
+        dataset = load_dataset("ANONYMIZED/pile-uncopyrighted", streaming=True, split="train")
         dataset = dataset.take(num_samples)
     elif dataset_name == "pile-10k":
         dataset = load_dataset("NeelNanda/pile-10k", streaming=False, split="train")
@@ -51,7 +51,7 @@ def preprocess_pile_dataset(dataset_name, model_name, num_samples=5000, cache_di
     all_tokens = []
     
     # Process dataset without batching to avoid issues with variable-length chunks
-    if dataset_name == "pile-apollo" or dataset_name == "pile-apollo-luca":
+    if dataset_name == "pile-ANONYMIZED" or dataset_name == "pile-ANONYMIZED-ANONYMIZED":
         # For pre-tokenized datasets
         for example in tqdm(dataset, desc="Processing"):
             all_tokens.extend(example["input_ids"])
@@ -96,7 +96,7 @@ def preprocess_pile_dataset(dataset_name, model_name, num_samples=5000, cache_di
     return processed_examples, tokenizer
 
 
-def evaluate_model_on_pile(model, processed_examples, batch_size=8, device=None, pin_memory=True, save_losses=False):
+def evaluate_model_on_pile(model, processed_examples, batch_size=8, device=None, pin_memory=True):
     """Evaluate model with efficient batched inference"""
     # Use the model's device if device not explicitly specified
     if device is None:
@@ -200,8 +200,8 @@ def evaluate_model_on_pile(model, processed_examples, batch_size=8, device=None,
     
     avg_loss = total_loss / total_tokens if total_tokens > 0 else float("inf")
     print(f"Evaluation complete. Final loss: {avg_loss:.4f}")
-    if save_losses:
-        np.savetxt('losses.out', loss_list, delimiter=',')
+
+    np.savetxt('losses.out', loss_list, delimiter=',')
 
     return avg_loss 
 

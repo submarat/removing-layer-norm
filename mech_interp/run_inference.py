@@ -184,9 +184,9 @@ class InferenceRunner:
 
 
 if __name__ == "__main__":
-    # Create a config for the Apollo Pile dataset
+    # Create a config for the ANONYMIZED Pile dataset
     config = InferenceConfig(
-        dataset="luca-pile",
+        dataset="ANONYMIZED-pile",
         models=["baseline", "finetuned", "noLN"],
         model_size='medium',
         num_samples=1000,

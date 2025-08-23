@@ -1,4 +1,3 @@
-
 from datasets import load_dataset
 import numpy as np
 from collections import Counter
@@ -7,13 +6,13 @@ import multiprocessing as mp
 from multiprocessing import Pool
 from transformers import GPT2Tokenizer
 
-pile_dataset = load_dataset('apollo-research/monology-pile-uncopyrighted-tokenizer-gpt2', 
+pile_dataset = load_dataset('ANONYMIZED', 
                       split='train', 
                       num_proc=16,
                       )
 
 
-openwebtext_dataset = load_dataset('apollo-research/Skylion007-openwebtext-tokenizer-gpt2', 
+openwebtext_dataset = load_dataset('ANONYMIZED', 
                       split='train', 
                       num_proc=16,
                       )

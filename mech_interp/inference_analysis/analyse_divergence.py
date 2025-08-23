@@ -356,7 +356,7 @@ if __name__ == "__main__":
     # Initialize with data path
     model_str = 'small'
     fig_path = f'figures/{model_str}/divergence_contribution.png'
-    data_path = f'/workspace/removing-layer-norm/mech_interp/inference_logs/gpt2-{model_str}_dataset_luca-pile_samples_1000_seqlen_512_prepend_False/inference_results.parquet'
+    data_path = f'/workspace/removing-layer-norm/mech_interp/inference_logs/gpt2-{model_str}_dataset_ANONYMIZED-pile_samples_1000_seqlen_512_prepend_False/inference_results.parquet'
     divergences = DivergenceSummary(data_path, agg=False, model_type=model_str)
     # Generate and save all plots
     fig, results = divergences.visualize_loss_regions(epsilon=3.5, save_path=fig_path)

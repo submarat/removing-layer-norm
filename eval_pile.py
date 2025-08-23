@@ -3,7 +3,7 @@ Evaluate language model performance on The Pile dataset variants or OpenWebText.
 
 Example:
     python eval_pile.py -m ckpt1200.pt -f nanogpt -d pile-10k -n 20000 -b 16
-    python eval_pile.py -m gpt2 -f transformers -d pile-apollo -b 8
+    python eval_pile.py -m gpt2 -f transformers -d pile-ANONYMIZED -b 8
     python eval_pile.py -m results/checkpoint-1200 -f transformers
     python eval_pile.py -m gpt2 -f transformers -d openwebtext -b 8
 
@@ -15,7 +15,7 @@ Options:
     -h --help                       Show this help message
     -m MODEL --model MODEL          Model checkpoint path or model id [REQUIRED]
     -f FORMAT --format FORMAT       Model format: transformers/noLN_HF_model/fakeln_checkpoint [default: transformers]
-    -d DATASET --dataset DATASET    Dataset variant: pile-10k/pile-apollo/pile-apollo-luca/pile-uncopyrighted/openwebtext [default: pile-apollo]
+    -d DATASET --dataset DATASET    Dataset variant: pile-10k/pile-ANONYMIZED/pile-ANONYMIZED-ANONYMIZED/pile-uncopyrighted/openwebtext [default: pile-ANONYMIZED]
     -n NUM --num-samples NUM        Number of samples to evaluate [default: 10000]
     -b BATCH_SIZE --batch-size BATCH_SIZE  Batch size for evaluation [default: 8]
     --model-name MODEL_NAME         Base model name [default: gpt2]

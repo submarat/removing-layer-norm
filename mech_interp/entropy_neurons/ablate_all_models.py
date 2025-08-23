@@ -42,7 +42,7 @@ class AblationAnalyzer:
         self.batch_size = batch_size
         
         self.dataloader = DataLoader(
-                dataset_name="luca-pile",
+                dataset_name="ANONYMIZED-pile",
                 batch_size=1,
                 max_context=512,
                 num_samples=250,

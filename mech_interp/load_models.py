@@ -9,6 +9,11 @@ from transformer_lens import HookedTransformer
 from transformers.models.gpt2.tokenization_gpt2_fast import GPT2TokenizerFast
 from huggingface_hub import snapshot_download
 
+# Anonymized HuggingFace model paths
+FINETUNED_GPT2_SMALL = "ANONYMIZED"
+FINETUNED_GPT2_MEDIUM = "ANONYMIZED"
+NOLN_GPT2_SMALL = "ANONYMIZED"
+NOLN_GPT2_MEDIUM = "ANONYMIZED"
 
 # Type aliases for clarity
 ModelName = Literal['baseline', 'finetuned', 'noLN']
@@ -218,13 +223,13 @@ class ModelFactory:
         model_repos = {
             'small': {
                 'baseline': "gpt2",
-                'finetuned': "schaeff/gpt2-small_vanilla300",
-                'noLN': "schaeff/gpt2-small_LNFree300"
+                'finetuned': FINETUNED_GPT2_SMALL,
+                'noLN': NOLN_GPT2_SMALL
             },
             'medium': {
                 'baseline': "gpt2-medium",
-                'finetuned': "schaeff/gpt2-medium_vanilla500",
-                'noLN': "schaeff/gpt2-medium_LNFree500"
+                'finetuned': FINETUNED_GPT2_MEDIUM,
+                'noLN': NOLN_GPT2_MEDIUM
             }
         }
         

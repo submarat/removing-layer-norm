@@ -922,12 +922,12 @@ def main():
     # Prepare datasets
     tokenized, data_collator = prepare_dataset(model_name)
     
-    # Initialize Pile-apollo dataset once at the beginning
-    print("Preparing Pile-apollo evaluation dataset...")
+    # Initialize Pile-ANONYMIZED dataset once at the beginning
+    print("Preparing Pile-ANONYMIZED evaluation dataset...")
     pile_eval_dataset = None
     if os.environ.get("EVAL", "0") == "1":
         processed_examples, pile_tokenizer = preprocess_pile_dataset(
-            "pile-apollo", model_name, num_samples=config.num_eval_samples
+            "pile-ANONYMIZED", model_name, num_samples=config.num_eval_samples
         )
         
         pile_eval_dataset = convert_for_trainer(

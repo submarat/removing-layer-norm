@@ -28,7 +28,7 @@ class AttentionAttributionAnalysis:
         center_writing_weights: bool = True,
         fold_ln: bool = True,
         batch_size: int = 5,
-        dataset_name: str = "luca-pile",
+        dataset_name: str = "ANONYMIZED-pile",
         max_context: int = 512,
         num_samples: int = 1000,
         prepend_bos: bool = False
