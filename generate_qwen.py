@@ -1,11 +1,11 @@
 """
-Download and sample from the gemma-3-1b-it model.
+Download and sample from the Qwen3-0.6B model.
 
 Example:
-    python generate_gemma.py --prompt "What is machine learning?"
+    python generate_qwen.py --prompt "What is machine learning?"
 
 Usage:
-    generate_gemma.py [--prompt PROMPT] [--max-length MAX_LENGTH] [--temperature TEMP] [--num-sequences NUM]
+    generate_qwen.py [--prompt PROMPT] [--max-length MAX_LENGTH] [--temperature TEMP] [--num-sequences NUM]
 
 Options:
     -h --help                           Show this help message
@@ -39,8 +39,8 @@ def main():
     temperature = float(args['--temperature'])
     num_sequences = int(args['--num-sequences'])
     
-    # Model name - try the exact name user specified first
-    model_name = "google/gemma-3-1b-it"
+    # Model name
+    model_name = "Qwen/Qwen3-0.6B"
     
     # Try to load the model
     try:
@@ -57,7 +57,7 @@ def main():
         print("Downloading and loading model (this may take a while on first run)...")
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            torch_dtype=torch.float16 if device.type == "cuda" else torch.float32,
+            dtype=torch.float16 if device.type == "cuda" else torch.float32,
             device_map="auto" if device.type == "cuda" else None,
         )
         
@@ -97,69 +97,7 @@ def main():
         
     except Exception as e:
         print(f"Error loading model '{model_name}': {e}")
-        print("\nTrying alternative model names...")
-        # Try alternative model names if the first one fails
-        alternative_names = [
-            "google/gemma-1.1-1b-it",
-            "google/gemma-2b-it",
-            "google/gemma-1b-it"
-        ]
-        
-        success = False
-        for alt_name in alternative_names:
-            if alt_name == model_name:
-                continue
-            try:
-                print(f"Trying: {alt_name}")
-                model_name = alt_name
-                device = get_device()
-                
-                tokenizer = AutoTokenizer.from_pretrained(model_name)
-                if tokenizer.pad_token is None:
-                    tokenizer.pad_token = tokenizer.eos_token
-                
-                model = AutoModelForCausalLM.from_pretrained(
-                    model_name,
-                    torch_dtype=torch.float16 if device.type == "cuda" else torch.float32,
-                    device_map="auto" if device.type == "cuda" else None,
-                )
-                
-                if device.type != "cuda":
-                    model = model.to(device)
-                
-                model.eval()
-                
-                inputs = tokenizer(prompt, return_tensors="pt")
-                inputs = {k: v.to(device) for k, v in inputs.items()}
-                
-                with torch.no_grad():
-                    outputs = model.generate(
-                        inputs["input_ids"],
-                        max_length=max_length,
-                        num_return_sequences=num_sequences,
-                        do_sample=True,
-                        temperature=temperature,
-                        attention_mask=inputs.get("attention_mask"),
-                        pad_token_id=tokenizer.pad_token_id,
-                    )
-                
-                print("\n" + "="*80)
-                print("Generated text:")
-                print("="*80)
-                for i, output in enumerate(outputs):
-                    decoded_text = tokenizer.decode(output, skip_special_tokens=True)
-                    if num_sequences > 1:
-                        print(f"\nSequence {i+1}:")
-                    print(decoded_text)
-                print("="*80)
-                success = True
-                break
-            except Exception as e2:
-                print(f"Failed to load {alt_name}: {e2}")
-                continue
-        
-        if not success:
-            raise RuntimeError(f"Could not load any Gemma model. Tried: {model_name} and alternatives.")
+        raise RuntimeError(f"Could not load Qwen model: {model_name}")
 
 
 if __name__ == '__main__':
