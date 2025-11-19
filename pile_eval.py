@@ -12,21 +12,48 @@ from datasets import load_dataset, Dataset
 from transformers import AutoTokenizer
 from transformer_lens import HookedTransformer
 
-def preprocess_pile_dataset(dataset_name, model_name, num_samples=5000, cache_dir="processed_datasets", filter_subsets=True):
+def preprocess_pile_dataset(dataset_name, model_name, num_samples=5000, cache_dir="processed_datasets", filter_subsets=True, ctx_len=None):
     """Preprocess dataset for evaluation using efficient batching"""
     print(f"Preprocessing {dataset_name} dataset...")
     
     # Check if preprocessed dataset exists
-    cache_path = os.path.join(cache_dir, f"{dataset_name}_{model_name}_{num_samples}")
+    safe_model_name = model_name.replace('/', '_')
+    cache_name = f"{dataset_name}_{safe_model_name}_{num_samples}"
+    if ctx_len is not None:
+        cache_name += f"_ctx{ctx_len}"
+    cache_path = os.path.join(cache_dir, cache_name)
+    
     if os.path.exists(cache_path):
         print(f"Loading preprocessed dataset from {cache_path}")
         processed_examples = torch.load(cache_path)
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
         return processed_examples, tokenizer
     
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    
+    # Determine block size
+    if ctx_len is not None:
+        block_size = ctx_len
+    else:
+        block_size = 1024
+        if hasattr(tokenizer, 'model_max_length') and tokenizer.model_max_length < 1e9:
+            block_size = tokenizer.model_max_length
+        else:
+            # Try to load config
+            from transformers import AutoConfig
+            try:
+                config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+                if hasattr(config, 'n_ctx'):
+                    block_size = config.n_ctx
+                elif hasattr(config, 'max_position_embeddings'):
+                    block_size = config.max_position_embeddings
+            except:
+                pass
+    print(f"Using block size: {block_size}")
     
     # Load dataset
     if dataset_name == "pile-apollo":
@@ -72,7 +99,6 @@ def preprocess_pile_dataset(dataset_name, model_name, num_samples=5000, cache_di
                 all_tokens.extend(tokens)
     
     # Chunk into fixed-size blocks
-    block_size = 1024
     n_chunks = min(num_samples, len(all_tokens) // block_size)
 
     print(f"Creating {n_chunks} chunks from {len(all_tokens)} tokens")
@@ -209,7 +235,8 @@ def convert_for_trainer(processed_examples, tokenizer, cache_dir="processed_data
     """
     Convert processed examples to a format compatible with HuggingFace Trainer
     """
-    cache_path = os.path.join(cache_dir, f"{dataset_name}_trainer_{model_name}_{num_samples}")
+    safe_model_name = model_name.replace('/', '_')
+    cache_path = os.path.join(cache_dir, f"{dataset_name}_trainer_{safe_model_name}_{num_samples}")
     if os.path.exists(cache_path):
         print(f"Loading preprocessed Trainer dataset from {cache_path}")
         return torch.load(cache_path, weights_only=False)

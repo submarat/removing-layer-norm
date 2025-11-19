@@ -2,7 +2,7 @@ import os
 import torch
 
 from train import load_model
-from transformers.modeling_utils import load_sharded_checkpoint
+# from transformers.modeling_utils import load_sharded_checkpoint
 
 
 def get_device():
@@ -16,11 +16,11 @@ def extract_std_from_checkpoint(model_name, ckpt_path):
         # First try loading a single pytorch model file
         missing, unexpected = ckpt_model.load_state_dict(torch.load(os.path.join(ckpt_path, 'pytorch_model.bin')), strict=False)
     except FileNotFoundError:
-        try:
-            # If that fails, try loading a sharded checkpoint
-            missing, unexpected = load_sharded_checkpoint(ckpt_model, ckpt_path, strict=False)
-        except Exception as e:
-            raise ValueError(f"Could not load checkpoint from {ckpt_path}. Error: {str(e)}")
+        # try:
+        #     # If that fails, try loading a sharded checkpoint
+        #     missing, unexpected = load_sharded_checkpoint(ckpt_model, ckpt_path, strict=False)
+        # except Exception as e:
+            raise ValueError(f"Could not load checkpoint from {ckpt_path}. Error: FileNotFoundError")
 
     if missing:
         print(f"Missing keys when loading checkpoint: {len(missing)} keys")

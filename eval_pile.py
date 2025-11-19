@@ -8,17 +8,18 @@ Example:
     python eval_pile.py -m gpt2 -f transformers -d openwebtext -b 8
 
 Usage:
-    eval_pile.py -m MODEL [-f FORMAT] [-d DATASET] [-n NUM_SAMPLES] [-b BATCH_SIZE] [--model-name MODEL_NAME]
+    eval_pile.py -m MODEL [-f FORMAT] [-d DATASET] [-n NUM_SAMPLES] [-b BATCH_SIZE] [--model-name MODEL_NAME] [--ctx-len CTX_LEN]
     eval_pile.py -h | --help
 
 Options:
     -h --help                       Show this help message
     -m MODEL --model MODEL          Model checkpoint path or model id [REQUIRED]
     -f FORMAT --format FORMAT       Model format: transformers/noLN_HF_model/fakeln_checkpoint [default: transformers]
-    -d DATASET --dataset DATASET    Dataset variant: pile-10k/pile-apollo/pile-apollo-luca/pile-uncopyrighted/openwebtext [default: pile-apollo]
+    -d DATASET --dataset DATASET    Dataset variant: pile-10k/pile-apollo/pile-apollo-luca/pile-uncopyrighted/openwebtext [default: pile-apollo-luca]
     -n NUM --num-samples NUM        Number of samples to evaluate [default: 10000]
     -b BATCH_SIZE --batch-size BATCH_SIZE  Batch size for evaluation [default: 8]
     --model-name MODEL_NAME         Base model name [default: gpt2]
+    --ctx-len CTX_LEN               Context length (block size) for evaluation. If not set, uses model's max length.
 """
 
 import os
@@ -28,8 +29,8 @@ import train
 from transformer_lens import HookedTransformer
 from utils import get_device
 from pile_eval import preprocess_pile_dataset, evaluate_model_on_pile
-from transformers import GPT2LMHeadModel, AutoModelForCausalLM, logging
-from transformers.modeling_utils import load_sharded_checkpoint
+from transformers import AutoModelForCausalLM, AutoTokenizer, logging
+# from transformers.modeling_utils import load_sharded_checkpoint
 from prepare_dataset import prepare_dataset
 
 # Load model with appropriate device
@@ -37,17 +38,17 @@ device = get_device()
 
 def load_saved_model(model_name: str, model_path=None):
     if model_path is not None: 
-        model = GPT2LMHeadModel.from_pretrained(model_path)
+        model = AutoModelForCausalLM.from_pretrained(model_path, trust_remote_code=True)
     else:
         # Load OpenAI's GPT model - use specific model name like "gpt2-large" or "gpt2-xl"
-        model = AutoModelForCausalLM.from_pretrained(model_name)  # or other OpenAI model version
+        model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True)  # or other OpenAI model version
     return model
 
 
 def load_hf_model(model_id_or_ckpt_path, model_name):
     """ Loads huggingface transformers model and removes layernorm """
 
-    model_hf = GPT2LMHeadModel.from_pretrained(model_id_or_ckpt_path)
+    model_hf = AutoModelForCausalLM.from_pretrained(model_id_or_ckpt_path, trust_remote_code=True)
 
     return model_hf
 
@@ -60,11 +61,11 @@ def load_fakeln_checkpoint(ckpt_path, model_name):
         # First try loading a single pytorch model file
         missing, unexpected = ckpt_model.load_state_dict(torch.load(os.path.join(ckpt_path, 'pytorch_model.bin'), map_location=get_device()), strict=False)
     except FileNotFoundError:
-        try:
-            # If that fails, try loading a sharded checkpoint
-            missing, unexpected = load_sharded_checkpoint(ckpt_model, ckpt_path, strict=False)
-        except Exception as e:
-            raise ValueError(f"Could not load checkpoint from {ckpt_path}. Error: {str(e)}")
+        # try:
+        #     # If that fails, try loading a sharded checkpoint
+        #     missing, unexpected = load_sharded_checkpoint(ckpt_model, ckpt_path, strict=False)
+        # except Exception as e:
+            raise ValueError(f"Could not load checkpoint from {ckpt_path}. Error: FileNotFoundError")
 
     if missing:
         print(f"Missing keys when loading checkpoint: {len(missing)} keys")
@@ -111,12 +112,24 @@ def main():
     args = docopt(__doc__)
     
     # Parse arguments
-    model_path = args['--model']
     format_type = args['--format']
     dataset_name = args['--dataset']
     num_samples = int(args['--num-samples'])
     batch_size = int(args['--batch-size'])
-    model_name = args['--model-name'] or "gpt2"
+    ctx_len = args['--ctx-len']
+    if ctx_len is not None:
+        ctx_len = int(ctx_len)
+    
+    model_path = args['--model']
+    model_name = args['--model-name']
+    
+    if not model_name:
+        if os.path.exists(model_path):
+            model_name = "gpt2"
+            print(f"Model path exists, defaulting model_name to '{model_name}'. Use --model-name to override.")
+        else:
+            model_name = model_path
+            print(f"Model path does not exist locally, assuming it is a model ID. Setting model_name to '{model_name}'")
     
     # Create cache directory if it doesn't exist
     os.makedirs("processed_datasets", exist_ok=True)
@@ -140,12 +153,12 @@ def main():
     if dataset_name == 'openwebtext':
         # Load OpenWebText dataset
         print("Loading OpenWebText dataset...")
-        tokenized, _ = prepare_dataset(model_name)
+        tokenized, _ = prepare_dataset(model_name, ctx_len=ctx_len)
         # Convert to list of tensors for evaluation
         processed_examples = [torch.tensor(example["input_ids"]) for example in tokenized["test"]]
     else:
         # Using shared preprocessing function for Pile datasets
-        processed_examples, _ = preprocess_pile_dataset(dataset_name, model_name, num_samples)
+        processed_examples, _ = preprocess_pile_dataset(dataset_name, model_name, num_samples, ctx_len=ctx_len)
     
     # Using shared evaluation function
     ce_loss = evaluate_model_on_pile(model, processed_examples, batch_size)

@@ -2,11 +2,38 @@ import os
 import datasets
 from transformers import AutoTokenizer, DataCollatorForLanguageModeling
 
-def prepare_dataset(model_name="gpt2"):
+def prepare_dataset(model_name="gpt2", ctx_len=None):
+    # Determine block size
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+        
+    if ctx_len is not None:
+        block_size = ctx_len
+    else:
+        block_size = 1024
+        if hasattr(tokenizer, 'model_max_length') and tokenizer.model_max_length < 1e9:
+            block_size = tokenizer.model_max_length
+        else:
+            # Try to load config
+            from transformers import AutoConfig
+            try:
+                config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+                if hasattr(config, 'n_ctx'):
+                    block_size = config.n_ctx
+                elif hasattr(config, 'max_position_embeddings'):
+                    block_size = config.max_position_embeddings
+            except:
+                pass
+            
+    cache_dir = f"tokenized_dataset_{model_name.replace('/', '_')}"
+    if ctx_len is not None:
+        cache_dir += f"_ctx{ctx_len}"
+        
     # First check if the tokenized dataset exists on disk
-    if os.path.exists("tokenized_dataset/train") and os.path.exists("tokenized_dataset/test"):
-        print("Loading tokenized dataset from disk...")
-        tokenized = datasets.load_from_disk("tokenized_dataset")
+    if os.path.exists(os.path.join(cache_dir, "train")) and os.path.exists(os.path.join(cache_dir, "test")):
+        print(f"Loading tokenized dataset from {cache_dir}...")
+        tokenized = datasets.load_from_disk(cache_dir)
     else:
         print("Tokenized dataset not found. Processing from scratch...")
 
@@ -19,8 +46,9 @@ def prepare_dataset(model_name="gpt2"):
 
         # split_dataset["train"] = split_dataset["train"].select(range(100))
 
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
 
         def tokenize_function(examples):
 
@@ -37,11 +65,11 @@ def prepare_dataset(model_name="gpt2"):
             for seq in tokenized_examples["input_ids"]:
                 concatenated.extend(seq)
 
-            # Chunk into 1024 token chunks, dropping any remainder
+            # Chunk into block_size token chunks, dropping any remainder
             n_chunks = (
-                len(concatenated) // 1024
+                len(concatenated) // block_size
             )  # Integer division to get complete chunks only
-            chunks = [concatenated[i * 1024 : (i + 1) * 1024] for i in range(n_chunks)]
+            chunks = [concatenated[i * block_size : (i + 1) * block_size] for i in range(n_chunks)]
 
             return {"input_ids": chunks}
 
@@ -54,11 +82,12 @@ def prepare_dataset(model_name="gpt2"):
             remove_columns=split_dataset["train"].column_names,  # Remove original columns
         )
         
-        print("Saving tokenized dataset to disk...")
-        tokenized.save_to_disk("tokenized_dataset")
+        print(f"Saving tokenized dataset to {cache_dir}...")
+        tokenized.save_to_disk(cache_dir)
 
-    tokenizer = AutoTokenizer.from_pretrained("gpt2")
-    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
 
     # Use DataCollatorForLanguageModeling with mlm=False for causal language modeling (GPT-2)
     data_collator = DataCollatorForLanguageModeling(
