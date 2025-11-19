@@ -379,6 +379,90 @@ def make_gpt2_xl_aux():
 
     return FinetuneConfig(**locals())
 
+def make_qwen3_debug():
+    model_name = "Qwen/Qwen3-0.6B"
+    n_layers = 28
+    
+    base_batch_size = 1
+    max_steps = 1
+    early_stop_step = 2
+    block_size = 1024
+    target_batch_tokens = 1024
+    warmup_steps = 1
+    weight_decay = 0.0
+    learning_rate = 5e-5
+    lr_scheduler_type = 'linear'
+    lr_scheduler_kwargs = {}
+    save_steps = 1
+    num_eval_samples = 16
+    eval_steps = 1
+    
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = max(1, int(desired_batch_size // batch_size))
+    gradient_checkpointing = False
+    momentum = 0.9
+    
+    gap_ln2 = 1
+    gap_ln1qk = 1
+    gap_ln1v = 1
+    gap_lnf = None
+    gap_eot = None
+    gap_bos = None
+    
+    start_ln2 = 1
+    start_ln1qk = 2
+    start_ln1v = 3
+    start_lnf = 4
+    start_eot = 5
+    start_bos = 5
+    
+    aux_loss_weight = 0.0
+    
+    return FinetuneConfig(**locals())
+
+def make_qwen3_schedule():
+    model_name = "Qwen/Qwen3-0.6B"
+    n_layers = 28
+    
+    base_batch_size = 1
+    max_steps = 20
+    early_stop_step = 25
+    block_size = 1024
+    target_batch_tokens = 4096
+    warmup_steps = 2
+    weight_decay = 0.0
+    learning_rate = 5e-5
+    lr_scheduler_type = 'linear'
+    lr_scheduler_kwargs = {}
+    save_steps = 5
+    num_eval_samples = 64
+    eval_steps = 5
+    
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = max(1, int(desired_batch_size // batch_size))
+    gradient_checkpointing = False
+    momentum = 0.9
+    
+    gap_ln2 = 2
+    gap_ln1qk = 3
+    gap_ln1v = 3
+    gap_lnf = None
+    gap_eot = None
+    gap_bos = None
+    
+    start_ln2 = 2
+    start_ln1qk = 6
+    start_ln1v = 10
+    start_lnf = 14
+    start_eot = 16
+    start_bos = 18
+    
+    aux_loss_weight = 0.0
+    
+    return FinetuneConfig(**locals())
+
 FINETUNE_CONFIGS = {
     "gpt2": make_gpt2_standard(),
     "gpt2_aux": make_gpt2_standard_aux(),
@@ -388,6 +472,8 @@ FINETUNE_CONFIGS = {
     "gpt2-large_aux": make_gpt2_large_aux(),
     "gpt2-xl": make_gpt2_xl(),
     "gpt2-xl_aux": make_gpt2_xl_aux(),
+    "qwen3_debug": make_qwen3_debug(),
+    "qwen3_schedule": make_qwen3_schedule(),
 }
 
 def main():

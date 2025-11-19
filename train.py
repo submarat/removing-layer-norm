@@ -16,7 +16,6 @@ import gc
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import tqdm
 import transformers
 import wandb
@@ -27,13 +26,14 @@ from prepare_dataset import prepare_dataset
 from torch import Tensor
 from torch.utils.data import Dataset
 from transformers import (
+    AutoConfig,
+    AutoModelForCausalLM,
     AutoTokenizer,
     DataCollatorForLanguageModeling,
     Trainer,
     TrainerCallback,
     TrainingArguments,
 )
-import types
 from datasets import load_dataset
 from std_dicts import std_dicts
 from pydantic import BaseModel, Field
@@ -48,7 +48,41 @@ torch.manual_seed(1337)
 # torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
 # torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 
-_USE_WANDB = True
+_USE_WANDB = os.environ.get("USE_WANDB", "1") == "1"
+
+_QWEN_MODEL_TYPES = {"qwen", "qwen2", "qwen3"}
+
+
+def _get_model_type(model):
+    return getattr(getattr(model, "config", None), "model_type", None)
+
+
+def _is_qwen_model(model):
+    return _get_model_type(model) in _QWEN_MODEL_TYPES
+
+
+def _get_blocks(model):
+    if hasattr(model, "transformer") and hasattr(model.transformer, "h"):
+        return model.transformer.h
+    if hasattr(model, "model") and hasattr(model.model, "layers"):
+        return model.model.layers
+    raise ValueError("Unsupported model architecture for block extraction")
+
+
+def _get_final_norm_module(model):
+    if hasattr(model, "transformer") and hasattr(model.transformer, "ln_f"):
+        return model.transformer.ln_f
+    if hasattr(model, "model") and hasattr(model.model, "norm"):
+        return model.model.norm
+    return None
+
+
+def _get_context_length_from_config(config):
+    for attr in ("n_ctx", "max_position_embeddings", "max_sequence_length"):
+        value = getattr(config, attr, None)
+        if value is not None:
+            return value
+    return 1024
 
 
 class CustomTrainer(Trainer):
@@ -67,15 +101,17 @@ class CustomTrainer(Trainer):
         self.pre_ln_f_activations = None
         
         # Register a hook to capture activations if we're using auxiliary loss
-        if self.aux_loss_weight > 0 and hasattr(self.model, 'transformer'):
+        if self.aux_loss_weight > 0:
             # Register forward hook to capture activations before ln_f
             def pre_ln_f_hook(module, input):
                 # Store the input to ln_f (which is what we want to normalize)
                 self.pre_ln_f_activations = input[0]
                 return input
-                
+            
             # Register the hook on the final layer norm
-            self.model.transformer.ln_f.register_forward_pre_hook(pre_ln_f_hook)
+            final_norm = _get_final_norm_module(self.model)
+            if final_norm is not None:
+                final_norm.register_forward_pre_hook(pre_ln_f_hook)
         
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """Compute CE loss with an auxiliary loss to encourage uniform residual norms."""
@@ -95,9 +131,12 @@ class CustomTrainer(Trainer):
         bos_positions = torch.zeros_like(input_ids, dtype=torch.bool)
         bos_positions[:, 0] = True
         
-        # For GPT-2, the EOS token ID is 50256
-        eos_token_id = 50256  # GPT-2 specific EOS token ID
-        eos_positions = (input_ids == eos_token_id)
+        eos_token_id = getattr(model.config, "eos_token_id", 50256)
+        if isinstance(eos_token_id, (list, tuple)):
+            eos_token_tensor = torch.tensor(eos_token_id, device=input_ids.device)
+            eos_positions = torch.isin(input_ids, eos_token_tensor)
+        else:
+            eos_positions = (input_ids == eos_token_id)
         
         # Create a mask for non-BOS/EOS positions
         non_special_positions = ~(bos_positions | eos_positions)
@@ -182,12 +221,27 @@ class CustomTrainer(Trainer):
         return (loss, outputs) if return_outputs else loss
 
 class FakeLayerNorm(nn.Module):
-    """LayerNorm using a fixed std instead of the actual standard deviation."""
+    """RMSNorm using a fixed std instead of the actual standard deviation."""
 
-    def __init__(self, n_embd, n_ctx, layer, bias, init_average_std, init_bos_std, grad_acc_steps=1, momentum=0.1, bos_special_treatment=False):
+    def __init__(
+        self,
+        n_embd,
+        n_ctx,
+        layer,
+        bias,
+        init_average_std,
+        init_bos_std,
+        grad_acc_steps=1,
+        momentum=0.1,
+        bos_special_treatment=False,
+        eps=1e-6,
+        position_dependent=False,
+    ):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(n_embd))
         self.bias = nn.Parameter(torch.zeros(n_embd)) if bias else None
+        self.eps = eps
+        self.position_dependent = position_dependent
         
         # Store layer information
         self.layer = layer
@@ -197,14 +251,13 @@ class FakeLayerNorm(nn.Module):
         # Register all flags as buffers so they're automatically included in state_dict
         # Using naming without underscore to be compatible with old checkpoints
         self.register_buffer("is_fake", torch.tensor(False))
-        self.register_buffer("attn_v_is_fake", torch.tensor(False))
         self.register_buffer("bos_special_treatment", torch.tensor(bos_special_treatment))
         self.register_buffer("real_average_std", torch.tensor(float(init_average_std)))
         self.register_buffer("real_bos_std", torch.tensor(float(init_bos_std)))
         self.register_buffer("grad_acc_steps", torch.tensor(grad_acc_steps))
         self.register_buffer("momentum", torch.tensor(float(momentum)))
 
-        if os.environ.get("EXP_CORRECT_BOS", "0") == "1":
+        if self.position_dependent and os.environ.get("EXP_CORRECT_BOS", "0") == "1":
             std_dim = n_ctx
         else:
             std_dim = n_embd
@@ -224,7 +277,7 @@ class FakeLayerNorm(nn.Module):
         super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
         
         # Remove successfully loaded buffer keys from missing_keys
-        for key in [prefix + "is_fake", prefix + "attn_v_is_fake", prefix + "bos_special_treatment"]:
+        for key in [prefix + "is_fake", prefix + "bos_special_treatment"]:
             if key in missing_keys:
                 missing_keys.remove(key)
     
@@ -236,14 +289,6 @@ class FakeLayerNorm(nn.Module):
     @is_fake_prop.setter
     def is_fake_prop(self, value):
         self.is_fake.fill_(bool(value))
-    
-    @property
-    def attn_v_is_fake_prop(self):
-        return bool(self.attn_v_is_fake.item())
-    
-    @attn_v_is_fake_prop.setter
-    def attn_v_is_fake_prop(self, value):
-        self.attn_v_is_fake.fill_(bool(value))
     
     @property
     def bos_special_treatment_prop(self):
@@ -273,9 +318,7 @@ class FakeLayerNorm(nn.Module):
         """Return a string representation of the FakeLayerNorm's current state."""
         # Force re-read of the tensor values to ensure we have the latest state
         is_fake_value = bool(self.is_fake.item())
-        attn_v_is_fake_value = bool(self.attn_v_is_fake.item())
         mode = "fake" if is_fake_value else "real"
-        attn_v_mode = "fake" if attn_v_is_fake_value else "real"
         bos_treatment = "enabled" if self.bos_special_treatment.item() else "disabled"
         
         # Get short name from layer for cleaner output
@@ -285,17 +328,24 @@ class FakeLayerNorm(nn.Module):
         avg_std_sample = f"[{self.average_std_buffer[0].item():.4f}, {self.average_std_buffer[1].item():.4f}, ...]"
         bos_std_sample = f"[{self.bos_std_buffer[0].item():.4f}, {self.bos_std_buffer[1].item():.4f}, ...]"
         
-        return (f"FakeLayerNorm(layer={layer_name}, mode={mode}, attn_v_mode={attn_v_mode}, "
+        return (f"FakeLayerNorm(layer={layer_name}, mode={mode}, "
                 f"real_avg_std={self.real_average_std.item():.4f}, real_bos_std={self.real_bos_std.item():.4f}, "
                 f"bos_treatment={bos_treatment}, "
                 f"avg_std={avg_std_sample}, bos_std={bos_std_sample})")
     
-    def forward(self, input, std_type="avg", attn_v=False):
-        # We want all the enable / disable information to be in this class, but the class is re-used
-        # for both the QK and V paths. Thus we add the attn_v flag to the call that is True only for
-        # the V path. Thus we get to have flags `is_fake` and `attn_v_is_fake` to enable / disable the
-        # LN for the QK and V paths separately.
-        is_fake_value = self.attn_v_is_fake.item() if attn_v else self.is_fake.item()
+    def _reshape_std_for_input(self, std, input, use_position_layout):
+        view_shape = [1] * input.dim()
+        if use_position_layout and input.dim() >= 2:
+            view_shape[1] = std.shape[0]
+        else:
+            view_shape[-1] = std.shape[0]
+        return std.view(*view_shape)
+    
+    def _compute_feature_std(self, x):
+        return (x.pow(2).mean(dim=-1) + self.eps).sqrt()
+    
+    def forward(self, input, std_type="avg"):
+        is_fake_value = self.is_fake.item()
         self.recompute_average_std(input)
 
         if is_fake_value:
@@ -312,34 +362,44 @@ class FakeLayerNorm(nn.Module):
 
             assert std_type in ["avg", "bos"]
             std = self.average_std_buffer if std_type == "avg" else self.bos_std_buffer
-            if os.environ.get("EXP_CORRECT_BOS", "0") == "1":
-                return (
-                    (input - input.mean(-1, keepdim=True)) / std.view(1, -1, 1) * self.weight
-                    + self.bias
-                    if self.bias is not None
-                    else input * self.weight
-                )
-            else:
-                return (
-                    (input - input.mean(-1, keepdim=True)) / std * self.weight
-                    + self.bias
-                    if self.bias is not None
-                    else input * self.weight
-                )
+            use_position_layout = (
+                self.position_dependent and os.environ.get("EXP_CORRECT_BOS", "0") == "1" and std.numel() == self.n_ctx
+            )
+            broadcast_std = self._reshape_std_for_input(std.to(input.dtype), input, use_position_layout)
+            normalized = input / broadcast_std
+            weight = self.weight
+            bias = self.bias
+            if weight.dtype != input.dtype:
+                weight = weight.to(input.dtype)
+            normalized = normalized * weight
+            if bias is not None:
+                if bias.dtype != input.dtype:
+                    bias = bias.to(input.dtype)
+                normalized = normalized + bias
+            return normalized
         else:
             if os.environ.get("EXP_RECOMPUTE_STD_ON_REAL", "0") == "1":
                 with torch.no_grad():
                     self.sync_std()
 
-            return F.layer_norm(
-                input, self.weight.shape, self.weight, self.bias, 1e-5
-            )
+            variance = input.pow(2).mean(dim=-1, keepdim=True)
+            normalized = input * torch.rsqrt(variance + self.eps)
+            weight = self.weight
+            bias = self.bias
+            if weight.dtype != input.dtype:
+                weight = weight.to(input.dtype)
+            normalized = normalized * weight
+            if bias is not None:
+                if bias.dtype != input.dtype:
+                    bias = bias.to(input.dtype)
+                normalized = normalized + bias
+            return normalized
     
     @torch.no_grad()
     def recompute_average_std(self, x: Float[Tensor, "batch posn d_model"]):
         if self.bos_special_treatment.item():
             # Taking std over model dim
-            std = (x.var(dim=-1, unbiased=False) + 1e-5).sqrt()
+            std = self._compute_feature_std(x)
             # averaging over the batch dimentaion
             std = std.mean(dim=0) 
             # averaging over sequence postions
@@ -353,7 +413,7 @@ class FakeLayerNorm(nn.Module):
             self.real_bos_std_prop = self.momentum * self.real_bos_std_prop + (1-self.momentum) * bos_std
         else:
             # Taking std over model dim
-            std = (x.var(dim=-1, unbiased=False) + 1e-5).sqrt()
+            std = self._compute_feature_std(x)
             # Averaging over everything else
             mean_std = std.mean().detach().item()
             self.real_average_std_prop = self.momentum * self.real_average_std_prop +  (1-self.momentum) * mean_std
@@ -396,223 +456,220 @@ class FakeLayerNorm(nn.Module):
             self.bos_std_buffer[0] = self.bos_std_buffer[1]
 
 
+def _std_value(std_dict, key, default=1.0):
+    if std_dict:
+        return std_dict.get(key, default)
+    return default
+
+
+def _std_pair(std_dict, std_bos_dict, key, default=1.0):
+    avg = _std_value(std_dict, key, default)
+    bos = _std_value(std_bos_dict, key, avg)
+    return avg, bos
+
+
 def replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_acc_steps=1, momentum=0.1):
-    n_layers = model.config.n_layer
-    n_embd = model.transformer.h[0].ln_1.weight.shape[0]
-    n_ctx = model.config.n_ctx
+    if not _is_qwen_model(model):
+        raise ValueError("FakeLayerNorm currently supports Qwen architectures only.")
+    _replace_layernorm_with_fake_layernorm_qwen(
+        model, std_dict or {}, std_bos_dict or {}, grad_acc_steps=grad_acc_steps, momentum=momentum
+    )
 
-    # Replace ln_1 and ln_2 with FakeLayerNorm for each block
-    for i in range(n_layers):
-        block = model.transformer.h[i]
-        
-        # Store original weights
-        ln_1_weight = block.ln_1.weight.clone().detach()
-        ln_1_bias = block.ln_1.bias.clone().detach() if block.ln_1.bias is not None else None
-        ln_2_weight = block.ln_2.weight.clone().detach()
-        ln_2_bias = block.ln_2.bias.clone().detach() if block.ln_2.bias is not None else None
-        
-        # Replace with FakeLayerNorm
-        layer = f"blocks.{i}.hook_resid_pre"
-        block.ln_1 = FakeLayerNorm(
-            n_embd=n_embd,
+
+def _replace_layernorm_with_fake_layernorm_qwen(model, std_dict, std_bos_dict, grad_acc_steps=1, momentum=0.1):
+    layers = model.model.layers
+    n_ctx = _get_context_length_from_config(model.config)
+    rms_eps = getattr(model.config, "rms_norm_eps", 1e-6)
+    registry = {
+        "pre_attn": [],
+        "post_attn": [],
+        "q_norm": [],
+        "k_norm": [],
+        "final": [],
+    }
+
+    for i, block in enumerate(layers):
+        input_weight = block.input_layernorm.weight.clone().detach()
+        layer_name = f"blocks.{i}.hook_input_layernorm"
+        avg_std, bos_std = _std_pair(std_dict, std_bos_dict, layer_name)
+        block.input_layernorm = FakeLayerNorm(
+            n_embd=block.input_layernorm.weight.shape[0],
             n_ctx=n_ctx,
-            layer=layer,
-            bias=block.ln_1.bias is not None,
-            init_average_std=std_dict[layer],
-            init_bos_std=std_bos_dict[layer],
+            layer=layer_name,
+            bias=False,
+            init_average_std=avg_std,
+            init_bos_std=bos_std,
             grad_acc_steps=grad_acc_steps,
-            momentum=momentum)
+            momentum=momentum,
+            eps=rms_eps,
+            position_dependent=True,
+        )
+        block.input_layernorm.weight = nn.Parameter(input_weight)
+        registry["pre_attn"].append(block.input_layernorm)
 
-        layer = f"blocks.{i}.hook_resid_mid"
-        block.ln_2 = FakeLayerNorm(
-            n_embd=n_embd,
+        post_weight = block.post_attention_layernorm.weight.clone().detach()
+        layer_name = f"blocks.{i}.hook_post_attention_layernorm"
+        avg_std, bos_std = _std_pair(std_dict, std_bos_dict, layer_name)
+        block.post_attention_layernorm = FakeLayerNorm(
+            n_embd=block.post_attention_layernorm.weight.shape[0],
             n_ctx=n_ctx,
-            layer=layer,
-            bias=block.ln_2.bias is not None,
-            init_average_std=std_dict[layer],
-            init_bos_std=std_bos_dict[layer],
+            layer=layer_name,
+            bias=False,
+            init_average_std=avg_std,
+            init_bos_std=bos_std,
             grad_acc_steps=grad_acc_steps,
-            momentum=momentum)
-        
-        # Restore weights
-        block.ln_1.weight = nn.Parameter(ln_1_weight)
-        if ln_1_bias is not None:
-            block.ln_1.bias = nn.Parameter(ln_1_bias)
-        block.ln_2.weight = nn.Parameter(ln_2_weight)
-        if ln_2_bias is not None:
-            block.ln_2.bias = nn.Parameter(ln_2_bias)
-            
-        # Monkey patch the attention forward
-        def make_attn_forward(old_forward):
-            def new_forward(self, x_qk, x_v):
-                B, T, C = x_qk.size()
+            momentum=momentum,
+            eps=rms_eps,
+            position_dependent=True,
+        )
+        block.post_attention_layernorm.weight = nn.Parameter(post_weight)
+        registry["post_attn"].append(block.post_attention_layernorm)
 
-                # Calculate q,k from x_qk and v from x_v
-                # Correct matrix multiplication order and reshape
-                qkv_qk = x_qk.reshape(B*T, C) @ self.c_attn.weight[:, :2*C]  # For Q and K
-                v = x_v.reshape(B*T, C) @ self.c_attn.weight[:, 2*C:]  # For V
-                
-                # Split qkv into q and k
-                q, k = qkv_qk.split(C, dim=1)
-                
-                if self.c_attn.bias is not None:
-                    q = q + self.c_attn.bias[:C]
-                    k = k + self.c_attn.bias[C:2*C]
-                    v = v + self.c_attn.bias[2*C:]
+        if hasattr(block.self_attn, "q_norm"):
+            q_weight = block.self_attn.q_norm.weight.clone().detach()
+            layer_name = f"blocks.{i}.hook_q_norm"
+            avg_std, bos_std = _std_pair(std_dict, std_bos_dict, layer_name)
+            block.self_attn.q_norm = FakeLayerNorm(
+                n_embd=block.self_attn.q_norm.weight.shape[0],
+                n_ctx=n_ctx,
+                layer=layer_name,
+                bias=False,
+                init_average_std=avg_std,
+                init_bos_std=bos_std,
+                grad_acc_steps=grad_acc_steps,
+                momentum=momentum,
+                eps=rms_eps,
+                position_dependent=False,
+            )
+            block.self_attn.q_norm.weight = nn.Parameter(q_weight)
+            registry["q_norm"].append(block.self_attn.q_norm)
 
-                # Reshape
-                q = q.view(B, T, self.num_heads, C//self.num_heads).transpose(1, 2)
-                k = k.view(B, T, self.num_heads, C//self.num_heads).transpose(1, 2)
-                v = v.view(B, T, self.num_heads, C//self.num_heads).transpose(1, 2)
+        if hasattr(block.self_attn, "k_norm"):
+            k_weight = block.self_attn.k_norm.weight.clone().detach()
+            layer_name = f"blocks.{i}.hook_k_norm"
+            avg_std, bos_std = _std_pair(std_dict, std_bos_dict, layer_name)
+            block.self_attn.k_norm = FakeLayerNorm(
+                n_embd=block.self_attn.k_norm.weight.shape[0],
+                n_ctx=n_ctx,
+                layer=layer_name,
+                bias=False,
+                init_average_std=avg_std,
+                init_bos_std=bos_std,
+                grad_acc_steps=grad_acc_steps,
+                momentum=momentum,
+                eps=rms_eps,
+                position_dependent=False,
+            )
+            block.self_attn.k_norm.weight = nn.Parameter(k_weight)
+            registry["k_norm"].append(block.self_attn.k_norm)
 
-                # Causal self-attention
-                y = F.scaled_dot_product_attention(
-                    q, k, v,
-                    dropout_p=self.attn_dropout.p,
-                    is_causal=True
-                )
-                y = y.transpose(1, 2).contiguous().view(B, T, C)
-
-                # Output projection
-                y = self.c_proj(y)
-                y = self.resid_dropout(y)
-                return y
-
-            return types.MethodType(new_forward, block.attn)
-
-        block.attn.forward = make_attn_forward(block.attn.forward)
-        
-        # Monkey patch the forward method of the block
-        def make_forward(old_forward):
-            def new_forward(self, x, *args, **kwargs):
-                # Get EOT mask from the input
-                eot_mask = kwargs.pop('eot_mask', None)
-                
-                # Calculate LN'd x for Q and K
-                x_qk = self.ln_1(x)
-                # Calculate LN'd x for V
-                x_v = self.ln_1(x, attn_v=True)
-                
-                if eot_mask is not None:
-                    x_v_eot = self.ln_1(x, std_type='bos', attn_v=True)
-                    x_v[eot_mask] = x_v_eot[eot_mask]
-                    del x_v_eot
-                
-                # Modify attention call to use both x_qk and x_v
-                attn_output = self.attn(x_qk, x_v)
-                x = x + attn_output
-                x = x + self.mlp(self.ln_2(x))
-                return x
-            return types.MethodType(new_forward, block)
-        
-        block.forward = make_forward(block.forward)
-
-    # Replace ln_f with FakeLayerNorm
-    ln_f = model.transformer.ln_f
-    ln_f_weight = ln_f.weight.clone().detach()
-    ln_f_bias = ln_f.bias.clone().detach() if ln_f.bias is not None else None
-    
-    layer = f"blocks.{n_layers-1}.hook_resid_post"
-    model.transformer.ln_f = FakeLayerNorm(
-        n_embd=n_embd,
+    final_weight = model.model.norm.weight.clone().detach()
+    layer_name = "final_norm"
+    avg_std, bos_std = _std_pair(std_dict, std_bos_dict, layer_name)
+    model.model.norm = FakeLayerNorm(
+        n_embd=model.model.norm.weight.shape[0],
         n_ctx=n_ctx,
-        layer=layer,
-        bias=ln_f.bias is not None,
-        init_average_std=std_dict[layer],
-        init_bos_std=std_bos_dict[layer],
+        layer=layer_name,
+        bias=False,
+        init_average_std=avg_std,
+        init_bos_std=bos_std,
         grad_acc_steps=grad_acc_steps,
         momentum=momentum,
+        eps=rms_eps,
+        position_dependent=True,
     )
-    model.transformer.ln_f.weight = nn.Parameter(ln_f_weight)
-    if ln_f_bias is not None:
-        model.transformer.ln_f.bias = nn.Parameter(ln_f_bias)
-
-    # Monkey patch the transformer's forward to include eot_mask
-    def make_transformer_forward(old_forward):
-        def new_forward(self, *args, **kwargs):
-            # Extract input_ids from either kwargs or first positional arg
-            input_ids = kwargs.get('input_ids', args[0] if args else None)
-            
-            # Create eot_mask if we have input_ids
-            eot_mask = None
-            if input_ids is not None:
-                eot_mask = input_ids == 50256
-            
-            # If args contains positional arguments that match kwargs, we should use kwargs only
-            if args and isinstance(args[0], torch.Tensor):  # First arg is likely input_ids
-                kwargs['input_ids'] = args[0]
-                args = args[1:]  # Remove the first argument
-            
-            # Get embeddings
-            hidden_states = self.wte(kwargs['input_ids'])
-            position_ids = torch.arange(0, hidden_states.size(1), dtype=torch.long, device=hidden_states.device)
-            hidden_states = hidden_states + self.wpe(position_ids)
-            hidden_states = self.drop(hidden_states)
-
-            # Forward through blocks with eot_mask
-            for block in self.h:
-                hidden_states = block(hidden_states, eot_mask=eot_mask)
-            
-            hidden_states = self.ln_f(hidden_states)
-
-            # Create BaseModelOutputWithPastAndCrossAttentions object
-            return transformers.modeling_outputs.BaseModelOutputWithPastAndCrossAttentions(
-                last_hidden_state=hidden_states,
-                past_key_values=None,
-                hidden_states=None,
-                attentions=None,
-                cross_attentions=None,
-            )
-
-        return types.MethodType(new_forward, model.transformer)
-    
-    model.transformer.forward = make_transformer_forward(model.transformer.forward)
+    model.model.norm.weight = nn.Parameter(final_weight)
+    registry["final"].append(model.model.norm)
+    model.fake_ln_registry = registry
 
 def load_model(model_name="gpt2", remove_ln=False, grad_acc_steps=1, momentum=0.1):
-    model = transformers.GPT2LMHeadModel.from_pretrained(
+    trust_remote_code = "qwen" in model_name.lower()
+    cache_dir = f"{model_name.replace('/', '_')}_cache"
+    config = AutoConfig.from_pretrained(model_name, trust_remote_code=trust_remote_code)
+
+    attn_impl = 'flash_attention_2' if os.environ.get("EXP_FLASH_ATTN", "0") == "1" else None
+    dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+    device_map = "auto" if torch.cuda.is_available() else None
+
+    from_pretrained_kwargs = {
+        "cache_dir": cache_dir,
+        "config": config,
+        "torch_dtype": dtype,
+        "device_map": device_map,
+        "trust_remote_code": trust_remote_code,
+    }
+    if attn_impl and config.model_type == "gpt2":
+        from_pretrained_kwargs["attn_implementation"] = attn_impl
+
+    model = AutoModelForCausalLM.from_pretrained(
         model_name,
-        cache_dir=f"{model_name}_cache",
-        config=transformers.GPT2Config.from_pretrained(model_name),
-        attn_implementation='flash_attention_2' if os.environ.get("EXP_FLASH_ATTN", "0") == "1" else None,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
+        **from_pretrained_kwargs,
     )
     
-    if remove_ln:
-        # Replace all LayerNorm instances with FakeLayerNorm
-        std_dict = std_dicts[model_name]["std_dict"]
-        std_bos_dict = std_dicts[model_name]["std_bos_dict"]
+    if remove_ln and not _is_qwen_model(model):
+        raise ValueError("LayerNorm removal is currently only supported for Qwen models.")
 
-        replace_layernorm_with_fake_layernorm(model, std_dict, std_bos_dict, grad_acc_steps=grad_acc_steps, momentum=momentum)
+    if remove_ln:
+        std_data = std_dicts.get(model_name, {})
+        std_dict = std_data.get("std_dict")
+        std_bos_dict = std_data.get("std_bos_dict")
+        replace_layernorm_with_fake_layernorm(
+            model,
+            std_dict,
+            std_bos_dict,
+            grad_acc_steps=grad_acc_steps,
+            momentum=momentum,
+        )
     
     return model
 
 
 def finetune(model, training_args, tokenized, data_collator, config, pile_eval_dataset=None, remove_ln=False, checkpoint_step=None):
     """Finetune model with or without layer normalization"""
+    blocks = _get_blocks(model)
+    num_layers = len(blocks)
+    fake_registry = getattr(model, "fake_ln_registry", {})
+    pre_attn_norms = fake_registry.get("pre_attn", [])
+    post_attn_norms = fake_registry.get("post_attn", [])
+    q_norms = fake_registry.get("q_norm", [])
+    k_norms = fake_registry.get("k_norm", [])
+    final_norms = fake_registry.get("final", [])
+    
+    def _set_fake(norms, index):
+        if 0 <= index < len(norms):
+            norms[index].is_fake_prop = True
+    
     def disable_ln_2(block_index):
-        model.transformer.h[block_index].ln_2.is_fake_prop = True
-        print(f"disabled ln_2 for block {block_index}")
+        _set_fake(post_attn_norms, block_index)
+        print(f"disabled post-attention rmsnorm for block {block_index}")
 
     def disable_ln_1qk(block_index):
-        model.transformer.h[block_index].ln_1.is_fake_prop = True
-        print(f"disabled ln_1 for block {block_index}")
+        _set_fake(q_norms, block_index)
+        _set_fake(k_norms, block_index)
+        print(f"disabled q/k rmsnorm for block {block_index}")
 
     def disable_ln_1v(block_index):
-        model.transformer.h[block_index].ln_1.attn_v_is_fake_prop = True
-        print(f"disabled ln_1v for block {block_index}")
+        _set_fake(pre_attn_norms, block_index)
+        print(f"disabled input rmsnorm for block {block_index}")
 
     def disable_ln_f():
-        model.transformer.ln_f.is_fake_prop = True
-        print("disabled ln_f")
+        if final_norms:
+            final_norms[0].is_fake_prop = True
+            print("disabled final rmsnorm")
 
-    def disable_eot_std(block_index):
-        model.transformer.h[block_index].ln_1.disable_eos_special_treatment()
-        print(f"disabled eot std for block {block_index}")
+    def disable_eot_std(block_index=None):
+        indices = range(len(pre_attn_norms)) if block_index is None else [block_index]
+        for idx in indices:
+            if 0 <= idx < len(pre_attn_norms):
+                pre_attn_norms[idx].disable_eos_special_treatment()
+                print(f"disabled eot std for block {idx}")
 
-    def disable_bos_std(block_index):
-        model.transformer.h[block_index].ln_1.disable_bos_special_treatment()
-        print(f"disabled bos std for block {block_index}")
+    def disable_bos_std(block_index=None):
+        indices = range(len(pre_attn_norms)) if block_index is None else [block_index]
+        for idx in indices:
+            if 0 <= idx < len(pre_attn_norms):
+                pre_attn_norms[idx].disable_bos_special_treatment()
+                print(f"disabled bos std for block {idx}")
     
     # Log the initial state of all FakeLayerNorm instances
     print("\n===== FakeLayerNorm Initial States =====")
@@ -623,13 +680,22 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
     print(f"  EXP_BOS_SPECIAL_TREATMENT: {os.environ.get('EXP_BOS_SPECIAL_TREATMENT', '0')}")
 
     
-    for i, block in enumerate(model.transformer.h):
+    for i, block in enumerate(blocks):
         print(f"\nBlock {i}:")
-        print(f"  ln_1: {block.ln_1}")
-        print(f"  ln_2: {block.ln_2}")
+        if hasattr(block, "input_layernorm"):
+            print(f"  input_layernorm: {block.input_layernorm}")
+        if hasattr(block, "post_attention_layernorm"):
+            print(f"  post_attention_layernorm: {block.post_attention_layernorm}")
+        attn = getattr(block, "self_attn", None)
+        if attn is not None and hasattr(attn, "q_norm"):
+            print(f"  q_norm: {attn.q_norm}")
+        if attn is not None and hasattr(attn, "k_norm"):
+            print(f"  k_norm: {attn.k_norm}")
     
-    print(f"\nFinal ln_f:")
-    print(f"  {model.transformer.ln_f}")
+    final_norm = _get_final_norm_module(model)
+    if final_norm is not None:
+        print(f"\nFinal norm:")
+        print(f"  {final_norm}")
     print("========================================\n")
 
     class LNRemover:
@@ -638,7 +704,7 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
         """
 
         def __init__(self, start_step, layer_gap_steps, function):
-            self.n_layers = len(model.transformer.h)  # Get layers dynamically
+            self.n_layers = num_layers  # Get layers dynamically
             self.start_step = start_step
             self.layer_gap_steps = layer_gap_steps
             self.function = function
@@ -697,34 +763,40 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
             """ Log to wandb: block number, mode, att_v_mode, average_std_buffer, bos_std_buffer, average_std_buffer[0], average_std_buffer[1], bos_std_buffer[0], bos_std_buffer[1] """
             if not _USE_WANDB:
                 return control
-            if isinstance(model.transformer.h[0].ln_1, FakeLayerNorm):
-                for i, block in enumerate(model.transformer.h):
-                    wandb.log({
-                        f"block_{i}_ln_1_real_average_std": block.ln_1.real_average_std_prop,
-                        f"block_{i}_ln_1_real_bos_std": block.ln_1.real_bos_std_prop,
-                        f"block_{i}_ln_1_average_std_0": block.ln_1.average_std_buffer[0],
-                        f"block_{i}_ln_1_average_std_1": block.ln_1.average_std_buffer[1],
-                        f"block_{i}_ln_1_bos_std_0": block.ln_1.bos_std_buffer[0],
-                        f"block_{i}_ln_1_bos_std_1": block.ln_1.bos_std_buffer[1],
-                    })
-    
-                    wandb.log({
-                        f"block_{i}_ln_2_real_average_std": block.ln_2.real_average_std_prop,
-                        f"block_{i}_ln_2_real_bos_std": block.ln_2.real_bos_std_prop,
-                        f"block_{i}_ln_2_average_std_0": block.ln_2.average_std_buffer[0],
-                        f"block_{i}_ln_2_average_std_1": block.ln_2.average_std_buffer[1],
-                        f"block_{i}_ln_2_bos_std_0": block.ln_2.bos_std_buffer[0],
-                        f"block_{i}_ln_2_bos_std_1": block.ln_2.bos_std_buffer[1],
-                    })
-    
+            blocks = _get_blocks(model)
+            if not blocks:
+                return control
+
+            def _log_norm(prefix, module):
+                if not isinstance(module, FakeLayerNorm):
+                    return
+                avg0 = module.average_std_buffer[0].item()
+                avg1 = module.average_std_buffer[1].item() if module.average_std_buffer.numel() > 1 else avg0
+                bos0 = module.bos_std_buffer[0].item()
+                bos1 = module.bos_std_buffer[1].item() if module.bos_std_buffer.numel() > 1 else bos0
                 wandb.log({
-                    f"ln_f_real_average_std": model.transformer.ln_f.real_average_std_prop,
-                    f"ln_f_real_bos_std": model.transformer.ln_f.real_bos_std_prop,
-                    f"ln_f_average_std_0": model.transformer.ln_f.average_std_buffer[0],
-                    f"ln_f_average_std_1": model.transformer.ln_f.average_std_buffer[1],
-                    f"ln_f_bos_std_0": model.transformer.ln_f.bos_std_buffer[0],
-                    f"ln_f_bos_std_1": model.transformer.ln_f.bos_std_buffer[1],
+                    f"{prefix}_real_average_std": module.real_average_std_prop,
+                    f"{prefix}_real_bos_std": module.real_bos_std_prop,
+                    f"{prefix}_average_std_0": avg0,
+                    f"{prefix}_average_std_1": avg1,
+                    f"{prefix}_bos_std_0": bos0,
+                    f"{prefix}_bos_std_1": bos1,
                 })
+
+            for i, block in enumerate(blocks):
+                if hasattr(block, "input_layernorm"):
+                    _log_norm(f"block_{i}_input_ln", block.input_layernorm)
+                if hasattr(block, "post_attention_layernorm"):
+                    _log_norm(f"block_{i}_post_ln", block.post_attention_layernorm)
+                attn = getattr(block, "self_attn", None)
+                if attn is not None and hasattr(attn, "q_norm"):
+                    _log_norm(f"block_{i}_q_norm", attn.q_norm)
+                if attn is not None and hasattr(attn, "k_norm"):
+                    _log_norm(f"block_{i}_k_norm", attn.k_norm)
+
+            final_norm = _get_final_norm_module(model)
+            if final_norm is not None:
+                _log_norm("final_norm", final_norm)
 
             return control 
     
@@ -743,17 +815,26 @@ def finetune(model, training_args, tokenized, data_collator, config, pile_eval_d
             print(f"  EXP_BOS_SPECIAL_TREATMENT: {os.environ.get('EXP_BOS_SPECIAL_TREATMENT', '0')}")
 
             print("\nChecking if layers are fake after loading checkpoint:")
-            if isinstance(model.transformer.h[0].ln_1, FakeLayerNorm):
-                for i, block in enumerate(model.transformer.h):
+            blocks = _get_blocks(model)
+            if blocks and isinstance(getattr(blocks[0], "input_layernorm", None), FakeLayerNorm):
+                for i, block in enumerate(blocks):
                     print(f"Block {i}:")
-                    print(f"  ln_1.is_fake_prop: {block.ln_1.is_fake_prop}")
-                    print(f"  ln_1.attn_v_is_fake_prop: {block.ln_1.attn_v_is_fake_prop}")
-                    print(f"  ln_1.bos_special_treatment_prop: {block.ln_1.bos_special_treatment_prop}")
-                    print(f"  ln_2.is_fake_prop: {block.ln_2.is_fake_prop}")
-                    print(f"  ln_2.bos_special_treatment_prop: {block.ln_2.bos_special_treatment_prop}")
+                    if hasattr(block, "input_layernorm") and isinstance(block.input_layernorm, FakeLayerNorm):
+                        print(f"  input_layernorm.is_fake_prop: {block.input_layernorm.is_fake_prop}")
+                        print(f"  input_layernorm.bos_special_treatment_prop: {block.input_layernorm.bos_special_treatment_prop}")
+                    attn = getattr(block, "self_attn", None)
+                    if attn is not None and hasattr(attn, "q_norm") and isinstance(attn.q_norm, FakeLayerNorm):
+                        print(f"  q_norm.is_fake_prop: {attn.q_norm.is_fake_prop}")
+                    if attn is not None and hasattr(attn, "k_norm") and isinstance(attn.k_norm, FakeLayerNorm):
+                        print(f"  k_norm.is_fake_prop: {attn.k_norm.is_fake_prop}")
+                    if hasattr(block, "post_attention_layernorm") and isinstance(block.post_attention_layernorm, FakeLayerNorm):
+                        print(f"  post_attention_layernorm.is_fake_prop: {block.post_attention_layernorm.is_fake_prop}")
+                        print(f"  post_attention_layernorm.bos_special_treatment_prop: {block.post_attention_layernorm.bos_special_treatment_prop}")
                 
-                print(f"\nFinal ln_f.is_fake_prop: {model.transformer.ln_f.is_fake_prop}")
-                print(f"Final ln_f.bos_special_treatment_prop: {model.transformer.ln_f.bos_special_treatment_prop}")
+                final_norm = _get_final_norm_module(model)
+                if isinstance(final_norm, FakeLayerNorm):
+                    print(f"\nFinal norm.is_fake_prop: {final_norm.is_fake_prop}")
+                    print(f"Final norm.bos_special_treatment_prop: {final_norm.bos_special_treatment_prop}")
             else:
                 print("Not removing layernorm!")
             print("========================================\n")
@@ -894,7 +975,7 @@ def main():
     parser.add_argument(
         "--config",
         choices=list(FINETUNE_CONFIGS.keys()),
-        default="gpt2_test",
+        default="qwen3_debug",
         help="Training configuration to use",
     )
     parser.add_argument(
@@ -920,7 +1001,7 @@ def main():
     model_name = config.model_name
 
     # Prepare datasets
-    tokenized, data_collator = prepare_dataset(model_name)
+    tokenized, data_collator = prepare_dataset(model_name, ctx_len=config.block_size)
     
     # Initialize Pile-apollo dataset once at the beginning
     print("Preparing Pile-apollo evaluation dataset...")
