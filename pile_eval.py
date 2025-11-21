@@ -155,7 +155,7 @@ def evaluate_model_on_pile(model, processed_examples, batch_size=8, device=None,
                 loss_fct = torch.nn.CrossEntropyLoss(reduction='none')
                 per_token_loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))            
                 # Append to your loss list (assuming loss_list is defined elsewhere)
-                loss_list.append(per_token_loss.flatten().cpu().numpy())
+                loss_list.append(per_token_loss.flatten().float().cpu().numpy())
 
                 
                 # For HF models, get more accurate per-token loss
