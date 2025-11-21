@@ -988,6 +988,16 @@ def main():
         type=int,
         help="Step number at which to save a checkpoint",
     )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        help="Override per-device train batch size defined in the config",
+    )
+    parser.add_argument(
+        "--grad_accum_steps",
+        type=int,
+        help="Override gradient accumulation steps defined in the config",
+    )
     args = parser.parse_args()
 
     # Forcing to use only 1 GPU. Otherwise, tensors end up on different devices.
@@ -998,6 +1008,22 @@ def main():
 
     # Get model name from config
     config = FINETUNE_CONFIGS[args.config]
+
+    config_updates = {}
+    if args.batch_size is not None:
+        config_updates["base_batch_size"] = args.batch_size
+        config_updates["batch_size"] = args.batch_size
+        if args.grad_accum_steps is None:
+            desired_batch_size = config.target_batch_tokens / config.block_size
+            config_updates["gradient_accumulation_steps"] = max(
+                1, int(desired_batch_size // max(1, args.batch_size))
+            )
+    if args.grad_accum_steps is not None:
+        config_updates["gradient_accumulation_steps"] = max(1, args.grad_accum_steps)
+
+    if config_updates:
+        config = config.model_copy(update=config_updates)
+
     model_name = config.model_name
 
     # Prepare datasets

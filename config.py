@@ -223,7 +223,7 @@ def make_gpt2_large():
     batch_size = base_batch_size
     desired_batch_size = target_batch_tokens / block_size
     gradient_accumulation_steps = int(desired_batch_size // batch_size)
-    gradient_checkpointing = False
+    gradient_checkpointing = True
     
     learning_rate: float = 3e-4
     lr_scheduler_type: str = 'cosine_with_min_lr' #'constant_with_warmup'
@@ -425,9 +425,9 @@ def make_qwen3_schedule():
     model_name = "Qwen/Qwen3-0.6B"
     n_layers = 28
     
-    base_batch_size = 1
-    max_steps = 20
-    early_stop_step = 25
+    base_batch_size = 16
+    max_steps = 500
+    early_stop_step = 500
     block_size = 1024
     target_batch_tokens = 4096
     warmup_steps = 2
@@ -452,12 +452,33 @@ def make_qwen3_schedule():
     gap_eot = None
     gap_bos = None
     
+    def _phase_finish(start_step: int, gap: Optional[int]) -> int:
+        """
+        Return the step by which this phase is complete (i.e. when the last layer flips).
+        For gap=None we treat the phase as a single one-off event. For gap == 0 every layer
+        flips together at start_step.
+        """
+        if gap in (None, 0):
+            return start_step
+        return start_step + gap * (n_layers - 1)
+
+    phase_gap = 2  # buffer steps between phases
+
+    # Remove post-attention RMSNorms (disable_ln_2) first.
     start_ln2 = 2
-    start_ln1qk = 6
-    start_ln1v = 10
-    start_lnf = 14
-    start_eot = 16
-    start_bos = 18
+    finish_ln2 = _phase_finish(start_ln2, gap_ln2)
+
+    # Do not start q/k norm removal until post-attention RMSNorms are done.
+    start_ln1qk = finish_ln2 + phase_gap
+    finish_ln1qk = _phase_finish(start_ln1qk, gap_ln1qk)
+
+    # Only then proceed to input RMSNorms (disable_ln_1v), followed by the rest.
+    start_ln1v = finish_ln1qk + phase_gap
+    finish_ln1v = _phase_finish(start_ln1v, gap_ln1v)
+
+    start_lnf = finish_ln1v + phase_gap
+    start_eot = start_lnf + phase_gap
+    start_bos = start_eot + phase_gap
     
     aux_loss_weight = 0.0
     
