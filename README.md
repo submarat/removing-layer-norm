@@ -37,7 +37,7 @@ You can load the models with transformers:
 
 ```python
 from transformers import GPT2LMHeadModel
-model = GPT2LMHeadModel.from_pretrained("schaeff/gpt2-small_ln-free300")
+model = GPT2LMHeadModel.from_pretrained("schaeff/gpt2-small_LNFree300")
 ```
 
 ## Evaluation Results
