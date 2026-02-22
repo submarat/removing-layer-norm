@@ -379,6 +379,152 @@ def make_gpt2_xl_aux():
 
     return FinetuneConfig(**locals())
 
+def make_gpt2_lora(lr):
+    """GPT-2 small with LoRA adapters — same LN removal schedule as standard."""
+    model_name = "gpt2"
+    n_layers = 12
+
+    base_batch_size = 40
+    max_steps = 300
+    block_size = 1024
+    target_batch_tokens = 2**19
+    warmup_steps = 20
+
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+
+    learning_rate = lr
+    lr_scheduler_type = 'cosine_with_min_lr'
+    lr_scheduler_kwargs = {"min_lr": lr / 2}
+
+    gap_ln2 = 2
+    gap_ln1qk = 2
+    gap_ln1v = 3
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+
+    start_ln2 = 20
+    start_ln1qk = start_ln2 + 12 * gap_ln2
+    start_ln1v = start_ln1qk + 12 * gap_ln1qk
+    start_lnf = start_ln1v + 12 * gap_ln1v
+    start_eot = start_lnf + 2
+    start_bos = start_eot + 10
+
+    return FinetuneConfig(**locals())
+
+def make_gpt2_medium_lora(lr):
+    """GPT-2 medium with LoRA adapters."""
+    model_name = "gpt2-medium"
+    n_layers = 24
+
+    base_batch_size = 8
+    max_steps = 500
+    block_size = 1024
+    target_batch_tokens = 2**19
+    warmup_steps = 20
+    save_steps = 100
+
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+
+    learning_rate = lr
+    lr_scheduler_type = 'cosine_with_min_lr'
+    lr_scheduler_kwargs = {"min_lr": lr / 2}
+
+    gap_ln2 = 2
+    gap_ln1qk = 2
+    gap_ln1v = 3
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+
+    start_ln2 = 20
+    start_ln1qk = start_ln2 + n_layers * gap_ln2
+    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
+    start_lnf = start_ln1v + n_layers * gap_ln1v
+    start_eot = start_lnf + 2
+    start_bos = start_eot + 10
+
+    return FinetuneConfig(**locals())
+
+def make_gpt2_large_lora(lr):
+    """GPT-2 large with LoRA adapters."""
+    model_name = "gpt2-large"
+    n_layers = 36
+
+    base_batch_size = 4
+    max_steps = 800
+    block_size = 1024
+    target_batch_tokens = 2**18
+    warmup_steps = 25
+    save_steps = 50
+
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    gradient_checkpointing = True
+
+    learning_rate = lr
+    lr_scheduler_type = 'cosine_with_min_lr'
+    lr_scheduler_kwargs = {"min_lr": lr / 2}
+
+    gap_ln2 = 2
+    gap_ln1qk = 2
+    gap_ln1v = 3
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+
+    start_ln2 = 25
+    start_ln1qk = start_ln2 + n_layers * gap_ln2
+    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
+    start_lnf = start_ln1v + n_layers * gap_ln1v
+    start_eot = start_lnf + 2
+    start_bos = start_eot + 10
+
+    return FinetuneConfig(**locals())
+
+def make_gpt2_xl_lora(lr):
+    """GPT-2 XL with LoRA adapters."""
+    model_name = "gpt2-xl"
+    n_layers = 48
+
+    base_batch_size = 2
+    max_steps = 1000
+    block_size = 1024
+    target_batch_tokens = 2**17
+    warmup_steps = 25
+    save_steps = 50
+
+    batch_size = base_batch_size
+    desired_batch_size = target_batch_tokens / block_size
+    gradient_accumulation_steps = int(desired_batch_size // batch_size)
+    gradient_checkpointing = True
+
+    learning_rate = lr
+    lr_scheduler_type = 'cosine_with_min_lr'
+    lr_scheduler_kwargs = {"min_lr": lr / 2}
+
+    gap_ln2 = 2
+    gap_ln1qk = 2
+    gap_ln1v = 3
+    gap_lnf = None
+    gap_eot = 0
+    gap_bos = 0
+
+    start_ln2 = 25
+    start_ln1qk = start_ln2 + n_layers * gap_ln2
+    start_ln1v = start_ln1qk + n_layers * gap_ln1qk
+    start_lnf = start_ln1v + n_layers * gap_ln1v
+    start_eot = start_lnf + 2
+    start_bos = start_eot + 10
+
+    return FinetuneConfig(**locals())
+
+
 FINETUNE_CONFIGS = {
     "gpt2": make_gpt2_standard(),
     "gpt2_aux": make_gpt2_standard_aux(),
@@ -388,6 +534,14 @@ FINETUNE_CONFIGS = {
     "gpt2-large_aux": make_gpt2_large_aux(),
     "gpt2-xl": make_gpt2_xl(),
     "gpt2-xl_aux": make_gpt2_xl_aux(),
+    "gpt2_lora_lr1e-4": make_gpt2_lora(1e-4),
+    "gpt2_lora_lr3e-4": make_gpt2_lora(3e-4),
+    "gpt2_lora_lr6e-4": make_gpt2_lora(6e-4),
+    "gpt2_lora_lr1e-3": make_gpt2_lora(1e-3),
+    "gpt2_lora_lr3e-3": make_gpt2_lora(3e-3),
+    "gpt2-medium_lora_lr6e-4": make_gpt2_medium_lora(6e-4),
+    "gpt2-large_lora_lr6e-4": make_gpt2_large_lora(6e-4),
+    "gpt2-xl_lora_lr6e-4": make_gpt2_xl_lora(6e-4),
 }
 
 def main():

@@ -139,7 +139,7 @@ def evaluate_model_on_pile(model, processed_examples, batch_size=8, device=None,
             if isinstance(model, HookedTransformer):
                 logits = model(batch_input_ids)
                 loss = model.loss_fn(logits, batch_input_ids, per_token=True)
-                loss_list.append(loss.flatten().cpu().numpy())
+                loss_list.append(loss.flatten().cpu().float().numpy())
                 batch_loss = loss.sum().item()
                 batch_tokens = loss.numel()
             else:
@@ -155,7 +155,7 @@ def evaluate_model_on_pile(model, processed_examples, batch_size=8, device=None,
                 loss_fct = torch.nn.CrossEntropyLoss(reduction='none')
                 per_token_loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))            
                 # Append to your loss list (assuming loss_list is defined elsewhere)
-                loss_list.append(per_token_loss.flatten().cpu().numpy())
+                loss_list.append(per_token_loss.flatten().cpu().float().numpy())
 
                 
                 # For HF models, get more accurate per-token loss
