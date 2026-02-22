@@ -37,6 +37,7 @@ class FinetuneConfig(BaseModel):
     # Auxiliary loss params
     aux_loss_weight: float = Field(default=0.0, description="Weight for the auxiliary loss to encourage uniform residual norms")
     gradient_checkpointing: bool = Field(default=False, description="Use gradient checkpointing to save memory")
+    max_grad_norm: float = Field(default=1.0, description="Max gradient norm for clipping")
 
     # Momentum for recomputing the moving average std which will be fixed at LN removal
     # low momentum: 
@@ -420,11 +421,12 @@ def make_gpt2_medium_lora(lr):
     n_layers = 24
 
     base_batch_size = 8
-    max_steps = 500
+    max_steps = 800
     block_size = 1024
     target_batch_tokens = 2**19
     warmup_steps = 20
     save_steps = 100
+    max_grad_norm = 0.3
 
     batch_size = base_batch_size
     desired_batch_size = target_batch_tokens / block_size
@@ -434,19 +436,19 @@ def make_gpt2_medium_lora(lr):
     lr_scheduler_type = 'cosine_with_min_lr'
     lr_scheduler_kwargs = {"min_lr": lr / 2}
 
-    gap_ln2 = 2
-    gap_ln1qk = 2
-    gap_ln1v = 3
+    gap_ln2 = 3
+    gap_ln1qk = 3
+    gap_ln1v = 5
     gap_lnf = None
-    gap_eot = 0
-    gap_bos = 0
+    gap_eot = 3
+    gap_bos = 3
 
     start_ln2 = 20
     start_ln1qk = start_ln2 + n_layers * gap_ln2
     start_ln1v = start_ln1qk + n_layers * gap_ln1qk
     start_lnf = start_ln1v + n_layers * gap_ln1v
-    start_eot = start_lnf + 2
-    start_bos = start_eot + 10
+    start_eot = start_lnf + 20
+    start_bos = start_eot + n_layers * gap_eot + 20
 
     return FinetuneConfig(**locals())
 
@@ -456,11 +458,12 @@ def make_gpt2_large_lora(lr):
     n_layers = 36
 
     base_batch_size = 4
-    max_steps = 800
+    max_steps = 1200
     block_size = 1024
     target_batch_tokens = 2**18
     warmup_steps = 25
-    save_steps = 50
+    save_steps = 100
+    max_grad_norm = 0.3
 
     batch_size = base_batch_size
     desired_batch_size = target_batch_tokens / block_size
@@ -471,19 +474,19 @@ def make_gpt2_large_lora(lr):
     lr_scheduler_type = 'cosine_with_min_lr'
     lr_scheduler_kwargs = {"min_lr": lr / 2}
 
-    gap_ln2 = 2
-    gap_ln1qk = 2
-    gap_ln1v = 3
+    gap_ln2 = 3
+    gap_ln1qk = 3
+    gap_ln1v = 5
     gap_lnf = None
-    gap_eot = 0
-    gap_bos = 0
+    gap_eot = 3
+    gap_bos = 3
 
     start_ln2 = 25
     start_ln1qk = start_ln2 + n_layers * gap_ln2
     start_ln1v = start_ln1qk + n_layers * gap_ln1qk
     start_lnf = start_ln1v + n_layers * gap_ln1v
-    start_eot = start_lnf + 2
-    start_bos = start_eot + 10
+    start_eot = start_lnf + 20
+    start_bos = start_eot + n_layers * gap_eot + 20
 
     return FinetuneConfig(**locals())
 
@@ -493,11 +496,12 @@ def make_gpt2_xl_lora(lr):
     n_layers = 48
 
     base_batch_size = 2
-    max_steps = 1000
+    max_steps = 1600
     block_size = 1024
     target_batch_tokens = 2**17
     warmup_steps = 25
-    save_steps = 50
+    save_steps = 100
+    max_grad_norm = 0.3
 
     batch_size = base_batch_size
     desired_batch_size = target_batch_tokens / block_size
@@ -508,19 +512,19 @@ def make_gpt2_xl_lora(lr):
     lr_scheduler_type = 'cosine_with_min_lr'
     lr_scheduler_kwargs = {"min_lr": lr / 2}
 
-    gap_ln2 = 2
-    gap_ln1qk = 2
-    gap_ln1v = 3
+    gap_ln2 = 4
+    gap_ln1qk = 4
+    gap_ln1v = 6
     gap_lnf = None
-    gap_eot = 0
-    gap_bos = 0
+    gap_eot = 3
+    gap_bos = 3
 
-    start_ln2 = 25
+    start_ln2 = 30
     start_ln1qk = start_ln2 + n_layers * gap_ln2
     start_ln1v = start_ln1qk + n_layers * gap_ln1qk
     start_lnf = start_ln1v + n_layers * gap_ln1v
-    start_eot = start_lnf + 2
-    start_bos = start_eot + 10
+    start_eot = start_lnf + 20
+    start_bos = start_eot + n_layers * gap_eot + 20
 
     return FinetuneConfig(**locals())
 
@@ -539,8 +543,14 @@ FINETUNE_CONFIGS = {
     "gpt2_lora_lr6e-4": make_gpt2_lora(6e-4),
     "gpt2_lora_lr1e-3": make_gpt2_lora(1e-3),
     "gpt2_lora_lr3e-3": make_gpt2_lora(3e-3),
+    "gpt2-medium_lora_lr1e-4": make_gpt2_medium_lora(1e-4),
+    "gpt2-medium_lora_lr3e-4": make_gpt2_medium_lora(3e-4),
     "gpt2-medium_lora_lr6e-4": make_gpt2_medium_lora(6e-4),
+    "gpt2-large_lora_lr1e-4": make_gpt2_large_lora(1e-4),
+    "gpt2-large_lora_lr3e-4": make_gpt2_large_lora(3e-4),
     "gpt2-large_lora_lr6e-4": make_gpt2_large_lora(6e-4),
+    "gpt2-xl_lora_lr1e-4": make_gpt2_xl_lora(1e-4),
+    "gpt2-xl_lora_lr3e-4": make_gpt2_xl_lora(3e-4),
     "gpt2-xl_lora_lr6e-4": make_gpt2_xl_lora(6e-4),
 }
 

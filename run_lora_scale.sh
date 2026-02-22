@@ -11,9 +11,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON="${SCRIPT_DIR}/venv/bin/python"
 
 CONFIGS=(
-    gpt2-medium_lora_lr6e-4
-    gpt2-large_lora_lr6e-4
-    gpt2-xl_lora_lr6e-4
+    gpt2-large_lora_lr1e-4
+    gpt2-xl_lora_lr1e-4
 )
 
 for cfg in "${CONFIGS[@]}"; do

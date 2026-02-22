@@ -199,6 +199,8 @@ def load_model_lora(model_name="gpt2", grad_acc_steps=1, momentum=0.1):
         if "lora_" not in name:
             param.requires_grad = False
 
+    model.enable_input_require_grads()
+
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     frozen = sum(p.numel() for p in model.parameters() if not p.requires_grad)
     print(f"After FakeLayerNorm replacement:")
@@ -395,7 +397,7 @@ def main():
         warmup_steps=config.warmup_steps,
         weight_decay=config.weight_decay,
         learning_rate=config.learning_rate,
-        max_grad_norm=1.0,
+        max_grad_norm=getattr(config, 'max_grad_norm', 1.0),
         logging_dir="./logs",
         prediction_loss_only=True,
         lr_scheduler_type=config.lr_scheduler_type,
