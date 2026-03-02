@@ -31,9 +31,9 @@ from train_lora import load_model_lora
 from lora import LoRAConv1D
 
 
-def load_lora_checkpoint(model_name, checkpoint_path, force_all_fake=False):
+def load_lora_checkpoint(model_name, checkpoint_path, force_all_fake=False, lora_rank=64):
     """Reconstruct the LoRA+FakeLayerNorm model and load checkpoint weights."""
-    model, trainable, frozen = load_model_lora(model_name)
+    model, trainable, frozen = load_model_lora(model_name, lora_rank=lora_rank)
     sd = torch.load(
         os.path.join(checkpoint_path, "pytorch_model.bin"),
         map_location="cpu",

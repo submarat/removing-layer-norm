@@ -7,6 +7,7 @@ original codebase is reused.
 """
 import os
 import argparse
+import json
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -19,7 +20,7 @@ from config import FINETUNE_CONFIGS
 from prepare_dataset import prepare_dataset
 from pile_eval import preprocess_pile_dataset, convert_for_trainer
 from lora import inject_lora_adapters, LoRAConv1D
-from train import FakeLayerNorm, _USE_WANDB
+from train import FakeLayerNorm, _USE_WANDB, CustomTrainer
 from std_dicts import std_dicts
 from devtools import pprint
 from transformers import (
@@ -30,6 +31,36 @@ from transformers import (
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.manual_seed(1337)
+
+PROVENANCE_FILE = "PROVENANCE.json"
+
+
+def update_provenance(output_dir, config_name, resume_from, config):
+    """Append a provenance entry for this run (fresh or resume)."""
+    path = os.path.join(output_dir, PROVENANCE_FILE)
+    entry = {
+        "timestamp": datetime.now().isoformat(),
+        "config": config_name,
+        "resume_from": resume_from,
+        "output_dir": output_dir,
+        "config_snapshot": {
+            "model_name": config.model_name,
+            "learning_rate": config.learning_rate,
+            "max_steps": config.max_steps,
+            "save_steps": config.save_steps,
+            "gap_ln1qk": getattr(config, "gap_ln1qk", None),
+            "start_ln1qk": getattr(config, "start_ln1qk", None),
+        },
+    }
+    if os.path.exists(path):
+        with open(path) as f:
+            history = json.load(f)
+    else:
+        history = []
+    history.append(entry)
+    with open(path, "w") as f:
+        json.dump(history, f, indent=2)
+    print(f"Provenance updated: {path}")
 
 
 def replace_layernorm_with_fake_layernorm_lora(model, std_dict, std_bos_dict, grad_acc_steps=1, momentum=0.1):
@@ -173,18 +204,20 @@ def replace_layernorm_with_fake_layernorm_lora(model, std_dict, std_bos_dict, gr
     model.transformer.forward = make_transformer_forward(model.transformer.forward)
 
 
-def load_model_lora(model_name="gpt2", grad_acc_steps=1, momentum=0.1):
+def load_model_lora(model_name="gpt2", grad_acc_steps=1, momentum=0.1, lora_rank=64):
     """Load GPT-2, inject LoRA adapters, then replace LN with FakeLayerNorm."""
+    use_flash = os.environ.get("EXP_FLASH_ATTN", "1") == "1"
     model = transformers.GPT2LMHeadModel.from_pretrained(
         model_name,
         cache_dir=f"{model_name}_cache",
         config=transformers.GPT2Config.from_pretrained(model_name),
+        attn_implementation="flash_attention_2" if use_flash else None,
         torch_dtype=torch.bfloat16,
         device_map="auto",
     )
 
     # 1. Inject LoRA adapters on all Conv1D layers (while they are still Conv1D)
-    trainable, frozen = inject_lora_adapters(model)
+    trainable, frozen = inject_lora_adapters(model, rank=lora_rank)
 
     # 2. Replace LayerNorm with FakeLayerNorm (the monkey-patch now calls
     #    through LoRAConv1D.forward)
@@ -212,7 +245,7 @@ def load_model_lora(model_name="gpt2", grad_acc_steps=1, momentum=0.1):
 
 def finetune_lora(model, training_args, tokenized, data_collator, config,
                   pile_eval_dataset=None, checkpoint_step=None,
-                  trainable_params=0, frozen_params=0):
+                  trainable_params=0, frozen_params=0, use_wandb=True):
     """Finetune with LoRA adapters and progressive LN removal."""
 
     def disable_ln_2(block_index):
@@ -246,11 +279,12 @@ def finetune_lora(model, training_args, tokenized, data_collator, config,
     print("========================================\n")
 
     class LNRemover:
-        def __init__(self, start_step, layer_gap_steps, function):
+        def __init__(self, start_step, layer_gap_steps, function, use_wb=use_wandb):
             self.n_layers = len(model.transformer.h)
             self.start_step = start_step
             self.layer_gap_steps = layer_gap_steps
             self.function = function
+            self.use_wb = use_wb
 
         def __call__(self, step):
             if self.layer_gap_steps is None:
@@ -268,14 +302,14 @@ def finetune_lora(model, training_args, tokenized, data_collator, config,
                     self.log_event(step, layer_index)
 
         def log_event(self, step, layer_index=None):
-            if _USE_WANDB:
+            if self.use_wb:
                 event_name = f"{self.function.__name__}"
                 if layer_index is not None:
                     event_name += f"_layer_{layer_index}"
                 wandb.log({event_name: float('nan')})
 
         def log(self, wb):
-            if _USE_WANDB:
+            if self.use_wb:
                 wb.log({
                     f"{self.function.__name__}.start_step": self.start_step,
                     f"{self.function.__name__}.layer_gap_steps": self.layer_gap_steps,
@@ -284,6 +318,15 @@ def finetune_lora(model, training_args, tokenized, data_collator, config,
     class LNRemoverCallback(TrainerCallback):
         def __init__(self, ln_removers):
             self.ln_removers = ln_removers
+
+        def on_train_begin(self, args, state, control, **kwargs):
+            # When resuming, replay schedule up to current step so FakeLayerNorm states match
+            if state.global_step > 0:
+                print(f"Replaying LN removal schedule for steps 0..{state.global_step} (resume)")
+                for step in range(state.global_step + 1):
+                    for ln_remover in self.ln_removers:
+                        ln_remover(step)
+            return control
 
         def on_step_begin(self, args, state, control, **kwargs):
             for ln_remover in self.ln_removers:
@@ -308,7 +351,7 @@ def finetune_lora(model, training_args, tokenized, data_collator, config,
             if state.global_step in self.save_steps:
                 control.should_save = True
                 control.should_save_model = True
-                if _USE_WANDB:
+                if use_wandb:
                     wandb.log({"custom_checkpoint": state.global_step})
             return control
 
@@ -338,7 +381,7 @@ def finetune_lora(model, training_args, tokenized, data_collator, config,
 
     class LogLoRAParamsCallback(TrainerCallback):
         def on_train_begin(self, args, state, control, **kwargs):
-            if _USE_WANDB:
+            if use_wandb:
                 wandb.log({
                     "lora_trainable_params": trainable_params,
                     "lora_frozen_params": frozen_params,
@@ -347,7 +390,17 @@ def finetune_lora(model, training_args, tokenized, data_collator, config,
 
     callbacks.append(LogLoRAParamsCallback())
 
-    trainer = Trainer(
+    if not use_wandb:
+        class LossPrintCallback(TrainerCallback):
+            def on_log(self, args, state, control, logs=None, **kwargs):
+                if logs and "loss" in logs:
+                    print(f"  step {state.global_step}: loss={logs['loss']:.4f}", flush=True)
+                return control
+        callbacks.append(LossPrintCallback())
+
+    aux_loss_weight = getattr(config, 'aux_loss_weight', 0.0)
+    TrainerCls = CustomTrainer if aux_loss_weight > 0 else Trainer
+    trainer_kw = dict(
         model=model,
         args=training_args,
         train_dataset=tokenized["train"],
@@ -355,34 +408,62 @@ def finetune_lora(model, training_args, tokenized, data_collator, config,
         data_collator=data_collator,
         callbacks=callbacks,
     )
+    if aux_loss_weight > 0:
+        trainer_kw["aux_loss_weight"] = aux_loss_weight
+        trainer_kw["use_wandb"] = use_wandb
+        print(f"Using CustomTrainer with aux_loss_weight={aux_loss_weight}")
+    trainer = TrainerCls(**trainer_kw)
 
     trainer.train(resume_from_checkpoint=training_args.resume_from_checkpoint)
 
 
 def main():
+    # Enable flash attention and EMA recomputation by default for LoRA training
+    os.environ.setdefault("EXP_FLASH_ATTN", "1")
+    os.environ.setdefault("EXP_RECOMPUTE_STD_ON_FAKE", "1")
+    os.environ.setdefault("EXP_RECOMPUTE_STD_ON_REAL", "1")
+
     parser = argparse.ArgumentParser(description="LoRA-based LayerNorm removal")
     parser.add_argument("--config", choices=list(FINETUNE_CONFIGS.keys()),
                         required=True, help="Training configuration to use")
     parser.add_argument("--resume_from_checkpoint", required=False)
     parser.add_argument("--checkpoint_step", type=int, required=False)
+    parser.add_argument("--no-wandb", action="store_true", help="Disable wandb logging")
+    parser.add_argument("--no-eval", action="store_true", help="Disable evaluation during training")
     args = parser.parse_args()
 
     config = FINETUNE_CONFIGS[args.config]
     model_name = config.model_name
 
+    print("Optimization flags:")
+    print(f"  EXP_FLASH_ATTN: {os.environ.get('EXP_FLASH_ATTN', '0')}")
+    print(f"  EXP_RECOMPUTE_STD_ON_FAKE: {os.environ.get('EXP_RECOMPUTE_STD_ON_FAKE', '0')}")
+    print(f"  EXP_RECOMPUTE_STD_ON_REAL: {os.environ.get('EXP_RECOMPUTE_STD_ON_REAL', '0')}")
+
     tokenized, data_collator = prepare_dataset(model_name)
 
     print("Preparing Pile-apollo evaluation dataset...")
     pile_eval_dataset = None
-    if os.environ.get("EVAL", "0") == "1":
+    if not args.no_eval and os.environ.get("EVAL", "0") == "1":
         processed_examples, pile_tokenizer = preprocess_pile_dataset(
             "pile-apollo", model_name, num_samples=config.num_eval_samples)
         pile_eval_dataset = convert_for_trainer(
             processed_examples, pile_tokenizer,
             model_name=model_name, num_samples=config.num_eval_samples)
 
-    output_dir = f"results/{model_name}_lora/{datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}"
-    os.makedirs(output_dir)
+    if args.resume_from_checkpoint:
+        output_dir = os.path.dirname(args.resume_from_checkpoint)
+        print(f"Resuming: output_dir={output_dir}")
+    else:
+        output_dir = f"results/{model_name}_lora/{datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}"
+    os.makedirs(output_dir, exist_ok=True)
+
+    update_provenance(
+        output_dir,
+        args.config,
+        args.resume_from_checkpoint,
+        config,
+    )
 
     training_args = TrainingArguments(
         output_dir=output_dir,
@@ -402,7 +483,7 @@ def main():
         prediction_loss_only=True,
         lr_scheduler_type=config.lr_scheduler_type,
         lr_scheduler_kwargs=config.lr_scheduler_kwargs,
-        report_to="wandb" if _USE_WANDB else "none",
+        report_to="none" if args.no_wandb else ("wandb" if _USE_WANDB else "none"),
         run_name=f"{args.config}-lora",
         logging_steps=1,
         logging_first_step=True,
@@ -413,16 +494,18 @@ def main():
         dataloader_persistent_workers=True,
         save_steps=config.save_steps,
         save_total_limit=12,
+        do_eval=not args.no_eval,
         eval_accumulation_steps=1,
-        eval_strategy="steps",
-        eval_steps=config.eval_steps,
+        eval_strategy="no" if args.no_eval else "steps",
+        eval_steps=config.eval_steps if not args.no_eval else 0,
         load_best_model_at_end=False,
     )
 
     model, trainable_params, frozen_params = load_model_lora(
         model_name,
         grad_acc_steps=config.gradient_accumulation_steps,
-        momentum=config.momentum)
+        momentum=config.momentum,
+        lora_rank=getattr(config, 'lora_rank', 64))
 
     print("Begin training")
     print(model)
@@ -434,7 +517,8 @@ def main():
         pile_eval_dataset,
         checkpoint_step=args.checkpoint_step,
         trainable_params=trainable_params,
-        frozen_params=frozen_params)
+        frozen_params=frozen_params,
+        use_wandb=not args.no_wandb and _USE_WANDB)
 
 
 if __name__ == "__main__":

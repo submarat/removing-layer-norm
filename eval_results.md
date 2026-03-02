@@ -1,79 +1,5 @@
 # LoRA LayerNorm Removal — Evaluation Results
 
-## Overview
-
-This document reports evaluation results for parameter-efficient LayerNorm removal from GPT-2 models using full-rank LoRA adapters. The pretrained weights are frozen and only LoRA adapter matrices (A, B) on all Conv1D layers are trained while LayerNorm modules are progressively replaced with FakeLayerNorm (fixed-std normalization).
-
-**Method**: Low-rank LoRA (rank=64, `lora_A: d_in × r`, `lora_B: r × d_out`) injected on all Conv1D layers. A Kaiming-initialized, B zero-initialized. FakeLayerNorm removal follows a progressive schedule across layers.
-
-**Evaluation suite**:
-- **Pile-10k**: Cross-entropy loss and perplexity on 10k chunks from NeelNanda/pile-10k
-- **HellaSwag**: Commonsense reasoning (acc, acc_norm)
-- **MMLU**: Massive Multitask Language Understanding (aggregate accuracy)
-
----
-
-## GPT-2 Small (124M params)
-
-**Training**: lr=1e-3, rank=64, cosine schedule, 600 max steps, gap_eot=10. LN removal completes by step ~536. Checkpoint at step 600 used (all LN removed, stable training).
-
-| Metric | Baseline (pretrained) | LoRA (step 600, LN removed) | Delta |
-|--------|----------------------|------------------------------|-------|
-| **Pile-10k loss** | 2.7926 | 5.1728 | +2.38 |
-| **Pile-10k PPL** | 16.32 | 176.41 | +160.09 |
-| **HellaSwag acc** | 0.2880 | 0.2741 | -0.014 |
-| **HellaSwag acc_norm** | 0.3124 | 0.2778 | -0.035 |
-| **MMLU acc** | 0.2292 | (pending) | — |
-
-**Analysis**: Low-rank LoRA (rank=64) with full LN removal achieves stable training but significant perplexity degradation (PPL 16 → 176). HellaSwag drops ~3.5 pts normalized. The model retains some capability but LN removal with low-rank adapters is challenging.
-
----
-
-## GPT-2 Medium (355M params)
-
-**Training**: lr=6e-4, cosine schedule, 500 max steps, bs=8, grad_acc=64. LN removal completes by step ~190. LoRA params in float32 to prevent NaN.
-
-*Results pending — training in progress.*
-
----
-
-## GPT-2 Large (774M params)
-
-**Training**: lr=6e-4, cosine schedule, 800 max steps, bs=4, grad_acc=64, gradient checkpointing. LN removal completes by step ~279. LoRA params in float32.
-
-*Results pending — training queued after medium.*
-
----
-
-## GPT-2 XL (1.5B params)
-
-**Training**: lr=6e-4, cosine schedule, 1000 max steps, bs=2, grad_acc=64, gradient checkpointing. LN removal completes by step ~363. LoRA params in float32.
-
-*Results pending — training queued after large.*
-
----
-
-## Key Findings
-
-1. **LN removal with LoRA is partially successful**: At step 100 (before NaN), the model retains strong language modeling ability with only ~0.46 nats degradation in Pile-10k loss.
-
-2. **Numerical stability is critical**: bf16 LoRA parameters developed NaN values between steps 100-200 for all tested learning rates. Fixed by switching LoRA params to float32.
-
-3. **Downstream tasks are relatively robust**: HellaSwag and MMLU show minimal degradation, suggesting the model's factual knowledge and reasoning patterns survive LN removal even if raw perplexity increases.
-
-4. **lr=3e-4 was optimal for GPT-2 small**: Among tested LRs (1e-4, 3e-4, 6e-4, 1e-3, 3e-3), lr=3e-4 at checkpoint-100 gave the best Pile-10k loss (3.25 vs 4.13 for 6e-4, 36.0 for 1e-4).
-
----
-
-## Experimental Details
-
-- **Hardware**: NVIDIA H100 80GB HBM3 (single GPU, CUDA_VISIBLE_DEVICES=1)
-- **Framework**: PyTorch + HuggingFace Transformers + lm-evaluation-harness v0.4.11
-- **W&B project**: `m-subkhankulov-arena/removing-layer-norm-lora`
-- **Eval script**: `eval_lora.py`
-- **Training script**: `train_lora.py`
-# LoRA LayerNorm Removal — Evaluation Results
-
 ## gpt2 baseline (pretrained)
 
 **Model**: `gpt2`
@@ -208,143 +134,143 @@ This document reports evaluation results for parameter-efficient LayerNorm remov
 | mmlu_virology/acc_stderr,none | 0.0351 |
 | mmlu_world_religions/acc,none | 0.3275 |
 | mmlu_world_religions/acc_stderr,none | 0.036 |
-| pile10k_loss | 2.7926 |
-| pile10k_ppl | 16.32 |
+| pile10k_loss | 2.7932 |
+| pile10k_ppl | 16.33 |
 
-## gpt2 LoRA lr=6e-4 (checkpoint-600, LN removed)
+## gpt2 LoRA lr=6e-4 (checkpoint-100, LN removed)
 
 **Model**: `gpt2`
 
 | Metric | Value |
 |--------|-------|
-| hellaswag/acc,none | 0.2741 |
-| hellaswag/acc_norm,none | 0.2778 |
+| hellaswag/acc,none | 0.2774 |
+| hellaswag/acc_norm,none | 0.2916 |
 | hellaswag/acc_norm_stderr,none | 0.0045 |
 | hellaswag/acc_stderr,none | 0.0045 |
-| mmlu/acc,none | 0.2299 |
+| mmlu/acc,none | 0.2304 |
 | mmlu/acc_stderr,none | 0.0035 |
 | mmlu_abstract_algebra/acc,none | 0.22 |
 | mmlu_abstract_algebra/acc_stderr,none | 0.0416 |
-| mmlu_anatomy/acc,none | 0.1926 |
-| mmlu_anatomy/acc_stderr,none | 0.0341 |
-| mmlu_astronomy/acc,none | 0.1776 |
-| mmlu_astronomy/acc_stderr,none | 0.0311 |
+| mmlu_anatomy/acc,none | 0.2 |
+| mmlu_anatomy/acc_stderr,none | 0.0346 |
+| mmlu_astronomy/acc,none | 0.1842 |
+| mmlu_astronomy/acc_stderr,none | 0.0315 |
 | mmlu_business_ethics/acc,none | 0.3 |
 | mmlu_business_ethics/acc_stderr,none | 0.0461 |
-| mmlu_clinical_knowledge/acc,none | 0.2113 |
-| mmlu_clinical_knowledge/acc_stderr,none | 0.0251 |
-| mmlu_college_biology/acc,none | 0.2639 |
-| mmlu_college_biology/acc_stderr,none | 0.0369 |
-| mmlu_college_chemistry/acc,none | 0.2 |
-| mmlu_college_chemistry/acc_stderr,none | 0.0402 |
-| mmlu_college_computer_science/acc,none | 0.25 |
-| mmlu_college_computer_science/acc_stderr,none | 0.0435 |
-| mmlu_college_mathematics/acc,none | 0.21 |
-| mmlu_college_mathematics/acc_stderr,none | 0.0409 |
-| mmlu_college_medicine/acc,none | 0.2081 |
-| mmlu_college_medicine/acc_stderr,none | 0.031 |
+| mmlu_clinical_knowledge/acc,none | 0.2189 |
+| mmlu_clinical_knowledge/acc_stderr,none | 0.0254 |
+| mmlu_college_biology/acc,none | 0.2708 |
+| mmlu_college_biology/acc_stderr,none | 0.0372 |
+| mmlu_college_chemistry/acc,none | 0.17 |
+| mmlu_college_chemistry/acc_stderr,none | 0.0378 |
+| mmlu_college_computer_science/acc,none | 0.26 |
+| mmlu_college_computer_science/acc_stderr,none | 0.0441 |
+| mmlu_college_mathematics/acc,none | 0.2 |
+| mmlu_college_mathematics/acc_stderr,none | 0.0402 |
+| mmlu_college_medicine/acc,none | 0.2254 |
+| mmlu_college_medicine/acc_stderr,none | 0.0319 |
 | mmlu_college_physics/acc,none | 0.2157 |
 | mmlu_college_physics/acc_stderr,none | 0.0409 |
-| mmlu_computer_security/acc,none | 0.28 |
-| mmlu_computer_security/acc_stderr,none | 0.0451 |
-| mmlu_conceptual_physics/acc,none | 0.2681 |
-| mmlu_conceptual_physics/acc_stderr,none | 0.029 |
-| mmlu_econometrics/acc,none | 0.2368 |
-| mmlu_econometrics/acc_stderr,none | 0.04 |
+| mmlu_computer_security/acc,none | 0.29 |
+| mmlu_computer_security/acc_stderr,none | 0.0456 |
+| mmlu_conceptual_physics/acc,none | 0.2638 |
+| mmlu_conceptual_physics/acc_stderr,none | 0.0288 |
+| mmlu_econometrics/acc,none | 0.2456 |
+| mmlu_econometrics/acc_stderr,none | 0.0405 |
 | mmlu_electrical_engineering/acc,none | 0.2414 |
 | mmlu_electrical_engineering/acc_stderr,none | 0.0357 |
 | mmlu_elementary_mathematics/acc,none | 0.209 |
 | mmlu_elementary_mathematics/acc_stderr,none | 0.0209 |
-| mmlu_formal_logic/acc,none | 0.2857 |
-| mmlu_formal_logic/acc_stderr,none | 0.0404 |
+| mmlu_formal_logic/acc,none | 0.2698 |
+| mmlu_formal_logic/acc_stderr,none | 0.0397 |
 | mmlu_global_facts/acc,none | 0.18 |
 | mmlu_global_facts/acc_stderr,none | 0.0386 |
 | mmlu_high_school_biology/acc,none | 0.1774 |
 | mmlu_high_school_biology/acc_stderr,none | 0.0217 |
-| mmlu_high_school_chemistry/acc,none | 0.1576 |
-| mmlu_high_school_chemistry/acc_stderr,none | 0.0256 |
+| mmlu_high_school_chemistry/acc,none | 0.1724 |
+| mmlu_high_school_chemistry/acc_stderr,none | 0.0266 |
 | mmlu_high_school_computer_science/acc,none | 0.25 |
 | mmlu_high_school_computer_science/acc_stderr,none | 0.0435 |
-| mmlu_high_school_european_history/acc,none | 0.2182 |
-| mmlu_high_school_european_history/acc_stderr,none | 0.0323 |
-| mmlu_high_school_geography/acc,none | 0.1768 |
-| mmlu_high_school_geography/acc_stderr,none | 0.0272 |
-| mmlu_high_school_government_and_politics/acc,none | 0.1917 |
-| mmlu_high_school_government_and_politics/acc_stderr,none | 0.0284 |
-| mmlu_high_school_macroeconomics/acc,none | 0.2 |
-| mmlu_high_school_macroeconomics/acc_stderr,none | 0.0203 |
+| mmlu_high_school_european_history/acc,none | 0.2242 |
+| mmlu_high_school_european_history/acc_stderr,none | 0.0326 |
+| mmlu_high_school_geography/acc,none | 0.1818 |
+| mmlu_high_school_geography/acc_stderr,none | 0.0275 |
+| mmlu_high_school_government_and_politics/acc,none | 0.1969 |
+| mmlu_high_school_government_and_politics/acc_stderr,none | 0.0287 |
+| mmlu_high_school_macroeconomics/acc,none | 0.2103 |
+| mmlu_high_school_macroeconomics/acc_stderr,none | 0.0207 |
 | mmlu_high_school_mathematics/acc,none | 0.2111 |
 | mmlu_high_school_mathematics/acc_stderr,none | 0.0249 |
-| mmlu_high_school_microeconomics/acc,none | 0.2101 |
-| mmlu_high_school_microeconomics/acc_stderr,none | 0.0265 |
-| mmlu_high_school_physics/acc,none | 0.1987 |
-| mmlu_high_school_physics/acc_stderr,none | 0.0326 |
-| mmlu_high_school_psychology/acc,none | 0.1927 |
-| mmlu_high_school_psychology/acc_stderr,none | 0.0169 |
+| mmlu_high_school_microeconomics/acc,none | 0.2143 |
+| mmlu_high_school_microeconomics/acc_stderr,none | 0.0267 |
+| mmlu_high_school_physics/acc,none | 0.1921 |
+| mmlu_high_school_physics/acc_stderr,none | 0.0322 |
+| mmlu_high_school_psychology/acc,none | 0.1945 |
+| mmlu_high_school_psychology/acc_stderr,none | 0.017 |
 | mmlu_high_school_statistics/acc,none | 0.1528 |
 | mmlu_high_school_statistics/acc_stderr,none | 0.0245 |
 | mmlu_high_school_us_history/acc,none | 0.25 |
 | mmlu_high_school_us_history/acc_stderr,none | 0.0304 |
-| mmlu_high_school_world_history/acc,none | 0.27 |
-| mmlu_high_school_world_history/acc_stderr,none | 0.0289 |
-| mmlu_human_aging/acc,none | 0.3184 |
-| mmlu_human_aging/acc_stderr,none | 0.0313 |
+| mmlu_high_school_world_history/acc,none | 0.2658 |
+| mmlu_high_school_world_history/acc_stderr,none | 0.0288 |
+| mmlu_human_aging/acc,none | 0.3004 |
+| mmlu_human_aging/acc_stderr,none | 0.0308 |
 | mmlu_human_sexuality/acc,none | 0.2595 |
 | mmlu_human_sexuality/acc_stderr,none | 0.0384 |
-| mmlu_humanities/acc,none | 0.2427 |
+| mmlu_humanities/acc,none | 0.2414 |
 | mmlu_humanities/acc_stderr,none | 0.0062 |
 | mmlu_international_law/acc,none | 0.2397 |
 | mmlu_international_law/acc_stderr,none | 0.039 |
-| mmlu_jurisprudence/acc,none | 0.2778 |
-| mmlu_jurisprudence/acc_stderr,none | 0.0433 |
-| mmlu_logical_fallacies/acc,none | 0.227 |
-| mmlu_logical_fallacies/acc_stderr,none | 0.0329 |
-| mmlu_machine_learning/acc,none | 0.3036 |
-| mmlu_machine_learning/acc_stderr,none | 0.0436 |
+| mmlu_jurisprudence/acc,none | 0.2685 |
+| mmlu_jurisprudence/acc_stderr,none | 0.0428 |
+| mmlu_logical_fallacies/acc,none | 0.2209 |
+| mmlu_logical_fallacies/acc_stderr,none | 0.0326 |
+| mmlu_machine_learning/acc,none | 0.3393 |
+| mmlu_machine_learning/acc_stderr,none | 0.0449 |
 | mmlu_management/acc,none | 0.1748 |
 | mmlu_management/acc_stderr,none | 0.0376 |
-| mmlu_marketing/acc,none | 0.2906 |
-| mmlu_marketing/acc_stderr,none | 0.0297 |
+| mmlu_marketing/acc,none | 0.2949 |
+| mmlu_marketing/acc_stderr,none | 0.0299 |
 | mmlu_medical_genetics/acc,none | 0.3 |
 | mmlu_medical_genetics/acc_stderr,none | 0.0461 |
-| mmlu_miscellaneous/acc,none | 0.2388 |
+| mmlu_miscellaneous/acc,none | 0.235 |
 | mmlu_miscellaneous/acc_stderr,none | 0.0152 |
-| mmlu_moral_disputes/acc,none | 0.2486 |
-| mmlu_moral_disputes/acc_stderr,none | 0.0233 |
-| mmlu_moral_scenarios/acc,none | 0.238 |
+| mmlu_moral_disputes/acc,none | 0.2399 |
+| mmlu_moral_disputes/acc_stderr,none | 0.023 |
+| mmlu_moral_scenarios/acc,none | 0.2369 |
 | mmlu_moral_scenarios/acc_stderr,none | 0.0142 |
-| mmlu_nutrition/acc,none | 0.2255 |
-| mmlu_nutrition/acc_stderr,none | 0.0239 |
-| mmlu_other/acc,none | 0.2407 |
-| mmlu_other/acc_stderr,none | 0.0077 |
+| mmlu_nutrition/acc,none | 0.219 |
+| mmlu_nutrition/acc_stderr,none | 0.0237 |
+| mmlu_other/acc,none | 0.2388 |
+| mmlu_other/acc_stderr,none | 0.0076 |
 | mmlu_philosophy/acc,none | 0.1865 |
 | mmlu_philosophy/acc_stderr,none | 0.0221 |
 | mmlu_prehistory/acc,none | 0.216 |
 | mmlu_prehistory/acc_stderr,none | 0.0229 |
 | mmlu_professional_accounting/acc,none | 0.2376 |
 | mmlu_professional_accounting/acc_stderr,none | 0.0254 |
-| mmlu_professional_law/acc,none | 0.2458 |
+| mmlu_professional_law/acc,none | 0.2464 |
 | mmlu_professional_law/acc_stderr,none | 0.011 |
-| mmlu_professional_medicine/acc,none | 0.1875 |
-| mmlu_professional_medicine/acc_stderr,none | 0.0237 |
-| mmlu_professional_psychology/acc,none | 0.25 |
-| mmlu_professional_psychology/acc_stderr,none | 0.0175 |
+| mmlu_professional_medicine/acc,none | 0.1728 |
+| mmlu_professional_medicine/acc_stderr,none | 0.023 |
+| mmlu_professional_psychology/acc,none | 0.2565 |
+| mmlu_professional_psychology/acc_stderr,none | 0.0177 |
 | mmlu_public_relations/acc,none | 0.2182 |
 | mmlu_public_relations/acc_stderr,none | 0.0396 |
 | mmlu_security_studies/acc,none | 0.1878 |
 | mmlu_security_studies/acc_stderr,none | 0.025 |
-| mmlu_social_sciences/acc,none | 0.2164 |
-| mmlu_social_sciences/acc_stderr,none | 0.0074 |
+| mmlu_social_sciences/acc,none | 0.2207 |
+| mmlu_social_sciences/acc_stderr,none | 0.0075 |
 | mmlu_sociology/acc,none | 0.2438 |
 | mmlu_sociology/acc_stderr,none | 0.0304 |
-| mmlu_stem/acc,none | 0.2131 |
+| mmlu_stem/acc,none | 0.215 |
 | mmlu_stem/acc_stderr,none | 0.0073 |
 | mmlu_us_foreign_policy/acc,none | 0.28 |
 | mmlu_us_foreign_policy/acc_stderr,none | 0.0451 |
-| mmlu_virology/acc,none | 0.2831 |
-| mmlu_virology/acc_stderr,none | 0.0351 |
-| mmlu_world_religions/acc,none | 0.3216 |
-| mmlu_world_religions/acc_stderr,none | 0.0358 |
-| pile10k_loss | 5.1728 |
-| pile10k_ppl | 176.41 |
+| mmlu_virology/acc,none | 0.2892 |
+| mmlu_virology/acc_stderr,none | 0.0353 |
+| mmlu_world_religions/acc,none | 0.3275 |
+| mmlu_world_religions/acc_stderr,none | 0.036 |
+| pile10k_loss | 3.2535 |
+| pile10k_ppl | 25.88 |
 

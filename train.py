@@ -54,16 +54,18 @@ _USE_WANDB = True
 class CustomTrainer(Trainer):
     """Trainer with auxiliary loss to encourage uniform residual norms."""
     
-    def __init__(self, *args, aux_loss_weight=0.1, **kwargs):
+    def __init__(self, *args, aux_loss_weight=0.1, use_wandb=None, **kwargs):
         """
         CustomTrainer with auxiliary loss to encourage uniform residual norms.
         
         Args:
             aux_loss_weight: Weight of the auxiliary loss for uniform residual norms.
                              Set to 0 to disable the auxiliary loss.
+            use_wandb: If False, skip wandb logging. Defaults to _USE_WANDB.
         """
         super().__init__(*args, **kwargs)
         self.aux_loss_weight = aux_loss_weight
+        self._use_wandb = use_wandb if use_wandb is not None else _USE_WANDB
         self.pre_ln_f_activations = None
         
         # Register a hook to capture activations if we're using auxiliary loss
@@ -144,7 +146,7 @@ class CustomTrainer(Trainer):
         self.pre_ln_f_activations = None
         
         # Log statistics if using wandb
-        if _USE_WANDB:
+        if self._use_wandb:
             try:
                 is_main_process = torch.distributed.get_rank() == 0 if torch.distributed.is_initialized() else True
             except:
@@ -170,7 +172,7 @@ class CustomTrainer(Trainer):
         
         # Free up memory for other tensors we no longer need
         del std, var
-        if _USE_WANDB:
+        if self._use_wandb:
             with torch.no_grad():
                 del flat_bos, flat_eos
         # torch.cuda.empty_cache()  # Explicitly clear cache if using CUDA

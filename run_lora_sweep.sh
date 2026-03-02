@@ -10,11 +10,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON="${SCRIPT_DIR}/venv/bin/python"
 
 CONFIGS=(
-    gpt2_lora_lr1e-4
-    gpt2_lora_lr3e-4
-    gpt2_lora_lr6e-4
     gpt2_lora_lr1e-3
     gpt2_lora_lr3e-3
+    gpt2_lora_lr5e-3
 )
 
 for cfg in "${CONFIGS[@]}"; do
@@ -26,4 +24,4 @@ for cfg in "${CONFIGS[@]}"; do
     echo ""
 done
 
-echo "All sweeps complete.  $(date)"
+echo "All sweep runs complete.  $(date)"

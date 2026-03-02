@@ -1,29 +1,30 @@
 """
-Full-rank LoRA adapters for GPT-2 Conv1D layers.
+Low-rank LoRA adapters for GPT-2 Conv1D layers.
 
 GPT-2 Conv1D forward: y = x @ W + b,  where W is (d_in, d_out).
-We wrap this as:     y = x @ W_frozen + b_frozen + x @ lora_A @ lora_B
+We wrap this as:     y = x @ W_frozen + b_frozen + (x @ lora_A) @ lora_B
 
-lora_A: (d_in, d_in)   initialized to identity  (passes input through)
-lora_B: (d_in, d_out)  initialized to zeros      (no adapter output at init)
+lora_A: (d_in, r)   initialized with Kaiming uniform
+lora_B: (r, d_out)  initialized to zeros
 
-With A=I, B=0 the adapter output is x @ I @ 0 = 0, so the model starts
-at pretrained behaviour.  Crucially, grad w.r.t. B = A^T @ x^T @ dL/dy
-= I @ x^T @ dL/dy ≠ 0, so gradients flow from the first step (unlike
-the A=0, B=0 init which is a dead gradient saddle point).
+At init the adapter output is zero so the model starts at pretrained
+behaviour.  Gradients flow through A from the first step because B's
+gradient is A^T @ x^T @ dL/dy which is nonzero when A != 0.
 """
 
 import torch
 import torch.nn as nn
+import math
 from transformers.pytorch_utils import Conv1D
 
 
 class LoRAConv1D(nn.Module):
-    """Wraps a frozen Conv1D with a trainable full-rank additive adapter."""
+    """Wraps a frozen Conv1D with a trainable low-rank additive adapter."""
 
-    def __init__(self, original: Conv1D):
+    def __init__(self, original: Conv1D, rank: int = 64):
         super().__init__()
         self.d_in, self.d_out = original.weight.shape
+        self.rank = rank
 
         self.register_buffer("weight_frozen", original.weight.data.clone())
         if original.bias is not None:
@@ -32,8 +33,9 @@ class LoRAConv1D(nn.Module):
             self.bias_frozen = None
 
         dev = original.weight.device
-        self.lora_A = nn.Parameter(torch.eye(self.d_in, dtype=torch.float32, device=dev))
-        self.lora_B = nn.Parameter(torch.zeros(self.d_in, self.d_out, dtype=torch.float32, device=dev))
+        self.lora_A = nn.Parameter(torch.empty(self.d_in, rank, dtype=torch.float32, device=dev))
+        self.lora_B = nn.Parameter(torch.zeros(rank, self.d_out, dtype=torch.float32, device=dev))
+        nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
 
     def forward(self, x):
         orig_dtype = x.dtype
@@ -45,7 +47,7 @@ class LoRAConv1D(nn.Module):
         return y.to(orig_dtype)
 
 
-def inject_lora_adapters(model):
+def inject_lora_adapters(model, rank: int = 64):
     """Replace every Conv1D in the model with a LoRAConv1D wrapper.
 
     Returns the number of trainable and frozen parameters.
@@ -60,9 +62,8 @@ def inject_lora_adapters(model):
         parent = model
         for p in parts[:-1]:
             parent = getattr(parent, p)
-        setattr(parent, parts[-1], LoRAConv1D(original))
+        setattr(parent, parts[-1], LoRAConv1D(original, rank=rank))
 
-    # Freeze everything, then unfreeze only LoRA params
     for param in model.parameters():
         param.requires_grad = False
     for name, param in model.named_parameters():
@@ -71,10 +72,9 @@ def inject_lora_adapters(model):
 
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     frozen = sum(p.numel() for p in model.parameters() if not p.requires_grad)
-    # Buffers (frozen weights stored as buffers) are not in .parameters(), count them too
     total_bufs = sum(b.numel() for b in model.buffers())
 
-    print(f"LoRA injection complete:")
+    print(f"LoRA injection complete (rank={rank}):")
     print(f"  Trainable params : {trainable:,}")
     print(f"  Frozen params    : {frozen:,}")
     print(f"  Buffers          : {total_bufs:,}")
