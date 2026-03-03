@@ -9,7 +9,7 @@ Parameter-efficient LayerNorm removal from GPT-2 using **low-rank LoRA** (rank=6
 | Model | Checkpoint Path | Step | Notes |
 |-------|-----------------|------|-------|
 | **GPT-2 Small** | `results/gpt2_lora/2026-02-22-16-14-45/checkpoint-600` | 600 | LN removed, evals done |
-| **GPT-2 Medium** | `results/gpt2-medium_lora/2026-02-22-19-52-56/checkpoint-700` | 700 | Stopped early, no evals |
+| **GPT-2 Medium** | `results/gpt2-medium_lora/2026-02-22-19-52-56/checkpoint-700` | 700 | LN removed, evals done |
 | **GPT-2 Large** | `results/gpt2-large_lora/2026-02-24-08-42-58/checkpoint-1904` | 1904 | Conservative config, LN removed, evals done |
 | **GPT-2 XL** | `results/gpt2-xl_lora/2026-02-25-23-24-19/checkpoint-3400` | 3400 | Conservative config, LN removed, evals done |
 
@@ -21,7 +21,8 @@ Parameter-efficient LayerNorm removal from GPT-2 using **low-rank LoRA** (rank=6
 |-------|----------------|--------------|--------------------|----------|
 | **Small** baseline | 2.79 | 16.32 | 0.312 | 0.229 |
 | **Small** LN removed | 5.17 | 176.41 | 0.278 | 0.230 |
-| **Medium** | — | — | — | — *(no evals)* |
+| **Medium** baseline | 2.49 | 12.11 | 0.394 | 0.230 |
+| **Medium** LN removed | 3.38 | 29.51 | 0.340 | 0.230 |
 | **Large** baseline | 2.48 | 11.98 | 0.454 | 0.232 |
 | **Large** LN removed | 2.61 | 13.54 | 0.434 | 0.231 |
 | **XL** baseline | — | — | — | — *(not run)* |
@@ -32,6 +33,7 @@ Parameter-efficient LayerNorm removal from GPT-2 using **low-rank LoRA** (rank=6
 | Model | Δ Pile-10k loss | Δ Pile-10k PPL | Δ HellaSwag | Δ MMLU |
 |-------|-----------------|----------------|-------------|--------|
 | Small | +2.38 | +160.09 | -0.035 | ~0 |
+| Medium | +0.89 | +17.40 | -0.054 | ~0 |
 | Large | +0.12 | +1.56 | -0.020 | ~0 |
 | XL | ~+0.2–0.3* | ~+2–3* | — | — |
 
@@ -51,6 +53,19 @@ Parameter-efficient LayerNorm removal from GPT-2 using **low-rank LoRA** (rank=6
 | MMLU acc | 0.229 | 0.230 | ~0 |
 
 **Analysis**: Severe perplexity degradation. LN removal with rank-64 LoRA is challenging for small.
+
+---
+
+### GPT-2 Medium (355M)
+
+| Metric | Baseline | LoRA (ckpt-700) | Delta |
+|--------|----------|-----------------|-------|
+| Pile-10k loss | 2.49 | 3.38 | +0.89 |
+| Pile-10k PPL | 12.11 | 29.51 | +17.40 |
+| HellaSwag acc_norm | 0.394 | 0.340 | -0.054 |
+| MMLU acc | 0.230 | 0.230 | ~0 |
+
+**Analysis**: Moderate degradation. Medium sits between Small (severe) and Large (minimal): PPL roughly doubles but remains usable; HellaSwag drops ~5.4 pts; MMLU stable.
 
 ---
 
@@ -107,10 +122,10 @@ Parameter-efficient LayerNorm removal from GPT-2 using **low-rank LoRA** (rank=6
 
 ## Key Findings
 
-1. **Scale helps**: Small collapses (PPL 16→176); Large and XL retain reasonable perplexity (Large 12→14, XL ~14.5).
+1. **Scale helps**: Small collapses (PPL 16→176); Medium shows moderate degradation (PPL 12→30); Large and XL retain reasonable perplexity (Large 12→14, XL ~14.5).
 2. **Conservative schedule for large models**: Default config collapsed at ln1qk (step 328). Conservative gaps + lower lr fixed it.
-3. **MMLU robust**: Small, Large, and XL all keep MMLU accuracy (~23%) after LN removal.
-4. **HellaSwag degrades with scale**: Small −3.5 pts, Large −2.0 pts, XL ~0.42 (vs Large baseline 0.45).
+3. **MMLU robust**: Small, Medium, Large, and XL all keep MMLU accuracy (~23%) after LN removal.
+4. **HellaSwag degrades with scale**: Small −3.5 pts, Medium −5.4 pts, Large −2.0 pts, XL ~0.42 (vs Large baseline 0.45).
 5. **XL vs Large**: XL LN-removed (2.68 loss, 14.56 PPL) is slightly worse than Large LN-removed (2.61, 13.54); both show modest regression vs their baselines.
 
 ---
